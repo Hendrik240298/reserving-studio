@@ -50,8 +50,10 @@ class Dashboard:
         self._config = config
         self.app = Dash(__name__, suppress_callback_exceptions=True)
         self._default_average = "volume"
+        self._default_tail_curve = "weibull"
         self._default_drop_text = ""
         self._default_drop_store: List[List[str | int]] = []
+        self._default_tail_attachment_age: Optional[int] = None
 
         self._load_session_defaults()
 
@@ -66,12 +68,22 @@ class Dashboard:
             return
         session = self._config.load_session()
         self._default_average = session.get("average", self._default_average)
+        self._default_tail_curve = session.get(
+            "tail_curve",
+            self._default_tail_curve,
+        )
         raw_drops = session.get("drops", []) or []
         normalized: List[List[str | int]] = []
         for item in raw_drops:
             if isinstance(item, (list, tuple)) and len(item) == 2:
                 normalized.append([item[0], item[1]])
         self._default_drop_store = normalized
+        tail_attachment_age = session.get("tail_attachment_age")
+        if tail_attachment_age is not None:
+            try:
+                self._default_tail_attachment_age = int(tail_attachment_age)
+            except (TypeError, ValueError):
+                self._default_tail_attachment_age = None
 
     def _get_segment_key(self) -> str:
         if self._config is None:
@@ -123,6 +135,17 @@ class Dashboard:
             drops.append((str(origin), dev_value))
         return drops
 
+    def _parse_dev_label(self, dev_label: object) -> Optional[int]:
+        if dev_label is None:
+            return None
+        try:
+            dev_str = str(dev_label)
+            if "-" in dev_str:
+                return int(dev_str.split("-")[0])
+            return int(dev_str)
+        except (TypeError, ValueError):
+            return None
+
     def _toggle_drop(
         self,
         existing: List[List[str | int]],
@@ -166,12 +189,18 @@ class Dashboard:
         self,
         average: str,
         drops: Optional[List[Tuple[str, int]]],
+        tail_attachment_age: Optional[int],
+        tail_curve: str,
     ) -> None:
         self._reserving.set_development(
             average=average,
             drop=drops,
         )
-        self._reserving.set_tail(curve="weibull", projection_period=0)
+        self._reserving.set_tail(
+            curve=tail_curve,
+            projection_period=0,
+            attachment_age=tail_attachment_age,
+        )
         self._reserving.set_bornhuetter_ferguson(apriori=0.6)
         self._reserving.reserve(final_ultimate="chainladder")
         self._extract_data()
@@ -180,15 +209,21 @@ class Dashboard:
         self,
         drop_store: Optional[List[List[str | int]]],
         average: Optional[str],
+        tail_attachment_age: Optional[int],
+        tail_curve: Optional[str],
     ) -> dict:
         timestamp = datetime.utcnow().isoformat() + "Z"
         display = "None"
         if drop_store:
             display = ", ".join([f"{item[0]}:{item[1]}" for item in drop_store])
+        tail_display = "None"
+        if tail_attachment_age is not None:
+            tail_display = str(tail_attachment_age)
 
         triangle_fig = self._plot_triangle_heatmap(
             self.triangle,
             "Triangle - Link Ratios",
+            tail_attachment_age,
         )
         emergence_fig = self._plot_emergence(
             self.emergence_pattern,
@@ -205,53 +240,69 @@ class Dashboard:
             "results_figure": results_fig.to_dict(),
             "drops_display": display,
             "average": average,
+            "tail_curve": tail_curve,
             "drop_store": drop_store or [],
+            "tail_attachment_age": tail_attachment_age,
+            "tail_attachment_display": tail_display,
             "last_updated": timestamp,
         }
 
     def _register_callbacks(self) -> None:
         @self.app.callback(
             Output("drop-store", "data"),
+            Output("tail-attachment-store", "data"),
             Input("triangle-heatmap", "clickData"),
             State("drop-store", "data"),
+            State("tail-attachment-store", "data"),
         )
-        def _toggle_drop_click(click, drop_store):
+        def _toggle_drop_click(click, drop_store, tail_attachment_age):
             if not click or "points" not in click or not click["points"]:
-                return drop_store
+                return drop_store, tail_attachment_age
 
             point = click["points"][0]
             origin = point.get("y")
             dev_label = point.get("x")
-            if origin in ("LDF", "Tail") or dev_label is None:
-                return drop_store
-            try:
-                dev_str = str(dev_label)
-                if "-" in dev_str:
-                    dev = int(dev_str.split("-")[0])
-                else:
-                    dev = int(dev_str)
-            except ValueError:
-                return drop_store
+            dev = self._parse_dev_label(dev_label)
+            if dev is None:
+                return drop_store, tail_attachment_age
+
+            if origin == "Tail":
+                if tail_attachment_age == dev:
+                    return drop_store, None
+                return drop_store, dev
+
+            if origin == "LDF" or dev_label is None:
+                return drop_store, tail_attachment_age
 
             updated = self._toggle_drop(drop_store or [], str(origin), dev)
-            return updated
+            return updated, tail_attachment_age
 
         @self.app.callback(
             Output("triangle-heatmap", "clickData"),
             Input("drop-store", "data"),
+            Input("tail-attachment-store", "data"),
             prevent_initial_call=True,
         )
-        def _clear_clicks(_drop_store):
+        def _clear_clicks(_drop_store, _tail_attachment_age):
             return None
 
         @self.app.callback(
             Output("results-store", "data"),
             Input("drop-store", "data"),
+            Input("tail-attachment-store", "data"),
             Input("average-method", "value"),
+            Input("tail-method", "value"),
             Input("sync-interval", "n_intervals"),
             State("results-store", "data"),
         )
-        def _update_results(drop_store, average, _n_intervals, current_payload):
+        def _update_results(
+            drop_store,
+            tail_attachment_age,
+            average,
+            tail_curve,
+            _n_intervals,
+            current_payload,
+        ):
             ctx = callback_context
             if not ctx.triggered:
                 return current_payload
@@ -270,10 +321,18 @@ class Dashboard:
                     return latest_payload
                 return no_update
 
+            parsed_tail = None
+            drops = self._drops_to_tuples(drop_store)
+            average = average or self._default_average
+            tail_curve = tail_curve or self._default_tail_curve
+            parsed_tail = None
+            if tail_attachment_age is not None:
+                try:
+                    parsed_tail = int(tail_attachment_age)
+                except (TypeError, ValueError):
+                    parsed_tail = None
             try:
-                drops = self._drops_to_tuples(drop_store)
-                average = average or self._default_average
-                self._apply_recalculation(average, drops)
+                self._apply_recalculation(average, drops, parsed_tail, tail_curve)
             except Exception as exc:
                 logging.error(f"Failed to recalculate reserving: {exc}", exc_info=True)
 
@@ -281,13 +340,17 @@ class Dashboard:
                 self._config.save_session(
                     {
                         "average": average,
+                        "tail_curve": tail_curve,
                         "drops": drop_store or [],
+                        "tail_attachment_age": parsed_tail,
                     }
                 )
 
             results_payload = self._build_results_payload(
                 drop_store=drop_store,
                 average=average,
+                tail_attachment_age=parsed_tail,
+                tail_curve=tail_curve,
             )
 
             segment_key = self._get_segment_key()
@@ -299,6 +362,9 @@ class Dashboard:
             Output("emergence-plot", "figure"),
             Output("results-table", "figure"),
             Output("drops-display", "children"),
+            Output("tail-attachment-display", "children"),
+            Output("average-method", "value"),
+            Output("tail-method", "value"),
             Input("results-store", "data"),
             Input("analysis-tabs", "value"),
         )
@@ -308,6 +374,7 @@ class Dashboard:
                     self._plot_triangle_heatmap(
                         self.triangle,
                         "Triangle - Link Ratios",
+                        self._default_tail_attachment_age,
                     ),
                     self._plot_emergence(
                         self.emergence_pattern,
@@ -318,6 +385,9 @@ class Dashboard:
                         "Reserving Results",
                     ),
                     "None",
+                    "None",
+                    self._default_average,
+                    self._default_tail_curve,
                 )
 
             return (
@@ -325,6 +395,9 @@ class Dashboard:
                 results_payload.get("emergence_figure"),
                 results_payload.get("results_figure"),
                 results_payload.get("drops_display", "None"),
+                results_payload.get("tail_attachment_display", "None"),
+                results_payload.get("average", self._default_average),
+                results_payload.get("tail_curve", self._default_tail_curve),
             )
 
     def _plot_emergence(self, emergence_pattern, title):
@@ -532,7 +605,13 @@ class Dashboard:
         return fig
 
     def _create_triangle_heatmap(
-        self, triangle_data, incurred_data, premium_data, title, reserving: Reserving
+        self,
+        triangle_data,
+        incurred_data,
+        premium_data,
+        title,
+        reserving: Reserving,
+        tail_attachment_age: Optional[int],
     ):
         """
         Plot triangle heatmap with link ratios, LDF, and Tail rows.
@@ -796,9 +875,42 @@ class Dashboard:
                 yref="y",
             )
 
+        if tail_attachment_age is not None:
+            try:
+                tail_row_pos = expanded_triangle.index.get_loc("Tail")
+            except KeyError:
+                tail_row_pos = None
+
+            if tail_row_pos is not None:
+                selected_col = None
+                for col in expanded_triangle.columns:
+                    col_age = self._parse_dev_label(col)
+                    if col_age == tail_attachment_age:
+                        selected_col = col
+                        break
+
+                if selected_col is not None:
+                    col_pos = expanded_triangle.columns.get_loc(selected_col)
+                    fig.add_shape(
+                        type="rect",
+                        x0=col_pos - 0.5,
+                        y0=tail_row_pos - 0.5,
+                        x1=col_pos + 0.5,
+                        y1=tail_row_pos + 0.5,
+                        line=dict(color="black", width=2),
+                        fillcolor="rgba(0,0,0,0)",
+                        xref="x",
+                        yref="y",
+                    )
+
         return fig
 
-    def _plot_triangle_heatmap(self, triangle_data, title):
+    def _plot_triangle_heatmap(
+        self,
+        triangle_data,
+        title,
+        tail_attachment_age: Optional[int],
+    ):
         """
         Plot triangle heatmap with incurred/premium hover values.
         """
@@ -808,6 +920,7 @@ class Dashboard:
             self.premium,
             title,
             self._reserving,
+            tail_attachment_age,
         )
 
     def _create_layout(self):
@@ -823,6 +936,8 @@ class Dashboard:
         results_payload = self._build_results_payload(
             drop_store=self._default_drop_store,
             average=self._default_average,
+            tail_attachment_age=self._default_tail_attachment_age,
+            tail_curve=self._default_tail_curve,
         )
         segment_key = self._get_segment_key()
         existing_payload = _LIVE_RESULTS_BY_SEGMENT.get(segment_key)
@@ -836,6 +951,10 @@ class Dashboard:
                     style={"textAlign": "center", "marginBottom": "20px"},
                 ),
                 dcc.Store(id="drop-store", data=self._default_drop_store),
+                dcc.Store(
+                    id="tail-attachment-store",
+                    data=self._default_tail_attachment_age,
+                ),
                 dcc.Store(id="results-store", data=results_payload),
                 dcc.Interval(id="sync-interval", interval=1000, n_intervals=0),
                 html.Div(
@@ -855,6 +974,31 @@ class Dashboard:
                             ],
                             style={"minWidth": "200px"},
                         ),
+                        html.Div(
+                            [
+                                html.Label("Tail method"),
+                                dcc.Dropdown(
+                                    id="tail-method",
+                                    options=[
+                                        {
+                                            "label": "Weibull",
+                                            "value": "weibull",
+                                        },
+                                        {
+                                            "label": "Exponential",
+                                            "value": "exponential",
+                                        },
+                                        {
+                                            "label": "Inverse power",
+                                            "value": "inverse_power",
+                                        },
+                                    ],
+                                    value=self._default_tail_curve,
+                                    clearable=False,
+                                ),
+                            ],
+                            style={"minWidth": "200px"},
+                        ),
                     ],
                     style={
                         "display": "grid",
@@ -867,6 +1011,16 @@ class Dashboard:
                     [
                         html.Label("Active drops (click heatmap cells to toggle)"),
                         html.Div(id="drops-display", style={"marginTop": "6px"}),
+                        html.Div(
+                            [
+                                html.Label("Tail attachment age"),
+                                html.Div(
+                                    id="tail-attachment-display",
+                                    style={"marginTop": "6px"},
+                                ),
+                            ],
+                            style={"marginTop": "12px"},
+                        ),
                     ],
                     style={"marginBottom": "24px"},
                 ),

@@ -213,13 +213,26 @@ def build_reserving(
     reserving = Reserving(triangle)
     average = "volume"
     drop = None
+    tail_attachment_age = None
+    tail_curve = "weibull"
     if config is not None:
         session = config.load_session()
         average = session.get("average", average)
         drop = _normalize_drops(session.get("drops"))
+        tail_curve = session.get("tail_curve", tail_curve)
+        tail_attachment_age = session.get("tail_attachment_age")
+        if tail_attachment_age is not None:
+            try:
+                tail_attachment_age = int(tail_attachment_age)
+            except (TypeError, ValueError):
+                tail_attachment_age = None
 
     reserving.set_development(average=average, drop=drop)
-    reserving.set_tail(curve="weibull", projection_period=0)
+    reserving.set_tail(
+        curve=tail_curve,
+        projection_period=0,
+        attachment_age=tail_attachment_age,
+    )
     reserving.set_bornhuetter_ferguson(apriori=0.6)
     reserving.reserve(final_ultimate="chainladder")
     return reserving
