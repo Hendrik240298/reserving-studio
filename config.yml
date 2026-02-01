@@ -1,0 +1,10 @@
+paths:
+  results: results/
+  plots: plots/
+  data: data/
+  sessions: sessions/
+first date: 1900
+last date: "December 2006"
+segment: quarterly
+session:
+  path: sessions/quarterly.yml

@@ -1,0 +1,313 @@
+"""
+follow the workflow in ``https://chainladder-python.readthedocs.io/en/latest/user_guide/workflow.html``
+"""
+
+from source.triangle import Triangle
+import chainladder as cl
+import pandas as pd
+import logging
+from typing import Optional, Tuple, Literal
+
+
+class Reserving:
+    def __init__(self, triangle: Triangle):
+        self._triangle = triangle
+        self.development = None
+        self.tail = None
+
+    def set_development(
+        self,
+        average: str = "volume",
+        drop: Optional[list] = None,
+        drop_valuation: Optional[list] = None,
+    ):
+        if average not in ("volume", "simple"):
+            raise ValueError(f"average must be 'volume' or 'simple', got '{average}'")
+
+        # validate drop format
+        if drop is not None:
+            for i, item in enumerate(drop):
+                if not isinstance(item, tuple):
+                    raise ValueError(
+                        f"drop[{i}] must be a tuple, got {type(item).__name__}"
+                    )
+                if len(item) != 2:
+                    raise ValueError(
+                        f"drop[{i}] must have exactly 2 elements, got {len(item)}"
+                    )
+                if not isinstance(item[0], str):
+                    raise ValueError(
+                        f"drop[{i}][0] must be a string (origin), got {type(item[0]).__name__}"
+                    )
+                if not isinstance(item[1], int):
+                    raise ValueError(
+                        f"drop[{i}][1] must be an integer (development period), got {type(item[1]).__name__}"
+                    )
+
+        # Validate drop_valuation format
+        if isinstance(drop_valuation, str):
+            drop_valuation = [drop_valuation]
+        if drop_valuation is not None:
+            if not isinstance(drop_valuation, list):
+                raise ValueError(
+                    f"drop_valuation must be a list, got {type(drop_valuation).__name__}"
+                )
+            for i, year in enumerate(drop_valuation):
+                if not isinstance(year, str):
+                    raise ValueError(
+                        f"drop_valuation[{i}] must be a string (year), got {type(year).__name__}"
+                    )
+
+        params = {
+            "average": average,
+        }
+        if drop is not None:
+            params["drop"] = drop
+        if drop_valuation is not None:
+            params["drop_valuation"] = drop_valuation
+
+        self.development = cl.Development(**params)
+
+    def set_tail(
+        self,
+        curve: str = "weibull",
+        attachment_age: Optional[int] = None,
+        projection_period: Optional[int] = None,
+        fit_period: Optional[Tuple[int, int]] = None,
+    ):
+
+        if curve not in ("exponential", "inverse_power", "weibull"):
+            raise ValueError(
+                f"curve is {curve}, but has to be: 'exponential', 'inverse_power' or 'weibull'"
+            )
+        params = {
+            "curve": curve,
+        }
+
+        # Only add optional parameters if they're not None
+        if attachment_age is not None:
+            params["attachment_age"] = attachment_age
+        if fit_period is not None:
+            params["fit_period"] = fit_period
+        if projection_period is not None:
+            params["projection_period"] = projection_period
+
+        self.tail = cl.TailCurve(**params)
+
+    def set_bornhuetter_ferguson(self, apriori: float = 0.6):
+        self.bf = cl.BornhuetterFerguson(apriori=apriori)
+
+    def reserve(
+        self,
+        final_ultimate: Literal["chainladder", "bornhuetter_ferguson"] = "chainladder",
+    ):
+        if self.development is None:
+            raise ValueError(
+                "Development estimator not set. Call set_development() first."
+            )
+        if self.tail is None:
+            raise ValueError("Tail estimator not set. Call set_tail() first.")
+
+        incurred = self._triangle.get_triangle().latest_diagonal["incurred"].to_frame()
+        premium = (
+            self._triangle.get_triangle().latest_diagonal["Premium_selected"].to_frame()
+        )
+
+        chainladder = self.chainladder()
+        bornhuetter = self.bornhuetter_ferguson()
+
+
+        self._triangle_transformed = chainladder.named_steps.dev.fit_transform(
+            self._triangle.get_triangle()
+        )
+        cl_model = chainladder.named_steps.model
+        bf_model = bornhuetter.named_steps.model
+
+
+
+        cl_ultimate = cl_model.ultimate_["incurred"].to_frame()
+        bf_ultimate = bf_model.ultimate_["incurred"].to_frame()
+
+        cl_ultimate.columns = premium.columns
+        bf_ultimate.columns = premium.columns
+
+        # logging.info(f"Premium: /n{premium}")
+        # logging.info(f"Cl ultimate: /n{cl_ultimate}")
+
+        cl_loss_ratio = cl_ultimate / premium
+        bf_loss_ratio = bf_ultimate / premium
+
+        # logging.info(f"CL ultimates: {cl_ultimate}")
+        # logging.info(f"CL loss ratios: {cl_loss_ratio}")
+
+        cl_ultimate.columns = ["cl_ultimate"]
+        cl_loss_ratio.columns = ["cl_loss_ratio"]
+        bf_ultimate.columns = ["bf_ultimate"]
+        bf_loss_ratio.columns = ["bf_loss_ratio"]
+
+        incurred.columns = ["incurred"]
+        premium.columns = ["Premium"]
+
+        # hard coded way of selecting the final method
+        if final_ultimate == "chainladder":
+            ultimate = cl_ultimate.copy()
+            ultimate.columns = ["ultimate"]
+            self.result = chainladder
+        elif final_ultimate == "bornhuetter_ferguson":
+            ultimate = bf_ultimate.copy()
+            ultimate.columns = ["ultimate"]
+            self.result = bornhuetter
+        else:
+            raise ValueError(f"Unknown final_ultimate method: {final_ultimate}")
+
+        self.correct_tail()
+
+        self.df_results = cl_ultimate.copy().merge(
+            cl_loss_ratio, right_index=True, left_index=True
+        )
+        self.df_results = self.df_results.merge(
+            bf_ultimate, right_index=True, left_index=True
+        )
+        self.df_results = self.df_results.merge(
+            bf_loss_ratio, right_index=True, left_index=True
+        )
+        self.df_results = self.df_results.merge(
+            incurred, right_index=True, left_index=True
+        )
+        self.df_results = self.df_results.merge(
+            premium, right_index=True, left_index=True
+        )
+        self.df_results = self.df_results.merge(
+            ultimate, right_index=True, left_index=True
+        )
+        logging.info(f"ldfs: {self.result.named_steps.tail.ldf_['incurred'].to_frame().iloc[0]}")
+
+    class CorrectTail:
+        def fit(self, X, y=None):
+            return self
+        def transform(self, X):
+            # set the final ldf factor (tail) to 1.0 for the 'incurred' triangle to prevent over-projection
+            X_tail_corrected = X.copy()
+            # Find the index of 'incurred' in the vdims
+            incurred_idx = list(X.ldf_.vdims).index('incurred')
+            logging.info(f"incurred index in vdims: {incurred_idx}")
+            logging.info(f"Original tail LDFs: {X_tail_corrected.ldf_.values[:, incurred_idx, :, -1]}")
+            # Set the tail link ratio (last development period) to 1.0 for 'incurred'
+            X_tail_corrected.ldf_.values[:, incurred_idx, :, -1] = 1.0
+            logging.info(f"Corrected tail LDFs: {X_tail_corrected.ldf_.values[:, incurred_idx, :, -1]}")
+            return X_tail_corrected
+
+    def correct_tail(self):
+        incurred_idx = list(self.result.named_steps.tail.ldf_.vdims).index('incurred')
+        self.result.named_steps.tail.ldf_.values[:, incurred_idx, :, -1] = 1.0
+
+    def chainladder(self):
+        pipe = cl.Pipeline(
+            steps=[
+                ("dev", self.development),
+                ("tail", self.tail),
+                ("correct_tail", self.CorrectTail()),
+                ("model", cl.Chainladder()),
+            ]
+        )
+
+        return pipe.fit(self._triangle.get_triangle())
+
+    def bornhuetter_ferguson(self):
+        exposure = self._triangle.get_triangle()["Premium_selected"].latest_diagonal
+        incurred = self._triangle.get_triangle()["incurred"]
+
+        pipe = cl.Pipeline(
+            steps=[
+                ("dev", self.development),
+                (
+                    "tail",
+                    self.tail,
+                ),  # optional, include if you need a tail to reach ultimate
+                ("correct_tail", self.CorrectTail()),
+                ("model", self.bf),
+            ]
+        )
+
+        # incurred: cumulative Triangle
+        # exposure: Triangle or vector aligned to origins (e.g., Earned Premium)
+        return pipe.fit(incurred, model__sample_weight=exposure)
+
+    def get_results(self):
+        return self.df_results.copy()
+
+    def get_emergence_pattern(self):
+        # Calculate emergence triangle: for each UWY, show incurred as % of ultimate over development
+        triangle_df = self._triangle.get_triangle()["incurred"].to_frame()
+
+        # Get ultimate per UWY from results
+        ultimate = self.df_results["ultimate"]
+
+        # Calculate emergence by dividing each row by its ultimate
+        emergence = triangle_df.copy()
+        for uwy in triangle_df.index:
+            emergence.loc[uwy] = triangle_df.loc[uwy] / ultimate.loc[uwy]
+
+        # Get expected emergence pattern from tail CDF (includes tail, so cut off last 4 entries)
+        cdf_values = self.result.named_steps.tail.cdf_["incurred"].to_frame().iloc[0]
+        # Cut off the last 4 tail periods to match triangle length
+        cdf_values = cdf_values.iloc[:-4]
+        expected_pattern = 1 / cdf_values
+
+        # Align expected pattern with emergence columns
+        expected_series = expected_pattern.reindex(emergence.columns)
+        if expected_series.isna().all():
+            expected_series = pd.Series(
+                expected_pattern.values[: len(emergence.columns)],
+                index=emergence.columns[: len(expected_pattern)],
+            )
+        expected_full = expected_series.reindex(emergence.columns)
+
+        # Create expected dataframe with same structure as emergence
+        expected = pd.DataFrame(
+            [expected_full.values] * len(emergence),
+            index=emergence.index,
+            columns=emergence.columns,
+        )
+
+        # Unify results with multi-level columns
+        result = pd.concat([emergence, expected], axis=1, keys=["Actual", "Expected"])
+        return result
+
+    def get_triangle_heatmap_data(self):
+        """
+        Extract link ratios, LDF, Tail, cumulative incurred, and premium data for heatmap visualization.
+        Returns dictionary with:
+            - 'link_ratios': DataFrame with link ratios for each UWY, plus LDF and Tail rows
+            - 'incurred': DataFrame with cumulative incurred values
+            - 'premium': DataFrame with premium values
+        """
+        if self.result is None:
+            raise ValueError("Results not available. Call reserve() first")
+
+        # Extract link ratio data
+        link_ratios = self._triangle_transformed.link_ratio["incurred"].to_frame()
+        ldfs = self.result.named_steps.dev.ldf_["incurred"].to_frame()
+        tail = self.result.named_steps.tail.ldf_["incurred"].to_frame()
+
+        # Add LDF row at the bottom of link_ratios
+        ldf_row = ldfs.iloc[0].to_frame().T
+        ldf_row.index = ["LDF"]
+
+        # Add Tail row
+        tail_row = tail.iloc[0].to_frame().T
+        tail_row.index = ["Tail"]
+
+        # Combine all rows
+        link_ratios_with_ldf = pd.concat([link_ratios, ldf_row, tail_row])
+
+        # Extract cumulative incurred and premium from triangle
+        triangle_data = self._triangle.get_triangle()
+        incurred_df = triangle_data["incurred"].to_frame()
+        premium_df = triangle_data["Premium_selected"].to_frame()
+
+        return {
+            "link_ratios": link_ratios_with_ldf,
+            "incurred": incurred_df,
+            "premium": premium_df,
+        }
