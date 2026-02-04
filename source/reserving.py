@@ -6,7 +6,7 @@ from source.triangle import Triangle
 import chainladder as cl
 import pandas as pd
 import logging
-from typing import Optional, Tuple, Literal
+from typing import Any, Optional, Tuple, Literal
 
 
 class Reserving:
@@ -58,7 +58,7 @@ class Reserving:
                         f"drop_valuation[{i}] must be a string (year), got {type(year).__name__}"
                     )
 
-        params = {
+        params: dict[str, Any] = {
             "average": average,
         }
         if drop is not None:
@@ -66,21 +66,20 @@ class Reserving:
         if drop_valuation is not None:
             params["drop_valuation"] = drop_valuation
 
-        self.development = cl.Development(**params)
+        self.development = cl.Development(**params)  # type: ignore[call-arg]
 
     def set_tail(
         self,
         curve: str = "weibull",
         attachment_age: Optional[int] = None,
         projection_period: Optional[int] = None,
-        fit_period: Optional[Tuple[int, int]] = None,
+        fit_period: Optional[Tuple[int, Optional[int]]] = None,
     ):
-
         if curve not in ("exponential", "inverse_power", "weibull"):
             raise ValueError(
                 f"curve is {curve}, but has to be: 'exponential', 'inverse_power' or 'weibull'"
             )
-        params = {
+        params: dict[str, Any] = {
             "curve": curve,
         }
 
@@ -92,7 +91,7 @@ class Reserving:
         if projection_period is not None:
             params["projection_period"] = projection_period
 
-        self.tail = cl.TailCurve(**params)
+        self.tail = cl.TailCurve(**params)  # type: ignore[call-arg]
 
     def set_bornhuetter_ferguson(self, apriori: float = 0.6):
         self.bf = cl.BornhuetterFerguson(apriori=apriori)
@@ -116,14 +115,11 @@ class Reserving:
         chainladder = self.chainladder()
         bornhuetter = self.bornhuetter_ferguson()
 
-
         self._triangle_transformed = chainladder.named_steps.dev.fit_transform(
             self._triangle.get_triangle()
         )
         cl_model = chainladder.named_steps.model
         bf_model = bornhuetter.named_steps.model
-
-
 
         cl_ultimate = cl_model.ultimate_["incurred"].to_frame()
         bf_ultimate = bf_model.ultimate_["incurred"].to_frame()
@@ -180,25 +176,32 @@ class Reserving:
         self.df_results = self.df_results.merge(
             ultimate, right_index=True, left_index=True
         )
-        logging.info(f"ldfs: {self.result.named_steps.tail.ldf_['incurred'].to_frame().iloc[0]}")
+        logging.info(
+            f"ldfs: {self.result.named_steps.tail.ldf_['incurred'].to_frame().iloc[0]}"
+        )
 
     class CorrectTail:
         def fit(self, X, y=None):
             return self
+
         def transform(self, X):
             # set the final ldf factor (tail) to 1.0 for the 'incurred' triangle to prevent over-projection
             X_tail_corrected = X.copy()
             # Find the index of 'incurred' in the vdims
-            incurred_idx = list(X.ldf_.vdims).index('incurred')
+            incurred_idx = list(X.ldf_.vdims).index("incurred")
             logging.info(f"incurred index in vdims: {incurred_idx}")
-            logging.info(f"Original tail LDFs: {X_tail_corrected.ldf_.values[:, incurred_idx, :, -1]}")
+            logging.info(
+                f"Original tail LDFs: {X_tail_corrected.ldf_.values[:, incurred_idx, :, -1]}"
+            )
             # Set the tail link ratio (last development period) to 1.0 for 'incurred'
             X_tail_corrected.ldf_.values[:, incurred_idx, :, -1] = 1.0
-            logging.info(f"Corrected tail LDFs: {X_tail_corrected.ldf_.values[:, incurred_idx, :, -1]}")
+            logging.info(
+                f"Corrected tail LDFs: {X_tail_corrected.ldf_.values[:, incurred_idx, :, -1]}"
+            )
             return X_tail_corrected
 
     def correct_tail(self):
-        incurred_idx = list(self.result.named_steps.tail.ldf_.vdims).index('incurred')
+        incurred_idx = list(self.result.named_steps.tail.ldf_.vdims).index("incurred")
         self.result.named_steps.tail.ldf_.values[:, incurred_idx, :, -1] = 1.0
 
     def chainladder(self):

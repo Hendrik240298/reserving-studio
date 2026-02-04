@@ -1,3 +1,4 @@
+# pyright: reportGeneralTypeIssues=false
 from __future__ import annotations
 
 import logging
@@ -37,20 +38,30 @@ def _coerce_period(series: pd.Series) -> pd.Series:
         return series
     values = series.astype(str)
     numeric = pd.to_numeric(values, errors="coerce")
+    if not isinstance(numeric, pd.Series):
+        numeric = pd.Series(numeric, index=values.index)
     if numeric.notna().any():
         return numeric
     if values.str.contains("Q").any():
         try:
-            return pd.PeriodIndex(values, freq="Q").to_timestamp("Q")
+            return pd.Series(
+                pd.PeriodIndex(values, freq="Q").to_timestamp("Q"),
+                index=values.index,
+            )
         except Exception:
             pass
-    return pd.to_datetime(values, errors="ignore")
+    converted = pd.to_datetime(values, errors="ignore")
+    if isinstance(converted, pd.Series):
+        return converted
+    return pd.Series(converted, index=values.index)
 
 
 def _normalize_periods(df: pd.DataFrame) -> pd.DataFrame:
     numeric_periods = df["period"]
     if not pd.api.types.is_numeric_dtype(numeric_periods):
         numeric_periods = pd.to_numeric(numeric_periods, errors="coerce")
+        if not isinstance(numeric_periods, pd.Series):
+            numeric_periods = pd.Series(numeric_periods, index=df.index)
         if numeric_periods.notna().sum() == 0:
             return df
         df["period"] = numeric_periods
@@ -215,23 +226,29 @@ def build_reserving(
     drop = None
     tail_attachment_age = None
     tail_curve = "weibull"
+    tail_fit_period_selection: list[int] = []
     if config is not None:
         session = config.load_session()
         average = session.get("average", average)
         drop = _normalize_drops(session.get("drops"))
         tail_curve = session.get("tail_curve", tail_curve)
         tail_attachment_age = session.get("tail_attachment_age")
+        tail_fit_period_selection = _normalize_tail_fit_period_selection(
+            session.get("tail_fit_period")
+        )
         if tail_attachment_age is not None:
             try:
                 tail_attachment_age = int(tail_attachment_age)
             except (TypeError, ValueError):
                 tail_attachment_age = None
+    fit_period = _derive_tail_fit_period(tail_fit_period_selection)
 
     reserving.set_development(average=average, drop=drop)
     reserving.set_tail(
         curve=tail_curve,
         projection_period=0,
         attachment_age=tail_attachment_age,
+        fit_period=fit_period,
     )
     reserving.set_bornhuetter_ferguson(apriori=0.6)
     reserving.reserve(final_ultimate="chainladder")
@@ -251,6 +268,38 @@ def _normalize_drops(raw: object) -> list[tuple[str, int]] | None:
                 except (TypeError, ValueError):
                     continue
     return normalized or None
+
+
+def _normalize_tail_fit_period_selection(raw: object) -> list[int]:
+    if raw is None:
+        return []
+    if isinstance(raw, (int, float, str)):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        return []
+    normalized: list[int] = []
+    for item in raw:
+        try:
+            value = int(item)
+        except (TypeError, ValueError):
+            continue
+        if value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
+def _derive_tail_fit_period(
+    selection: list[int] | None,
+) -> tuple[int, int | None] | None:
+    if not selection:
+        return None
+    normalized = _normalize_tail_fit_period_selection(selection)
+    if not normalized:
+        return None
+    sorted_values = sorted(set(normalized))
+    if len(sorted_values) == 1:
+        return (sorted_values[0], None)
+    return (sorted_values[0], sorted_values[-1])
 
 
 def load_config() -> ConfigManager | None:

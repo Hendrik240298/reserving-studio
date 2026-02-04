@@ -54,6 +54,7 @@ class Dashboard:
         self._default_drop_text = ""
         self._default_drop_store: List[List[str | int]] = []
         self._default_tail_attachment_age: Optional[int] = None
+        self._default_tail_fit_period_selection: List[int] = []
 
         self._load_session_defaults()
 
@@ -84,6 +85,9 @@ class Dashboard:
                 self._default_tail_attachment_age = int(tail_attachment_age)
             except (TypeError, ValueError):
                 self._default_tail_attachment_age = None
+        self._default_tail_fit_period_selection = self._normalize_tail_fit_selection(
+            session.get("tail_fit_period")
+        )
 
     def _get_segment_key(self) -> str:
         if self._config is None:
@@ -146,6 +150,51 @@ class Dashboard:
         except (TypeError, ValueError):
             return None
 
+    def _normalize_tail_fit_selection(self, raw: object) -> List[int]:
+        if raw is None:
+            return []
+        if isinstance(raw, (int, float, str)):
+            raw = [raw]
+        if not isinstance(raw, (list, tuple)):
+            return []
+        normalized: List[int] = []
+        for item in raw:
+            try:
+                value = int(item)
+            except (TypeError, ValueError):
+                continue
+            if value not in normalized:
+                normalized.append(value)
+        return normalized
+
+    def _toggle_tail_fit_selection(self, existing: List[int], dev: int) -> List[int]:
+        normalized = []
+        for item in existing or []:
+            try:
+                value = int(item)
+            except (TypeError, ValueError):
+                continue
+            if value not in normalized:
+                normalized.append(value)
+        if dev in normalized:
+            normalized = [value for value in normalized if value != dev]
+        else:
+            normalized.append(dev)
+        return normalized
+
+    def _derive_tail_fit_period(
+        self, selection: Optional[List[int]]
+    ) -> Optional[Tuple[int, Optional[int]]]:
+        if not selection:
+            return None
+        normalized = self._normalize_tail_fit_selection(selection)
+        if not normalized:
+            return None
+        sorted_values = sorted(set(normalized))
+        if len(sorted_values) == 1:
+            return (sorted_values[0], None)
+        return (sorted_values[0], sorted_values[-1])
+
     def _toggle_drop(
         self,
         existing: List[List[str | int]],
@@ -191,6 +240,7 @@ class Dashboard:
         drops: Optional[List[Tuple[str, int]]],
         tail_attachment_age: Optional[int],
         tail_curve: str,
+        fit_period: Optional[Tuple[int, Optional[int]]],
     ) -> None:
         self._reserving.set_development(
             average=average,
@@ -200,6 +250,7 @@ class Dashboard:
             curve=tail_curve,
             projection_period=0,
             attachment_age=tail_attachment_age,
+            fit_period=fit_period,
         )
         self._reserving.set_bornhuetter_ferguson(apriori=0.6)
         self._reserving.reserve(final_ultimate="chainladder")
@@ -211,6 +262,7 @@ class Dashboard:
         average: Optional[str],
         tail_attachment_age: Optional[int],
         tail_curve: Optional[str],
+        tail_fit_period_selection: Optional[List[int]],
     ) -> dict:
         timestamp = datetime.utcnow().isoformat() + "Z"
         display = "None"
@@ -219,11 +271,17 @@ class Dashboard:
         tail_display = "None"
         if tail_attachment_age is not None:
             tail_display = str(tail_attachment_age)
+        fit_period = self._derive_tail_fit_period(tail_fit_period_selection)
+        if fit_period is None:
+            fit_period_display = "lower=None, upper=None"
+        else:
+            fit_period_display = f"lower={fit_period[0]}, upper={fit_period[1]}"
 
         triangle_fig = self._plot_triangle_heatmap(
             self.triangle,
             "Triangle - Link Ratios",
             tail_attachment_age,
+            tail_fit_period_selection,
         )
         emergence_fig = self._plot_emergence(
             self.emergence_pattern,
@@ -244,6 +302,8 @@ class Dashboard:
             "drop_store": drop_store or [],
             "tail_attachment_age": tail_attachment_age,
             "tail_attachment_display": tail_display,
+            "tail_fit_period_selection": tail_fit_period_selection or [],
+            "tail_fit_period_display": fit_period_display,
             "last_updated": timestamp,
         }
 
@@ -251,45 +311,63 @@ class Dashboard:
         @self.app.callback(
             Output("drop-store", "data"),
             Output("tail-attachment-store", "data"),
+            Output("tail-fit-period-store", "data"),
             Input("triangle-heatmap", "clickData"),
             State("drop-store", "data"),
             State("tail-attachment-store", "data"),
+            State("tail-fit-period-store", "data"),
         )
-        def _toggle_drop_click(click, drop_store, tail_attachment_age):
+        def _toggle_drop_click(
+            click,
+            drop_store,
+            tail_attachment_age,
+            tail_fit_period_selection,
+        ):
             if not click or "points" not in click or not click["points"]:
-                return drop_store, tail_attachment_age
+                return drop_store, tail_attachment_age, tail_fit_period_selection
 
             point = click["points"][0]
             origin = point.get("y")
             dev_label = point.get("x")
             dev = self._parse_dev_label(dev_label)
             if dev is None:
-                return drop_store, tail_attachment_age
+                return drop_store, tail_attachment_age, tail_fit_period_selection
 
             if origin == "Tail":
                 if tail_attachment_age == dev:
-                    return drop_store, None
-                return drop_store, dev
+                    return drop_store, None, tail_fit_period_selection
+                return drop_store, dev, tail_fit_period_selection
+
+            if origin == "LDF":
+                updated = self._toggle_tail_fit_selection(
+                    tail_fit_period_selection or [],
+                    dev,
+                )
+                return drop_store, tail_attachment_age, updated
 
             if origin == "LDF" or dev_label is None:
-                return drop_store, tail_attachment_age
+                return drop_store, tail_attachment_age, tail_fit_period_selection
 
             updated = self._toggle_drop(drop_store or [], str(origin), dev)
-            return updated, tail_attachment_age
+            return updated, tail_attachment_age, tail_fit_period_selection
 
         @self.app.callback(
             Output("triangle-heatmap", "clickData"),
             Input("drop-store", "data"),
             Input("tail-attachment-store", "data"),
+            Input("tail-fit-period-store", "data"),
             prevent_initial_call=True,
         )
-        def _clear_clicks(_drop_store, _tail_attachment_age):
+        def _clear_clicks(
+            _drop_store, _tail_attachment_age, _tail_fit_period_selection
+        ):
             return None
 
         @self.app.callback(
             Output("results-store", "data"),
             Input("drop-store", "data"),
             Input("tail-attachment-store", "data"),
+            Input("tail-fit-period-store", "data"),
             Input("average-method", "value"),
             Input("tail-method", "value"),
             Input("sync-interval", "n_intervals"),
@@ -298,6 +376,7 @@ class Dashboard:
         def _update_results(
             drop_store,
             tail_attachment_age,
+            tail_fit_period_selection,
             average,
             tail_curve,
             _n_intervals,
@@ -331,8 +410,15 @@ class Dashboard:
                     parsed_tail = int(tail_attachment_age)
                 except (TypeError, ValueError):
                     parsed_tail = None
+            fit_period = self._derive_tail_fit_period(tail_fit_period_selection)
             try:
-                self._apply_recalculation(average, drops, parsed_tail, tail_curve)
+                self._apply_recalculation(
+                    average,
+                    drops,
+                    parsed_tail,
+                    tail_curve,
+                    fit_period,
+                )
             except Exception as exc:
                 logging.error(f"Failed to recalculate reserving: {exc}", exc_info=True)
 
@@ -343,6 +429,7 @@ class Dashboard:
                         "tail_curve": tail_curve,
                         "drops": drop_store or [],
                         "tail_attachment_age": parsed_tail,
+                        "tail_fit_period": tail_fit_period_selection or [],
                     }
                 )
 
@@ -351,6 +438,7 @@ class Dashboard:
                 average=average,
                 tail_attachment_age=parsed_tail,
                 tail_curve=tail_curve,
+                tail_fit_period_selection=tail_fit_period_selection,
             )
 
             segment_key = self._get_segment_key()
@@ -363,6 +451,7 @@ class Dashboard:
             Output("results-table", "figure"),
             Output("drops-display", "children"),
             Output("tail-attachment-display", "children"),
+            Output("tail-fit-period-display", "children"),
             Output("average-method", "value"),
             Output("tail-method", "value"),
             Input("results-store", "data"),
@@ -375,6 +464,7 @@ class Dashboard:
                         self.triangle,
                         "Triangle - Link Ratios",
                         self._default_tail_attachment_age,
+                        self._default_tail_fit_period_selection,
                     ),
                     self._plot_emergence(
                         self.emergence_pattern,
@@ -386,6 +476,7 @@ class Dashboard:
                     ),
                     "None",
                     "None",
+                    "lower=None, upper=None",
                     self._default_average,
                     self._default_tail_curve,
                 )
@@ -396,6 +487,9 @@ class Dashboard:
                 results_payload.get("results_figure"),
                 results_payload.get("drops_display", "None"),
                 results_payload.get("tail_attachment_display", "None"),
+                results_payload.get(
+                    "tail_fit_period_display", "lower=None, upper=None"
+                ),
                 results_payload.get("average", self._default_average),
                 results_payload.get("tail_curve", self._default_tail_curve),
             )
@@ -612,6 +706,7 @@ class Dashboard:
         title,
         reserving: Reserving,
         tail_attachment_age: Optional[int],
+        tail_fit_period_selection: Optional[List[int]],
     ):
         """
         Plot triangle heatmap with link ratios, LDF, and Tail rows.
@@ -682,8 +777,6 @@ class Dashboard:
         ldf_tail_max = ldf_tail_data.max().max()
 
         if ldf_tail_max > ldf_tail_min and ldf_tail_min > 0:
-            import numpy as np
-
             log_min = np.log(ldf_tail_min)
             log_max = np.log(ldf_tail_max)
             for col in expanded_triangle.columns:
@@ -768,11 +861,11 @@ class Dashboard:
                         right_val = incurred_data.loc[incurred_idx, right_period]
 
                     # Format as "left_value --> right_value"
-                    if not pd.isna(left_val) and not pd.isna(right_val):
+                    if not bool(pd.isna(left_val)) and not bool(pd.isna(right_val)):
                         customdata_incurred[i, j] = (
                             f"{format_to_millions(left_val)} --> {format_to_millions(right_val)}"
                         )
-                    elif not pd.isna(left_val):
+                    elif not bool(pd.isna(left_val)):
                         customdata_incurred[i, j] = format_to_millions(left_val)
                     else:
                         customdata_incurred[i, j] = ""
@@ -903,6 +996,76 @@ class Dashboard:
                         yref="y",
                     )
 
+        fit_period = self._derive_tail_fit_period(tail_fit_period_selection)
+        if fit_period is not None:
+            try:
+                ldf_row_pos = expanded_triangle.index.get_loc("LDF")
+            except KeyError:
+                ldf_row_pos = None
+
+            if ldf_row_pos is not None:
+                lower_value, upper_value = fit_period
+                lower_col = None
+                upper_col = None
+                for col in expanded_triangle.columns:
+                    col_age = self._parse_dev_label(col)
+                    if col_age == lower_value:
+                        lower_col = col
+                    if upper_value is not None and col_age == upper_value:
+                        upper_col = col
+
+                if lower_col is not None:
+                    lower_pos = expanded_triangle.columns.get_loc(lower_col)
+                    if upper_value is None or upper_col is None:
+                        fig.add_shape(
+                            type="rect",
+                            x0=lower_pos - 0.5,
+                            y0=ldf_row_pos - 0.5,
+                            x1=lower_pos + 0.5,
+                            y1=ldf_row_pos + 0.5,
+                            line=dict(color="black", width=2),
+                            fillcolor="rgba(0,0,0,0)",
+                            xref="x",
+                            yref="y",
+                        )
+                    else:
+                        upper_pos = expanded_triangle.columns.get_loc(upper_col)
+                        start_pos = min(lower_pos, upper_pos)
+                        end_pos = max(lower_pos, upper_pos)
+                        fig.add_shape(
+                            type="rect",
+                            x0=start_pos - 0.5,
+                            y0=ldf_row_pos - 0.5,
+                            x1=end_pos + 0.5,
+                            y1=ldf_row_pos + 0.5,
+                            line=dict(color="black", width=2),
+                            fillcolor="rgba(0,0,0,0)",
+                            xref="x",
+                            yref="y",
+                        )
+                        fig.add_shape(
+                            type="rect",
+                            x0=lower_pos - 0.5,
+                            y0=ldf_row_pos - 0.5,
+                            x1=lower_pos + 0.5,
+                            y1=ldf_row_pos + 0.5,
+                            line=dict(color="black", width=3),
+                            fillcolor="rgba(0,0,0,0)",
+                            xref="x",
+                            yref="y",
+                        )
+                        fig.add_shape(
+                            type="rect",
+                            x0=upper_pos - 0.5,
+                            y0=ldf_row_pos - 0.5,
+                            x1=upper_pos + 0.5,
+                            y1=ldf_row_pos + 0.5,
+                            line=dict(color="black", width=3),
+                            fillcolor="rgba(0,0,0,0)",
+                            xref="x",
+                            yref="y",
+                        )
+
         return fig
 
     def _plot_triangle_heatmap(
@@ -910,6 +1073,7 @@ class Dashboard:
         triangle_data,
         title,
         tail_attachment_age: Optional[int],
+        tail_fit_period_selection: Optional[List[int]],
     ):
         """
         Plot triangle heatmap with incurred/premium hover values.
@@ -921,6 +1085,7 @@ class Dashboard:
             title,
             self._reserving,
             tail_attachment_age,
+            tail_fit_period_selection,
         )
 
     def _create_layout(self):
@@ -938,11 +1103,30 @@ class Dashboard:
             average=self._default_average,
             tail_attachment_age=self._default_tail_attachment_age,
             tail_curve=self._default_tail_curve,
+            tail_fit_period_selection=self._default_tail_fit_period_selection,
         )
         segment_key = self._get_segment_key()
         existing_payload = _LIVE_RESULTS_BY_SEGMENT.get(segment_key)
         if existing_payload:
             results_payload = existing_payload
+        if self._default_tail_fit_period_selection:
+            fit_period = self._derive_tail_fit_period(
+                self._default_tail_fit_period_selection
+            )
+            if fit_period is None:
+                fit_period_display = "lower=None, upper=None"
+            else:
+                fit_period_display = f"lower={fit_period[0]}, upper={fit_period[1]}"
+            results_payload["tail_fit_period_selection"] = (
+                self._default_tail_fit_period_selection
+            )
+            results_payload["tail_fit_period_display"] = fit_period_display
+            results_payload["triangle_figure"] = self._plot_triangle_heatmap(
+                self.triangle,
+                "Triangle - Link Ratios",
+                self._default_tail_attachment_age,
+                self._default_tail_fit_period_selection,
+            ).to_dict()
         _LIVE_RESULTS_BY_SEGMENT[segment_key] = results_payload
         return html.Div(
             [
@@ -954,6 +1138,10 @@ class Dashboard:
                 dcc.Store(
                     id="tail-attachment-store",
                     data=self._default_tail_attachment_age,
+                ),
+                dcc.Store(
+                    id="tail-fit-period-store",
+                    data=self._default_tail_fit_period_selection,
                 ),
                 dcc.Store(id="results-store", data=results_payload),
                 dcc.Interval(id="sync-interval", interval=1000, n_intervals=0),
@@ -1016,6 +1204,16 @@ class Dashboard:
                                 html.Label("Tail attachment age"),
                                 html.Div(
                                     id="tail-attachment-display",
+                                    style={"marginTop": "6px"},
+                                ),
+                            ],
+                            style={"marginTop": "12px"},
+                        ),
+                        html.Div(
+                            [
+                                html.Label("Tail fit period"),
+                                html.Div(
+                                    id="tail-fit-period-display",
                                     style={"marginTop": "6px"},
                                 ),
                             ],
