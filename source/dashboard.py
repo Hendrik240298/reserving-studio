@@ -11,6 +11,20 @@ import numpy as np
 
 _LIVE_RESULTS_BY_SEGMENT: dict[str, dict] = {}
 
+FONT_FAMILY = '"Manrope", "Segoe UI", "Helvetica Neue", Arial, sans-serif'
+COLOR_BG = "#f7f8fa"
+COLOR_SURFACE = "#ffffff"
+COLOR_BORDER = "#e3e7ee"
+COLOR_TEXT = "#1f2a37"
+COLOR_MUTED = "#5b6b7b"
+COLOR_ACCENT = "#2b6cb0"
+COLOR_ACCENT_SOFT = "#e8f1fb"
+SHADOW_SOFT = "0 8px 24px rgba(15, 23, 42, 0.06)"
+RADIUS_LG = "14px"
+RADIUS_MD = "10px"
+SIDEBAR_EXPANDED_WIDTH = "240px"
+SIDEBAR_COLLAPSED_WIDTH = "0px"
+
 
 def format_to_millions(value):
     """
@@ -48,7 +62,13 @@ class Dashboard:
         """
         self._reserving = reserving
         self._config = config
-        self.app = Dash(__name__, suppress_callback_exceptions=True)
+        self.app = Dash(
+            __name__,
+            suppress_callback_exceptions=True,
+            external_stylesheets=[
+                "https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap",
+            ],
+        )
         self._default_average = "volume"
         self._default_tail_curve = "weibull"
         self._default_drop_text = ""
@@ -117,6 +137,202 @@ class Dashboard:
             self.premium = None
             self.results = None
             raise  # Re-raise to see the actual error
+
+    def _format_triangle_row_labels(self, index: pd.Index) -> list[str]:
+        labels: list[str] = []
+        for idx in index:
+            if hasattr(idx, "year"):
+                labels.append(str(idx.year))
+            else:
+                labels.append(str(idx))
+        return labels
+
+    def _format_triangle_column_labels(self, columns: pd.Index) -> list[str]:
+        labels: list[str] = []
+        for col in columns:
+            if isinstance(col, (int, np.integer)):
+                labels.append(str(int(col)))
+            else:
+                labels.append(str(col))
+        return labels
+
+    def _get_data_tab_triangle(
+        self,
+        metric: str,
+        triangle_view: str = "cumulative",
+    ) -> pd.DataFrame:
+        triangle_obj = self._reserving._triangle
+        normalized_view = (triangle_view or "cumulative").lower()
+
+        incurred_triangle = triangle_obj.get_triangle("incurred")
+        paid_triangle = triangle_obj.get_triangle("paid")
+        if normalized_view == "incremental":
+            incurred_triangle = incurred_triangle.cum_to_incr()
+            paid_triangle = paid_triangle.cum_to_incr()
+
+        incurred_df = incurred_triangle["incurred"].to_frame()
+
+        metric = (metric or "incurred").lower()
+        if metric == "incurred":
+            return incurred_df
+
+        if metric == "paid":
+            return paid_triangle["paid"].to_frame()
+
+        if metric == "premium":
+            return (
+                incurred_triangle["Premium_selected"]
+                .to_frame()
+                .rename(columns={"Premium_selected": "premium"})
+            )
+
+        if metric == "outstanding":
+            paid_df = paid_triangle["paid"].to_frame()
+            incurred_aligned, paid_aligned = incurred_df.align(paid_df, join="outer")
+            outstanding = incurred_aligned - paid_aligned
+            return outstanding
+
+        return incurred_df
+
+    def _build_data_tab_display(
+        self,
+        metric: str,
+        triangle_view: str,
+        divisor: str,
+    ) -> tuple[pd.DataFrame, pd.DataFrame, bool]:
+        metric_value = (metric or "incurred").lower()
+        divisor_value = (divisor or "none").lower()
+
+        numerator_df = self._get_data_tab_triangle(metric_value, triangle_view)
+        if divisor_value == "none":
+            weights_df = self._get_data_tab_triangle("premium", triangle_view)
+            return numerator_df, weights_df, False
+
+        denominator_df = self._get_data_tab_triangle(divisor_value, "cumulative")
+        num_aligned, den_aligned = numerator_df.align(denominator_df, join="outer")
+        safe_denominator = den_aligned.where(den_aligned > 0)
+        divided_df = num_aligned.div(safe_denominator)
+        weights_df = den_aligned
+        return divided_df, weights_df, True
+
+    def _plot_data_triangle_table(
+        self,
+        triangle_df: pd.DataFrame,
+        title: str,
+        weights_df: Optional[pd.DataFrame] = None,
+        ratio_mode: bool = False,
+    ) -> go.Figure:
+        if triangle_df is None or triangle_df.empty:
+            return go.Figure(
+                layout=go.Layout(
+                    title=f"{title} - No data available",
+                    annotations=[
+                        dict(
+                            text="Triangle data not available.",
+                            x=0.5,
+                            y=0.5,
+                            xref="paper",
+                            yref="paper",
+                            showarrow=False,
+                            font=dict(color="red", size=14),
+                        )
+                    ],
+                )
+            )
+
+        df_display = self._append_data_triangle_average_rows(triangle_df, weights_df)
+        row_labels = self._format_triangle_row_labels(df_display.index)
+        col_labels = self._format_triangle_column_labels(df_display.columns)
+
+        def _format_cell(value: object) -> str:
+            if pd.isna(value):
+                return ""
+            numeric_value = pd.to_numeric(value, errors="coerce")
+            if pd.isna(numeric_value):
+                return ""
+            if ratio_mode:
+                return f"{numeric_value:.3f}"
+            return f"{numeric_value:,.0f}"
+
+        table_values: list[list[str]] = [row_labels]
+        for col in df_display.columns:
+            table_values.append([_format_cell(v) for v in df_display[col]])
+
+        headers = ["UWY"] + col_labels
+
+        fig = go.Figure(
+            data=[
+                go.Table(
+                    columnwidth=[130] + [62] * len(col_labels),
+                    header=dict(
+                        values=headers,
+                        fill_color="#f2f5f9",
+                        align="center",
+                        line_color=COLOR_BORDER,
+                        font=dict(color=COLOR_TEXT, size=11, family=FONT_FAMILY),
+                        height=28,
+                    ),
+                    cells=dict(
+                        values=table_values,
+                        fill_color=COLOR_SURFACE,
+                        align="center",
+                        line_color=COLOR_BORDER,
+                        font=dict(color=COLOR_TEXT, size=10, family=FONT_FAMILY),
+                        height=26,
+                    ),
+                )
+            ]
+        )
+
+        fig.update_layout(
+            title=title,
+            template="plotly_white",
+            margin=dict(l=8, r=8, t=48, b=8),
+            height=min(760, 170 + len(df_display.index) * 28),
+            uirevision="static",
+        )
+        return fig
+
+    def _append_data_triangle_average_rows(
+        self,
+        triangle_df: pd.DataFrame,
+        weights_df: Optional[pd.DataFrame] = None,
+    ) -> pd.DataFrame:
+        if triangle_df is None or triangle_df.empty:
+            return triangle_df
+
+        df_values = triangle_df.apply(pd.to_numeric, errors="coerce")
+        simple_average = df_values.mean(axis=0, skipna=True)
+
+        if weights_df is None:
+            premium_weights = self._reserving._triangle.get_triangle("incurred")[
+                "Premium_selected"
+            ].to_frame()
+        else:
+            premium_weights = weights_df.apply(pd.to_numeric, errors="coerce")
+        aligned_values, aligned_weights = df_values.align(
+            premium_weights,
+            join="left",
+        )
+
+        weighted_average_values: dict[object, float] = {}
+        for col in aligned_values.columns:
+            values_col = pd.to_numeric(aligned_values[col], errors="coerce")
+            weights_col = pd.to_numeric(aligned_weights[col], errors="coerce")
+            valid = values_col.notna() & weights_col.notna() & (weights_col > 0)
+            if valid.any():
+                weighted_average_values[col] = float(
+                    np.average(values_col[valid], weights=weights_col[valid])
+                )
+            else:
+                weighted_average_values[col] = np.nan
+
+        weighted_average = pd.Series(weighted_average_values)
+
+        df_with_averages = df_values.copy()
+        df_with_averages.loc["Simple Avg"] = simple_average
+        df_with_averages.loc["Weighted Avg"] = weighted_average
+        return df_with_averages
 
     def _parse_drop_text(self, text: str) -> List[Tuple[str, int]]:
         if not text:
@@ -309,6 +525,256 @@ class Dashboard:
 
     def _register_callbacks(self) -> None:
         @self.app.callback(
+            Output("active-tab", "data"),
+            Input("nav-data", "n_clicks"),
+            Input("nav-chainladder", "n_clicks"),
+            Input("nav-bf", "n_clicks"),
+            Input("nav-results", "n_clicks"),
+            State("active-tab", "data"),
+        )
+        def _set_active_tab(
+            data_clicks,
+            chainladder_clicks,
+            bf_clicks,
+            results_clicks,
+            current_tab,
+        ):
+            ctx = callback_context
+            if not ctx.triggered:
+                return current_tab
+            trigger = ctx.triggered[0]["prop_id"].split(".")[0]
+            mapping = {
+                "nav-data": "data",
+                "nav-chainladder": "chainladder",
+                "nav-bf": "bornhuetter_ferguson",
+                "nav-results": "results",
+            }
+            return mapping.get(trigger, current_tab)
+
+        @self.app.callback(
+            Output("sidebar-collapsed", "data"),
+            Input("sidebar-toggle", "n_clicks"),
+            State("sidebar-collapsed", "data"),
+        )
+        def _toggle_sidebar(collapse_clicks, collapsed):
+            if not collapse_clicks:
+                return collapsed
+            return not bool(collapsed)
+
+        @self.app.callback(
+            Output("sidebar", "style"),
+            Output("sidebar-title", "style"),
+            Output("nav-stack", "style"),
+            Output("nav-data", "style"),
+            Output("nav-chainladder", "style"),
+            Output("nav-bf", "style"),
+            Output("nav-results", "style"),
+            Output("nav-data", "children"),
+            Output("nav-chainladder", "children"),
+            Output("nav-bf", "children"),
+            Output("nav-results", "children"),
+            Output("sidebar-toggle", "children"),
+            Output("sidebar-toggle", "style"),
+            Input("active-tab", "data"),
+            Input("sidebar-collapsed", "data"),
+        )
+        def _style_sidebar(active_tab, collapsed):
+            is_collapsed = bool(collapsed)
+            sidebar_style = {
+                "width": SIDEBAR_COLLAPSED_WIDTH
+                if is_collapsed
+                else SIDEBAR_EXPANDED_WIDTH,
+                "transition": "width 0.2s ease",
+                "background": "#f2f5f9",
+                "padding": "0" if is_collapsed else "20px 16px",
+                "display": "flex",
+                "flexDirection": "column",
+                "justifyContent": "center",
+                "borderRight": "none" if is_collapsed else f"1px solid {COLOR_BORDER}",
+                "position": "relative",
+                "minHeight": "100vh",
+                "height": "100vh",
+                "alignSelf": "flex-start",
+                "fontFamily": FONT_FAMILY,
+                "overflow": "visible",
+            }
+            title_style = {
+                "display": "none" if is_collapsed else "block",
+                "textAlign": "center",
+                "marginBottom": "18px",
+                "color": COLOR_TEXT,
+                "letterSpacing": "0.2px",
+                "fontSize": "15px",
+                "fontWeight": 600,
+            }
+            nav_stack_style = {
+                "display": "none" if is_collapsed else "flex",
+                "flexDirection": "column",
+                "gap": "8px",
+            }
+            base_button_style = {
+                "width": "100%",
+                "textAlign": "left",
+                "padding": "10px 12px",
+                "border": "1px solid transparent",
+                "borderRadius": RADIUS_MD,
+                "background": "transparent",
+                "cursor": "pointer",
+                "fontSize": "14px",
+                "marginBottom": "8px",
+                "color": COLOR_TEXT,
+                "fontFamily": FONT_FAMILY,
+                "whiteSpace": "nowrap",
+            }
+            active_style = {
+                **base_button_style,
+                "background": COLOR_SURFACE,
+                "border": f"1px solid {COLOR_BORDER}",
+                "fontWeight": 600,
+                "boxShadow": "0 2px 8px rgba(15, 23, 42, 0.06)",
+            }
+            inactive_style = {
+                **base_button_style,
+                "color": COLOR_MUTED,
+            }
+            collapsed_button_style = {
+                "display": "none",
+            }
+            labels_full = {
+                "data": "Data",
+                "chainladder": "Chainladder",
+                "bornhuetter_ferguson": "Bornhuetter-Ferguson",
+                "results": "Results",
+            }
+            labels = labels_full if not is_collapsed else {}
+            toggle_label = ">" if is_collapsed else "<"
+            toggle_style = {
+                "width": "20px",
+                "height": "20px",
+                "borderRadius": "50%",
+                "border": f"1px solid {COLOR_BORDER}",
+                "background": COLOR_SURFACE,
+                "cursor": "pointer",
+                "display": "flex",
+                "alignItems": "center",
+                "justifyContent": "center",
+                "position": "absolute",
+                "right": "-10px",
+                "top": "50%",
+                "transform": "translateY(-50%)",
+                "boxShadow": "0 6px 16px rgba(15, 23, 42, 0.12)",
+                "padding": "0",
+                "color": COLOR_MUTED,
+            }
+            return (
+                sidebar_style,
+                title_style,
+                nav_stack_style,
+                collapsed_button_style
+                if is_collapsed
+                else (active_style if active_tab == "data" else inactive_style),
+                collapsed_button_style
+                if is_collapsed
+                else (active_style if active_tab == "chainladder" else inactive_style),
+                collapsed_button_style
+                if is_collapsed
+                else (
+                    active_style
+                    if active_tab == "bornhuetter_ferguson"
+                    else inactive_style
+                ),
+                collapsed_button_style
+                if is_collapsed
+                else (active_style if active_tab == "results" else inactive_style),
+                labels.get("data", ""),
+                labels.get("chainladder", ""),
+                labels.get("bornhuetter_ferguson", ""),
+                labels.get("results", ""),
+                toggle_label,
+                toggle_style,
+            )
+
+        @self.app.callback(
+            Output("tab-data", "style"),
+            Output("tab-chainladder", "style"),
+            Output("tab-bf", "style"),
+            Output("tab-results", "style"),
+            Input("active-tab", "data"),
+        )
+        def _toggle_tab_visibility(active_tab):
+            data_style = {
+                "display": "block",
+                "background": COLOR_SURFACE,
+                "border": f"1px solid {COLOR_BORDER}",
+                "borderRadius": RADIUS_LG,
+                "padding": "16px",
+                "boxShadow": SHADOW_SOFT,
+                "minHeight": "70vh",
+                "boxSizing": "border-box",
+                "width": "100%",
+                "maxWidth": "100%",
+                "overflowX": "hidden",
+            }
+            data_hidden = {
+                **data_style,
+                "display": "none",
+            }
+            chainladder_style = {
+                "display": "block",
+                "minHeight": "70vh",
+                "boxSizing": "border-box",
+                "width": "100%",
+                "maxWidth": "100%",
+                "overflowX": "hidden",
+            }
+            chainladder_hidden = {
+                **chainladder_style,
+                "display": "none",
+            }
+            bf_style = {
+                "display": "block",
+                "background": COLOR_SURFACE,
+                "border": f"1px solid {COLOR_BORDER}",
+                "borderRadius": RADIUS_LG,
+                "padding": "16px",
+                "boxShadow": SHADOW_SOFT,
+                "minHeight": "70vh",
+                "boxSizing": "border-box",
+                "width": "100%",
+                "maxWidth": "100%",
+                "overflowX": "hidden",
+            }
+            bf_hidden = {
+                **bf_style,
+                "display": "none",
+            }
+            results_style = {
+                "display": "block",
+                "width": "100%",
+                "background": COLOR_SURFACE,
+                "border": f"1px solid {COLOR_BORDER}",
+                "borderRadius": RADIUS_LG,
+                "padding": "12px",
+                "boxShadow": SHADOW_SOFT,
+                "minHeight": "70vh",
+                "boxSizing": "border-box",
+                "maxWidth": "100%",
+                "overflowX": "hidden",
+            }
+            results_hidden = {
+                **results_style,
+                "display": "none",
+            }
+            return (
+                data_style if active_tab == "data" else data_hidden,
+                chainladder_style
+                if active_tab == "chainladder"
+                else chainladder_hidden,
+                bf_style if active_tab == "bornhuetter_ferguson" else bf_hidden,
+                results_style if active_tab == "results" else results_hidden,
+            )
+
+        @self.app.callback(
             Output("drop-store", "data"),
             Output("tail-attachment-store", "data"),
             Output("tail-fit-period-store", "data"),
@@ -455,9 +921,8 @@ class Dashboard:
             Output("average-method", "value"),
             Output("tail-method", "value"),
             Input("results-store", "data"),
-            Input("analysis-tabs", "value"),
         )
-        def _hydrate_tabs(results_payload, _active_tab):
+        def _hydrate_tabs(results_payload):
             if not results_payload:
                 return (
                     self._plot_triangle_heatmap(
@@ -492,6 +957,90 @@ class Dashboard:
                 ),
                 results_payload.get("average", self._default_average),
                 results_payload.get("tail_curve", self._default_tail_curve),
+            )
+
+        @self.app.callback(
+            Output("data-view-store", "data"),
+            Input("data-view-toggle", "n_clicks"),
+            State("data-view-store", "data"),
+            prevent_initial_call=True,
+        )
+        def _toggle_data_view(_n_clicks, current_mode):
+            if current_mode == "incremental":
+                return "cumulative"
+            return "incremental"
+
+        @self.app.callback(
+            Output("data-view-toggle-track", "style"),
+            Output("data-view-toggle-knob", "style"),
+            Output("data-view-mode-label", "children"),
+            Input("data-view-store", "data"),
+        )
+        def _hydrate_data_view_toggle(mode):
+            is_incremental = mode == "incremental"
+            track_style = {
+                "width": "42px",
+                "height": "24px",
+                "borderRadius": "999px",
+                "backgroundColor": COLOR_ACCENT if is_incremental else "#cbd5e1",
+                "position": "relative",
+                "transition": "background-color 0.2s ease",
+                "display": "inline-block",
+            }
+            knob_style = {
+                "width": "18px",
+                "height": "18px",
+                "borderRadius": "50%",
+                "backgroundColor": "#ffffff",
+                "position": "absolute",
+                "top": "3px",
+                "left": "21px" if is_incremental else "3px",
+                "boxShadow": "0 1px 4px rgba(0,0,0,0.22)",
+                "transition": "left 0.2s ease",
+            }
+            mode_label = "Incremental" if is_incremental else "Cumulative"
+            return track_style, knob_style, mode_label
+
+        @self.app.callback(
+            Output("data-triangle-view", "figure"),
+            Input("data-metric-selector", "value"),
+            Input("data-divisor-selector", "value"),
+            Input("data-view-store", "data"),
+            Input("results-store", "data"),
+        )
+        def _update_data_triangle(metric, divisor, triangle_view, _results_payload):
+            metric_value = metric or "incurred"
+            divisor_value = divisor or "none"
+            view_value = triangle_view or "cumulative"
+            triangle_df, weights_df, ratio_mode = self._build_data_tab_display(
+                metric_value,
+                view_value,
+                divisor_value,
+            )
+            title_map = {
+                "incurred": "Data Triangle - Incurred",
+                "paid": "Data Triangle - Paid",
+                "outstanding": "Data Triangle - Outstanding (Incurred - Paid)",
+                "premium": "Data Triangle - Premium",
+            }
+            divisor_map = {
+                "incurred": "Incurred",
+                "paid": "Paid",
+                "outstanding": "Outstanding",
+                "premium": "Premium",
+                "none": "None",
+            }
+            view_label = "Incremental" if view_value == "incremental" else "Cumulative"
+            base_title = title_map.get(metric_value, "Data Triangle - Incurred")
+            if divisor_value != "none":
+                base_title = (
+                    f"{base_title} / {divisor_map.get(divisor_value, 'Unknown')}"
+                )
+            return self._plot_data_triangle_table(
+                triangle_df,
+                f"{base_title} ({view_label})",
+                weights_df=weights_df,
+                ratio_mode=ratio_mode,
             )
 
     def _plot_emergence(self, emergence_pattern, title):
@@ -560,6 +1109,8 @@ class Dashboard:
             template="plotly_white",
             legend=dict(x=1.02, y=1, xanchor="left", yanchor="top"),
             height=600,
+            autosize=True,
+            uirevision="static",
         )
 
         return fig
@@ -939,6 +1490,7 @@ class Dashboard:
                 range=[-0.5, initial_cols - 0.5]
             ),  # Show first 100 columns initially
             margin=dict(l=80, r=20, t=80, b=60),  # Reduce margins
+            uirevision="static",
         )
 
         # Add black crosses through dropped cells
@@ -1128,12 +1680,15 @@ class Dashboard:
                 self._default_tail_fit_period_selection,
             ).to_dict()
         _LIVE_RESULTS_BY_SEGMENT[segment_key] = results_payload
+        initial_data_triangle, initial_data_weights, initial_ratio_mode = (
+            self._build_data_tab_display(
+                "incurred",
+                "cumulative",
+                "none",
+            )
+        )
         return html.Div(
             [
-                html.H1(
-                    "Reserving Dashboard",
-                    style={"textAlign": "center", "marginBottom": "20px"},
-                ),
                 dcc.Store(id="drop-store", data=self._default_drop_store),
                 dcc.Store(
                     id="tail-attachment-store",
@@ -1144,153 +1699,484 @@ class Dashboard:
                     data=self._default_tail_fit_period_selection,
                 ),
                 dcc.Store(id="results-store", data=results_payload),
+                dcc.Store(id="data-view-store", data="cumulative"),
+                dcc.Store(id="active-tab", data="data"),
+                dcc.Store(id="sidebar-collapsed", data=False),
                 dcc.Interval(id="sync-interval", interval=1000, n_intervals=0),
                 html.Div(
                     [
                         html.Div(
                             [
-                                html.Label("Average method"),
-                                dcc.Dropdown(
-                                    id="average-method",
-                                    options=[
-                                        {"label": "Volume", "value": "volume"},
-                                        {"label": "Simple", "value": "simple"},
-                                    ],
-                                    value=self._default_average,
-                                    clearable=False,
-                                ),
-                            ],
-                            style={"minWidth": "200px"},
-                        ),
-                        html.Div(
-                            [
-                                html.Label("Tail method"),
-                                dcc.Dropdown(
-                                    id="tail-method",
-                                    options=[
-                                        {
-                                            "label": "Weibull",
-                                            "value": "weibull",
-                                        },
-                                        {
-                                            "label": "Exponential",
-                                            "value": "exponential",
-                                        },
-                                        {
-                                            "label": "Inverse power",
-                                            "value": "inverse_power",
-                                        },
-                                    ],
-                                    value=self._default_tail_curve,
-                                    clearable=False,
-                                ),
-                            ],
-                            style={"minWidth": "200px"},
-                        ),
-                    ],
-                    style={
-                        "display": "grid",
-                        "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))",
-                        "gap": "16px",
-                        "marginBottom": "16px",
-                    },
-                ),
-                html.Div(
-                    [
-                        html.Label("Active drops (click heatmap cells to toggle)"),
-                        html.Div(id="drops-display", style={"marginTop": "6px"}),
-                        html.Div(
-                            [
-                                html.Label("Tail attachment age"),
                                 html.Div(
-                                    id="tail-attachment-display",
-                                    style={"marginTop": "6px"},
+                                    "Reserving",
+                                    id="sidebar-title",
+                                    style={
+                                        "fontWeight": 600,
+                                        "fontSize": "15px",
+                                        "marginBottom": "18px",
+                                        "textAlign": "center",
+                                        "color": COLOR_TEXT,
+                                        "letterSpacing": "0.2px",
+                                    },
+                                ),
+                                html.Div(
+                                    [
+                                        html.Button(id="nav-data", n_clicks=0),
+                                        html.Button(id="nav-chainladder", n_clicks=0),
+                                        html.Button(id="nav-bf", n_clicks=0),
+                                        html.Button(id="nav-results", n_clicks=0),
+                                    ],
+                                    id="nav-stack",
+                                ),
+                                html.Button(
+                                    id="sidebar-toggle",
+                                    n_clicks=0,
                                 ),
                             ],
-                            style={"marginTop": "12px"},
+                            id="sidebar",
                         ),
                         html.Div(
                             [
-                                html.Label("Tail fit period"),
-                                html.Div(
-                                    id="tail-fit-period-display",
-                                    style={"marginTop": "6px"},
+                                html.H1(
+                                    "Reserving Dashboard",
+                                    style={
+                                        "textAlign": "left",
+                                        "marginBottom": "16px",
+                                        "fontFamily": FONT_FAMILY,
+                                        "color": COLOR_TEXT,
+                                        "fontSize": "24px",
+                                        "fontWeight": 600,
+                                    },
                                 ),
-                            ],
-                            style={"marginTop": "12px"},
-                        ),
-                    ],
-                    style={"marginBottom": "24px"},
-                ),
-                dcc.Tabs(
-                    id="analysis-tabs",
-                    value="triangles",
-                    children=[
-                        # Tab 1: Triangle Heatmaps
-                        dcc.Tab(
-                            label="Triangle Analysis",
-                            value="triangles",
-                            children=[
                                 html.Div(
                                     [
                                         html.Div(
                                             [
-                                                dcc.Graph(
-                                                    id="triangle-heatmap",
-                                                    figure=results_payload.get(
-                                                        "triangle_figure"
-                                                    ),
-                                                    config={
-                                                        "scrollZoom": False,
-                                                        "doubleClick": False,
-                                                        "displayModeBar": False,
-                                                    },
+                                                html.H3(
+                                                    "Data",
                                                     style={
-                                                        "overflowX": "scroll",
-                                                        "overflowY": "hidden",
+                                                        "marginTop": "0",
+                                                        "fontFamily": FONT_FAMILY,
+                                                        "color": COLOR_TEXT,
+                                                        "fontWeight": 600,
+                                                        "fontSize": "18px",
                                                     },
-                                                )
+                                                ),
+                                                html.P(
+                                                    "Select a data view and inspect the triangle in chainladder-style tabular form.",
+                                                    style={
+                                                        "marginTop": "6px",
+                                                        "color": COLOR_MUTED,
+                                                    },
+                                                ),
+                                                html.Div(
+                                                    [
+                                                        html.Div(
+                                                            [
+                                                                html.Label(
+                                                                    "Triangle metric",
+                                                                    style={
+                                                                        "fontWeight": 600,
+                                                                        "marginBottom": "6px",
+                                                                        "display": "block",
+                                                                    },
+                                                                ),
+                                                                dcc.Dropdown(
+                                                                    id="data-metric-selector",
+                                                                    options=[
+                                                                        {
+                                                                            "label": "Incurred",
+                                                                            "value": "incurred",
+                                                                        },
+                                                                        {
+                                                                            "label": "Paid",
+                                                                            "value": "paid",
+                                                                        },
+                                                                        {
+                                                                            "label": "Outstanding",
+                                                                            "value": "outstanding",
+                                                                        },
+                                                                        {
+                                                                            "label": "Premium",
+                                                                            "value": "premium",
+                                                                        },
+                                                                    ],
+                                                                    value="incurred",
+                                                                    clearable=False,
+                                                                    style={
+                                                                        "width": "260px"
+                                                                    },
+                                                                ),
+                                                            ]
+                                                        ),
+                                                        html.Div(
+                                                            [
+                                                                html.Label(
+                                                                    "Triangle view",
+                                                                    style={
+                                                                        "fontWeight": 600,
+                                                                        "marginBottom": "6px",
+                                                                        "display": "block",
+                                                                    },
+                                                                ),
+                                                                html.Div(
+                                                                    [
+                                                                        html.Button(
+                                                                            html.Div(
+                                                                                id="data-view-toggle-track",
+                                                                                children=[
+                                                                                    html.Div(
+                                                                                        id="data-view-toggle-knob"
+                                                                                    )
+                                                                                ],
+                                                                                style={
+                                                                                    "width": "42px",
+                                                                                    "height": "24px",
+                                                                                    "borderRadius": "999px",
+                                                                                    "backgroundColor": "#cbd5e1",
+                                                                                    "position": "relative",
+                                                                                    "display": "inline-block",
+                                                                                },
+                                                                            ),
+                                                                            id="data-view-toggle",
+                                                                            n_clicks=0,
+                                                                            style={
+                                                                                "border": "none",
+                                                                                "background": "transparent",
+                                                                                "padding": "0",
+                                                                                "cursor": "pointer",
+                                                                            },
+                                                                        ),
+                                                                        html.Span(
+                                                                            "Cumulative",
+                                                                            id="data-view-mode-label",
+                                                                            style={
+                                                                                "color": COLOR_TEXT,
+                                                                                "fontSize": "14px",
+                                                                            },
+                                                                        ),
+                                                                    ],
+                                                                    style={
+                                                                        "display": "flex",
+                                                                        "alignItems": "center",
+                                                                        "gap": "10px",
+                                                                        "marginTop": "4px",
+                                                                    },
+                                                                ),
+                                                            ]
+                                                        ),
+                                                        html.Div(
+                                                            [
+                                                                html.Label(
+                                                                    "In relation to",
+                                                                    style={
+                                                                        "fontWeight": 600,
+                                                                        "marginBottom": "6px",
+                                                                        "display": "block",
+                                                                    },
+                                                                ),
+                                                                dcc.Dropdown(
+                                                                    id="data-divisor-selector",
+                                                                    options=[
+                                                                        {
+                                                                            "label": "None",
+                                                                            "value": "none",
+                                                                        },
+                                                                        {
+                                                                            "label": "Incurred",
+                                                                            "value": "incurred",
+                                                                        },
+                                                                        {
+                                                                            "label": "Paid",
+                                                                            "value": "paid",
+                                                                        },
+                                                                        {
+                                                                            "label": "Outstanding",
+                                                                            "value": "outstanding",
+                                                                        },
+                                                                        {
+                                                                            "label": "Premium",
+                                                                            "value": "premium",
+                                                                        },
+                                                                    ],
+                                                                    value="none",
+                                                                    clearable=False,
+                                                                    style={
+                                                                        "width": "200px"
+                                                                    },
+                                                                ),
+                                                            ]
+                                                        ),
+                                                    ],
+                                                    style={
+                                                        "marginTop": "14px",
+                                                        "display": "flex",
+                                                        "gap": "24px",
+                                                        "alignItems": "flex-end",
+                                                        "flexWrap": "wrap",
+                                                    },
+                                                ),
+                                                html.Div(
+                                                    [
+                                                        dcc.Graph(
+                                                            id="data-triangle-view",
+                                                            figure=self._plot_data_triangle_table(
+                                                                initial_data_triangle,
+                                                                "Data Triangle - Incurred (Cumulative)",
+                                                                weights_df=initial_data_weights,
+                                                                ratio_mode=initial_ratio_mode,
+                                                            ),
+                                                            config={
+                                                                "displayModeBar": False,
+                                                                "responsive": True,
+                                                            },
+                                                            style={"width": "100%"},
+                                                        )
+                                                    ],
+                                                    style={
+                                                        "marginTop": "16px",
+                                                        "background": COLOR_SURFACE,
+                                                        "border": f"1px solid {COLOR_BORDER}",
+                                                        "borderRadius": RADIUS_LG,
+                                                        "padding": "8px",
+                                                        "boxShadow": SHADOW_SOFT,
+                                                        "overflowX": "auto",
+                                                    },
+                                                ),
                                             ],
+                                            id="tab-data",
                                             style={
-                                                "width": "100%",
-                                                "overflowX": "auto",
+                                                "display": "block",
+                                                "background": COLOR_SURFACE,
+                                                "border": f"1px solid {COLOR_BORDER}",
+                                                "borderRadius": RADIUS_LG,
+                                                "padding": "16px",
+                                                "boxShadow": SHADOW_SOFT,
                                             },
-                                        )
-                                    ],
-                                    style={"width": "100%", "padding": "10px"},
-                                )
-                            ],
-                        ),
-                        # Tab 2: Emergence Patterns
-                        dcc.Tab(
-                            label="Emergence Patterns",
-                            value="emergence",
-                            children=[
-                                html.Div(
-                                    [
+                                        ),
                                         html.Div(
                                             [
-                                                dcc.Graph(
-                                                    id="emergence-plot",
-                                                    figure=results_payload.get(
-                                                        "emergence_figure"
-                                                    ),
-                                                )
+                                                html.Div(
+                                                    [
+                                                        html.Div(
+                                                            [
+                                                                html.Label(
+                                                                    "Average method"
+                                                                ),
+                                                                dcc.Dropdown(
+                                                                    id="average-method",
+                                                                    options=[
+                                                                        {
+                                                                            "label": "Volume",
+                                                                            "value": "volume",
+                                                                        },
+                                                                        {
+                                                                            "label": "Simple",
+                                                                            "value": "simple",
+                                                                        },
+                                                                    ],
+                                                                    value=self._default_average,
+                                                                    clearable=False,
+                                                                    style={
+                                                                        "width": "100%"
+                                                                    },
+                                                                ),
+                                                            ],
+                                                            style={"minWidth": "200px"},
+                                                        ),
+                                                        html.Div(
+                                                            [
+                                                                html.Label(
+                                                                    "Tail method"
+                                                                ),
+                                                                dcc.Dropdown(
+                                                                    id="tail-method",
+                                                                    options=[
+                                                                        {
+                                                                            "label": "Weibull",
+                                                                            "value": "weibull",
+                                                                        },
+                                                                        {
+                                                                            "label": "Exponential",
+                                                                            "value": "exponential",
+                                                                        },
+                                                                        {
+                                                                            "label": "Inverse power",
+                                                                            "value": "inverse_power",
+                                                                        },
+                                                                    ],
+                                                                    value=self._default_tail_curve,
+                                                                    clearable=False,
+                                                                    style={
+                                                                        "width": "100%"
+                                                                    },
+                                                                ),
+                                                            ],
+                                                            style={"minWidth": "200px"},
+                                                        ),
+                                                    ],
+                                                    style={
+                                                        "display": "grid",
+                                                        "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))",
+                                                        "gap": "16px",
+                                                        "marginBottom": "16px",
+                                                        "background": COLOR_SURFACE,
+                                                        "border": f"1px solid {COLOR_BORDER}",
+                                                        "borderRadius": RADIUS_LG,
+                                                        "padding": "16px",
+                                                        "boxShadow": SHADOW_SOFT,
+                                                        "width": "100%",
+                                                        "maxWidth": "100%",
+                                                        "boxSizing": "border-box",
+                                                    },
+                                                ),
+                                                html.Div(
+                                                    [
+                                                        html.Label(
+                                                            "Active drops (click heatmap cells to toggle)"
+                                                        ),
+                                                        html.Div(
+                                                            id="drops-display",
+                                                            style={"marginTop": "6px"},
+                                                        ),
+                                                        html.Div(
+                                                            [
+                                                                html.Label(
+                                                                    "Tail attachment age"
+                                                                ),
+                                                                html.Div(
+                                                                    id="tail-attachment-display",
+                                                                    style={
+                                                                        "marginTop": "6px"
+                                                                    },
+                                                                ),
+                                                            ],
+                                                            style={"marginTop": "12px"},
+                                                        ),
+                                                        html.Div(
+                                                            [
+                                                                html.Label(
+                                                                    "Tail fit period"
+                                                                ),
+                                                                html.Div(
+                                                                    id="tail-fit-period-display",
+                                                                    style={
+                                                                        "marginTop": "6px"
+                                                                    },
+                                                                ),
+                                                            ],
+                                                            style={"marginTop": "12px"},
+                                                        ),
+                                                    ],
+                                                    style={
+                                                        "marginBottom": "24px",
+                                                        "background": COLOR_SURFACE,
+                                                        "border": f"1px solid {COLOR_BORDER}",
+                                                        "borderRadius": RADIUS_LG,
+                                                        "padding": "16px",
+                                                        "boxShadow": SHADOW_SOFT,
+                                                        "width": "100%",
+                                                        "maxWidth": "100%",
+                                                        "boxSizing": "border-box",
+                                                    },
+                                                ),
+                                                html.Div(
+                                                    [
+                                                        html.Div(
+                                                            [
+                                                                dcc.Graph(
+                                                                    id="triangle-heatmap",
+                                                                    figure=results_payload.get(
+                                                                        "triangle_figure"
+                                                                    ),
+                                                                    config={
+                                                                        "scrollZoom": False,
+                                                                        "doubleClick": False,
+                                                                        "displayModeBar": False,
+                                                                        "responsive": False,
+                                                                    },
+                                                                    style={
+                                                                        "width": "100%",
+                                                                        "overflowX": "scroll",
+                                                                        "overflowY": "hidden",
+                                                                    },
+                                                                )
+                                                            ],
+                                                            style={
+                                                                "width": "100%",
+                                                                "overflowX": "auto",
+                                                                "background": COLOR_SURFACE,
+                                                                "border": f"1px solid {COLOR_BORDER}",
+                                                                "borderRadius": RADIUS_LG,
+                                                                "padding": "8px",
+                                                                "boxShadow": SHADOW_SOFT,
+                                                                "maxWidth": "100%",
+                                                                "boxSizing": "border-box",
+                                                            },
+                                                        ),
+                                                        html.Div(
+                                                            [
+                                                                dcc.Graph(
+                                                                    id="emergence-plot",
+                                                                    figure=results_payload.get(
+                                                                        "emergence_figure"
+                                                                    ),
+                                                                    config={
+                                                                        "responsive": False
+                                                                    },
+                                                                    style={
+                                                                        "width": "100%"
+                                                                    },
+                                                                )
+                                                            ],
+                                                            style={
+                                                                "width": "100%",
+                                                                "background": COLOR_SURFACE,
+                                                                "border": f"1px solid {COLOR_BORDER}",
+                                                                "borderRadius": RADIUS_LG,
+                                                                "padding": "8px",
+                                                                "boxShadow": SHADOW_SOFT,
+                                                                "marginTop": "16px",
+                                                                "maxWidth": "100%",
+                                                                "boxSizing": "border-box",
+                                                            },
+                                                        ),
+                                                    ],
+                                                ),
                                             ],
-                                            style={"width": "100%"},
-                                        )
-                                    ],
-                                    style={"width": "100%", "padding": "10px"},
-                                )
-                            ],
-                        ),
-                        # Tab 3: Reserving Results
-                        dcc.Tab(
-                            label="Reserving Results",
-                            value="reserving_results",
-                            children=[
-                                html.Div(
-                                    [
+                                            id="tab-chainladder",
+                                            style={"display": "none"},
+                                        ),
+                                        html.Div(
+                                            [
+                                                html.H3(
+                                                    "Bornhuetter-Ferguson",
+                                                    style={
+                                                        "marginTop": "0",
+                                                        "fontFamily": FONT_FAMILY,
+                                                        "color": COLOR_TEXT,
+                                                        "fontWeight": 600,
+                                                        "fontSize": "18px",
+                                                    },
+                                                ),
+                                                html.P(
+                                                    "Placeholder for apriori factors by underwriting year/origin.",
+                                                    style={
+                                                        "marginTop": "6px",
+                                                        "color": COLOR_MUTED,
+                                                    },
+                                                ),
+                                            ],
+                                            id="tab-bf",
+                                            style={
+                                                "display": "none",
+                                                "background": COLOR_SURFACE,
+                                                "border": f"1px solid {COLOR_BORDER}",
+                                                "borderRadius": RADIUS_LG,
+                                                "padding": "16px",
+                                                "boxShadow": SHADOW_SOFT,
+                                            },
+                                        ),
                                         html.Div(
                                             [
                                                 dcc.Graph(
@@ -1301,26 +2187,64 @@ class Dashboard:
                                                     config={
                                                         "editable": False,
                                                         "displayModeBar": True,
+                                                        "responsive": False,
                                                     },
+                                                    style={"width": "100%"},
                                                 )
                                             ],
-                                            style={"width": "100%"},
-                                        )
+                                            id="tab-results",
+                                            style={
+                                                "width": "100%",
+                                                "display": "none",
+                                                "background": COLOR_SURFACE,
+                                                "border": f"1px solid {COLOR_BORDER}",
+                                                "borderRadius": RADIUS_LG,
+                                                "padding": "12px",
+                                                "boxShadow": SHADOW_SOFT,
+                                            },
+                                        ),
                                     ],
-                                    style={"width": "100%", "padding": "10px"},
-                                )
+                                    style={
+                                        "paddingRight": "8px",
+                                        "fontFamily": FONT_FAMILY,
+                                        "color": COLOR_TEXT,
+                                        "width": "100%",
+                                        "maxWidth": "100%",
+                                        "minWidth": "0",
+                                    },
+                                ),
                             ],
+                            style={
+                                "flex": "1",
+                                "padding": "16px",
+                                "background": COLOR_BG,
+                                "borderRadius": RADIUS_LG,
+                                "boxShadow": SHADOW_SOFT,
+                                "minWidth": "0",
+                                "maxWidth": "100%",
+                                "overflowX": "hidden",
+                            },
                         ),
                     ],
+                    style={
+                        "display": "flex",
+                        "gap": "16px",
+                        "alignItems": "stretch",
+                        "minHeight": "100vh",
+                        "width": "100%",
+                        "minWidth": "0",
+                    },
                 ),
             ],
             style={
                 "padding": "10px",
                 "width": "100%",
-                "background": "#fafafc",
+                "background": COLOR_BG,
                 "overflowX": "hidden",
                 "maxWidth": "100vw",
                 "boxSizing": "border-box",
+                "fontFamily": FONT_FAMILY,
+                "color": COLOR_TEXT,
             },
         )
 
