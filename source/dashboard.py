@@ -284,11 +284,15 @@ class Dashboard:
             ]
         )
 
+        table_width = 130 + (62 * len(col_labels))
+
         fig.update_layout(
             title=title,
             template="plotly_white",
             margin=dict(l=8, r=8, t=48, b=8),
+            width=max(900, table_width + 16),
             height=min(760, 170 + len(df_display.index) * 28),
+            autosize=False,
             uirevision="static",
         )
         return fig
@@ -493,7 +497,7 @@ class Dashboard:
         else:
             fit_period_display = f"lower={fit_period[0]}, upper={fit_period[1]}"
 
-        triangle_fig = self._plot_triangle_heatmap(
+        triangle_fig = self._plot_triangle_heatmap_clean(
             self.triangle,
             "Triangle - Link Ratios",
             tail_attachment_age,
@@ -789,10 +793,16 @@ class Dashboard:
             tail_attachment_age,
             tail_fit_period_selection,
         ):
-            if not click or "points" not in click or not click["points"]:
+            selected_click = click
+
+            if (
+                not selected_click
+                or "points" not in selected_click
+                or not selected_click["points"]
+            ):
                 return drop_store, tail_attachment_age, tail_fit_period_selection
 
-            point = click["points"][0]
+            point = selected_click["points"][0]
             origin = point.get("y")
             dev_label = point.get("x")
             dev = self._parse_dev_label(dev_label)
@@ -925,7 +935,7 @@ class Dashboard:
         def _hydrate_tabs(results_payload):
             if not results_payload:
                 return (
-                    self._plot_triangle_heatmap(
+                    self._plot_triangle_heatmap_clean(
                         self.triangle,
                         "Triangle - Link Ratios",
                         self._default_tail_attachment_age,
@@ -1640,6 +1650,143 @@ class Dashboard:
             tail_fit_period_selection,
         )
 
+    def _plot_triangle_heatmap_clean(
+        self,
+        triangle_data,
+        title,
+        tail_attachment_age: Optional[int],
+        tail_fit_period_selection: Optional[List[int]],
+    ):
+        """
+        Plot chainladder heatmap with cleaner, table-like styling.
+        """
+        fig = self._create_triangle_heatmap(
+            triangle_data,
+            self.incurred,
+            self.premium,
+            title,
+            self._reserving,
+            tail_attachment_age,
+            tail_fit_period_selection,
+        )
+
+        n_cols = len(triangle_data.columns)
+        n_rows = len(triangle_data.index)
+        table_width = 130 + (62 * n_cols)
+        table_height = min(760, 170 + (n_rows * 28))
+        header_bg_value = -0.2
+
+        heatmap_trace = next(
+            (trace for trace in fig.data if isinstance(trace, go.Heatmap)),
+            None,
+        )
+        if heatmap_trace is not None:
+            x_labels = [str(value) for value in heatmap_trace.x]
+            y_labels = [str(value) for value in heatmap_trace.y]
+            z_values = np.array(heatmap_trace.z, dtype=float)
+            text_values = np.array(heatmap_trace.text, dtype=object)
+
+            if heatmap_trace.customdata is None:
+                custom_values = np.empty(
+                    (len(y_labels), len(x_labels), 2), dtype=object
+                )
+                custom_values[:] = ""
+            else:
+                custom_values = np.array(heatmap_trace.customdata, dtype=object)
+
+            z_with_headers = np.full(
+                (len(y_labels) + 1, len(x_labels) + 1),
+                header_bg_value,
+                dtype=float,
+            )
+            z_with_headers[1:, 1:] = z_values
+
+            text_with_headers = np.full(
+                (len(y_labels) + 1, len(x_labels) + 1),
+                "",
+                dtype=object,
+            )
+            text_with_headers[0, 0] = "<b>UWY</b>"
+            text_with_headers[0, 1:] = [f"<b>{label}</b>" for label in x_labels]
+            text_with_headers[1:, 0] = [f"<b>{label}</b>" for label in y_labels]
+            text_with_headers[1:, 1:] = text_values
+
+            custom_with_headers = np.empty(
+                (len(y_labels) + 1, len(x_labels) + 1, 2),
+                dtype=object,
+            )
+            custom_with_headers[:] = ""
+            custom_with_headers[1:, 1:] = custom_values
+
+            heatmap_trace.update(
+                z=z_with_headers,
+                x=["UWY"] + x_labels,
+                y=["Dev"] + y_labels,
+                text=text_with_headers,
+                texttemplate="%{text}",
+                customdata=custom_with_headers,
+                hovertemplate="UWY: %{y}<br>Dev Period: %{x}<br>Link Ratio: %{text}<br>Incurred: %{customdata[0]}<br>Premium: %{customdata[1]}<extra></extra>",
+                showscale=False,
+                zmin=header_bg_value,
+                zmax=1,
+                hoverongaps=False,
+            )
+
+            shifted_shapes = []
+            for shape in fig.layout.shapes or []:
+                shape_json = shape.to_plotly_json()
+                for coord in ["x0", "x1", "y0", "y1"]:
+                    value = shape_json.get(coord)
+                    if isinstance(value, (int, float, np.integer, np.floating)):
+                        shape_json[coord] = float(value) + 1.0
+                shifted_shapes.append(shape_json)
+            fig.update_layout(shapes=shifted_shapes)
+
+        fig.update_traces(
+            selector=dict(type="heatmap"),
+            colorscale=[
+                [0.0, "#f2f5f9"],
+                [0.1666, "#f2f5f9"],
+                [0.1667, "#f5f8fc"],
+                [0.375, "#e7eff9"],
+                [0.5833, "#d7e5f5"],
+                [0.7916, "#bdd2ec"],
+                [1.0, "#9bbbe0"],
+            ],
+            textfont={"size": 10, "family": FONT_FAMILY, "color": COLOR_TEXT},
+            xgap=1,
+            ygap=1,
+            hoverongaps=False,
+        )
+        fig.update_layout(
+            paper_bgcolor=COLOR_SURFACE,
+            plot_bgcolor=COLOR_SURFACE,
+            font={"family": FONT_FAMILY, "color": COLOR_TEXT, "size": 11},
+            hoverlabel={
+                "bgcolor": COLOR_SURFACE,
+                "bordercolor": COLOR_BORDER,
+                "font": {"family": FONT_FAMILY, "color": COLOR_TEXT, "size": 11},
+            },
+            margin={"l": 8, "r": 8, "t": 48, "b": 8},
+            width=max(900, table_width + 16),
+            height=table_height,
+            autosize=False,
+            xaxis_title=None,
+            yaxis_title=None,
+        )
+        fig.update_xaxes(
+            showgrid=False,
+            showticklabels=False,
+            side="top",
+            range=[-0.5, min(143, n_cols) + 0.5],
+        )
+        fig.update_yaxes(
+            showgrid=False,
+            showticklabels=False,
+        )
+
+        return fig
+
     def _create_layout(self):
         """
         Create the Dash layout for the dashboard with tabbed interface.
@@ -1673,7 +1820,7 @@ class Dashboard:
                 self._default_tail_fit_period_selection
             )
             results_payload["tail_fit_period_display"] = fit_period_display
-            results_payload["triangle_figure"] = self._plot_triangle_heatmap(
+            results_payload["triangle_figure"] = self._plot_triangle_heatmap_clean(
                 self.triangle,
                 "Triangle - Link Ratios",
                 self._default_tail_attachment_age,
@@ -1928,7 +2075,7 @@ class Dashboard:
                                                             ),
                                                             config={
                                                                 "displayModeBar": False,
-                                                                "responsive": True,
+                                                                "responsive": False,
                                                             },
                                                             style={"width": "100%"},
                                                         )

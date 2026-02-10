@@ -1,5 +1,5 @@
 average: volume
-tail_curve: inverse_power
+tail_curve: weibull
 drops:
 - - '1996'
   - 96
@@ -11,21 +11,26 @@ drops:
   - 15
 - - '2001'
   - 6
-- - '2002'
-  - 39
-- - '2001'
-  - 39
 - - '1998'
-  - 48
-- - '1997'
   - 48
 - - '1995'
   - 48
 - - '1997'
   - 69
-tail_attachment_age: 60
+- - '2000'
+  - 3
+- - '2002'
+  - 3
+- - '2002'
+  - 39
+- - '2001'
+  - 39
+- - '1997'
+  - 48
+tail_attachment_age: 105
 tail_fit_period:
 - 3
 - 102
+- 90
 segment: quarterly
-updated_at: '2026-02-04T20:41:40.472110Z'
+updated_at: '2026-02-09T15:43:18.797634Z'
