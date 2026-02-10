@@ -1,4 +1,8 @@
-# reserving
+# reserving-studio
+
+This is currently a personal project to build a reserving workflow, including a minimalistic GUI, to familiarize myself with and learn the amazing ´chainladder-python´ package for actuarial loss reserving.
+
+# Get started
 
 ## Install (uv)
 
@@ -17,7 +21,7 @@ source .venv/bin/activate
 ## Run server (Dash)
 
 ```bash
-uv run python -m source.app
+python -m source.app
 ```
 
 Open http://127.0.0.1:8050

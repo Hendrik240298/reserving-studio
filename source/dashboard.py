@@ -925,9 +925,6 @@ class Dashboard:
             Output("triangle-heatmap", "figure"),
             Output("emergence-plot", "figure"),
             Output("results-table", "figure"),
-            Output("drops-display", "children"),
-            Output("tail-attachment-display", "children"),
-            Output("tail-fit-period-display", "children"),
             Output("average-method", "value"),
             Output("tail-method", "value"),
             Input("results-store", "data"),
@@ -949,9 +946,6 @@ class Dashboard:
                         self.results,
                         "Reserving Results",
                     ),
-                    "None",
-                    "None",
-                    "lower=None, upper=None",
                     self._default_average,
                     self._default_tail_curve,
                 )
@@ -960,11 +954,6 @@ class Dashboard:
                 results_payload.get("triangle_figure"),
                 results_payload.get("emergence_figure"),
                 results_payload.get("results_figure"),
-                results_payload.get("drops_display", "None"),
-                results_payload.get("tail_attachment_display", "None"),
-                results_payload.get(
-                    "tail_fit_period_display", "lower=None, upper=None"
-                ),
                 results_payload.get("average", self._default_average),
                 results_payload.get("tail_curve", self._default_tail_curve),
             )
@@ -2167,56 +2156,6 @@ class Dashboard:
                                                         "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))",
                                                         "gap": "16px",
                                                         "marginBottom": "16px",
-                                                        "background": COLOR_SURFACE,
-                                                        "border": f"1px solid {COLOR_BORDER}",
-                                                        "borderRadius": RADIUS_LG,
-                                                        "padding": "16px",
-                                                        "boxShadow": SHADOW_SOFT,
-                                                        "width": "100%",
-                                                        "maxWidth": "100%",
-                                                        "boxSizing": "border-box",
-                                                    },
-                                                ),
-                                                html.Div(
-                                                    [
-                                                        html.Label(
-                                                            "Active drops (click heatmap cells to toggle)"
-                                                        ),
-                                                        html.Div(
-                                                            id="drops-display",
-                                                            style={"marginTop": "6px"},
-                                                        ),
-                                                        html.Div(
-                                                            [
-                                                                html.Label(
-                                                                    "Tail attachment age"
-                                                                ),
-                                                                html.Div(
-                                                                    id="tail-attachment-display",
-                                                                    style={
-                                                                        "marginTop": "6px"
-                                                                    },
-                                                                ),
-                                                            ],
-                                                            style={"marginTop": "12px"},
-                                                        ),
-                                                        html.Div(
-                                                            [
-                                                                html.Label(
-                                                                    "Tail fit period"
-                                                                ),
-                                                                html.Div(
-                                                                    id="tail-fit-period-display",
-                                                                    style={
-                                                                        "marginTop": "6px"
-                                                                    },
-                                                                ),
-                                                            ],
-                                                            style={"marginTop": "12px"},
-                                                        ),
-                                                    ],
-                                                    style={
-                                                        "marginBottom": "24px",
                                                         "background": COLOR_SURFACE,
                                                         "border": f"1px solid {COLOR_BORDER}",
                                                         "borderRadius": RADIUS_LG,
