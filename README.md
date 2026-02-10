@@ -2,6 +2,16 @@
 
 This is currently a personal project to build a reserving workflow, including a minimalistic GUI, to familiarize myself with and learn the amazing `chainladder-python` package for actuarial loss reserving.
 
+## Preview
+
+The Data tab shows claims and premium triangles. You can toggle between incremental and cumulative triangles. Each triangle can also be viewed in relation to another one, for example incurred in relation to premium.
+
+<img src=".github/images/data-tab.png" alt="Data tab preview" width="100%" />
+
+The Chainladder tab displays link ratios, loss development factors, and fitted projections. Different weighting schemes can be applied, and selected link ratios can be dropped. For tail estimation, you can choose different methods, set the fitting interval, and define the starting point.
+
+<img src=".github/images/chainladder-tab.png" alt="Chainladder tab preview" width="100%" />
+
 # Get started
 
 ## Install (uv)
