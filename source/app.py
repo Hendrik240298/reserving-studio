@@ -83,11 +83,9 @@ def _normalize_periods(df: pd.DataFrame) -> pd.DataFrame:
 
 def _triangle_to_dataframe(triangle: cl.Triangle) -> pd.DataFrame:
     if triangle.is_cumulative:
-        cumulative = triangle
         incremental = triangle.cum_to_incr()
     else:
         incremental = triangle
-        cumulative = triangle.incr_to_cum()
 
     df = incremental.to_frame(keepdims=True)
     if isinstance(df.index, pd.MultiIndex) or df.index.name is not None:
@@ -130,43 +128,6 @@ def _triangle_to_dataframe(triangle: cl.Triangle) -> pd.DataFrame:
     df["paid"] = df["incurred"].astype(float)
     df["outstanding"] = 0.0
 
-    premium_df = cumulative.latest_diagonal
-    if hasattr(premium_df, "to_frame"):
-        premium_df = premium_df.to_frame(keepdims=True)
-    if "origin" not in premium_df.columns and "uw_year" not in premium_df.columns:
-        premium_df = premium_df.reset_index()
-
-    premium_origin_col = next(
-        (col for col in ["origin", "uw_year"] if col in premium_df.columns), None
-    )
-    if premium_origin_col is None and len(premium_df.columns) > 0:
-        premium_origin_col = premium_df.columns[0]
-
-    premium_value_cols = [
-        col
-        for col in premium_df.columns
-        if col not in {premium_origin_col, "valuation"}
-    ]
-    if "incurred" in premium_value_cols:
-        premium_value_col = "incurred"
-    else:
-        numeric_cols = (
-            premium_df[premium_value_cols].select_dtypes(include=["number"]).columns
-        )
-        if len(numeric_cols) >= 1:
-            premium_value_col = numeric_cols[0]
-        elif len(premium_value_cols) == 1:
-            premium_value_col = premium_value_cols[0]
-        else:
-            raise ValueError("Sample premium column could not be inferred")
-
-    premium_df = premium_df.rename(
-        columns={premium_origin_col: "uw_year", premium_value_col: "Premium_selected"}
-    )
-    premium_df["uw_year"] = _coerce_uw_year(premium_df["uw_year"])
-    premium_map = dict(zip(premium_df["uw_year"], premium_df["Premium_selected"]))
-    df["Premium_selected"] = df["uw_year"].map(premium_map).fillna(0.0)
-
     return df
 
 
@@ -205,7 +166,6 @@ def _load_quarterly_csv() -> pd.DataFrame:
     df = _normalize_periods(df)
     df["paid"] = df["incurred"].astype(float)
     df["outstanding"] = 0.0
-    df["Premium_selected"] = 0.0
     return df
 
 
@@ -227,6 +187,7 @@ def build_reserving(
     tail_attachment_age = None
     tail_curve = "weibull"
     tail_fit_period_selection: list[int] = []
+    bf_apriori_by_uwy: dict[str, float] | None = None
     if config is not None:
         session = config.load_session()
         average = session.get("average", average)
@@ -235,6 +196,9 @@ def build_reserving(
         tail_attachment_age = session.get("tail_attachment_age")
         tail_fit_period_selection = _normalize_tail_fit_period_selection(
             session.get("tail_fit_period")
+        )
+        bf_apriori_by_uwy = _normalize_bf_apriori_by_uwy(
+            session.get("bf_apriori_by_uwy")
         )
         if tail_attachment_age is not None:
             try:
@@ -250,7 +214,10 @@ def build_reserving(
         attachment_age=tail_attachment_age,
         fit_period=fit_period,
     )
-    reserving.set_bornhuetter_ferguson(apriori=0.6)
+    if bf_apriori_by_uwy:
+        reserving.set_bornhuetter_ferguson(apriori=bf_apriori_by_uwy)
+    else:
+        reserving.set_bornhuetter_ferguson(apriori=0.6)
     reserving.reserve(final_ultimate="chainladder")
     return reserving
 
@@ -300,6 +267,28 @@ def _derive_tail_fit_period(
     if len(sorted_values) == 1:
         return (sorted_values[0], None)
     return (sorted_values[0], sorted_values[-1])
+
+
+def _normalize_bf_apriori_by_uwy(raw: object) -> dict[str, float] | None:
+    if not raw:
+        return None
+
+    normalized: dict[str, float] = {}
+    if isinstance(raw, dict):
+        items = raw.items()
+    else:
+        return None
+
+    for key, value in items:
+        try:
+            factor = float(value)
+        except (TypeError, ValueError):
+            continue
+        if pd.isna(factor) or factor < 0:
+            continue
+        normalized[str(key)] = factor
+
+    return normalized or None
 
 
 def load_config() -> ConfigManager | None:

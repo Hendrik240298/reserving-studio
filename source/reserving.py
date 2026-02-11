@@ -14,6 +14,8 @@ class Reserving:
         self._triangle = triangle
         self.development = None
         self.tail = None
+        self.bf = None
+        self._bf_apriori_by_uwy: Optional[dict[str, float]] = None
 
     def set_development(
         self,
@@ -93,8 +95,46 @@ class Reserving:
 
         self.tail = cl.TailCurve(**params)  # type: ignore[call-arg]
 
-    def set_bornhuetter_ferguson(self, apriori: float = 0.6):
-        self.bf = cl.BornhuetterFerguson(apriori=apriori)
+    def set_bornhuetter_ferguson(self, apriori: float | dict[str, float] = 0.6):
+        if isinstance(apriori, dict):
+            if len(apriori) == 0:
+                raise ValueError("apriori mapping must not be empty")
+
+            normalized: dict[str, float] = {}
+            for origin, factor in apriori.items():
+                key = str(origin)
+                try:
+                    factor_value = float(factor)
+                except (TypeError, ValueError):
+                    raise ValueError(
+                        f"apriori factor for origin '{key}' must be numeric, got {factor}"
+                    )
+                if pd.isna(factor_value):
+                    raise ValueError(
+                        f"apriori factor for origin '{key}' must not be NaN"
+                    )
+                if factor_value < 0:
+                    raise ValueError(
+                        f"apriori factor for origin '{key}' must be >= 0, got {factor_value}"
+                    )
+                normalized[key] = factor_value
+
+            self._bf_apriori_by_uwy = normalized
+            self.bf = cl.BornhuetterFerguson(apriori=1.0)
+            return
+
+        try:
+            apriori_value = float(apriori)
+        except (TypeError, ValueError):
+            raise ValueError(f"apriori must be numeric, got {apriori}")
+
+        if pd.isna(apriori_value):
+            raise ValueError("apriori must not be NaN")
+        if apriori_value < 0:
+            raise ValueError(f"apriori must be >= 0, got {apriori_value}")
+
+        self._bf_apriori_by_uwy = None
+        self.bf = cl.BornhuetterFerguson(apriori=apriori_value)
 
     def reserve(
         self,
@@ -106,6 +146,10 @@ class Reserving:
             )
         if self.tail is None:
             raise ValueError("Tail estimator not set. Call set_tail() first.")
+        if self.bf is None:
+            raise ValueError(
+                "Bornhuetter-Ferguson estimator not set. Call set_bornhuetter_ferguson() first."
+            )
 
         incurred = self._triangle.get_triangle().latest_diagonal["incurred"].to_frame()
         premium = (
@@ -218,6 +262,7 @@ class Reserving:
 
     def bornhuetter_ferguson(self):
         exposure = self._triangle.get_triangle()["Premium_selected"].latest_diagonal
+        exposure = self._apply_bf_apriori_to_exposure(exposure)
         incurred = self._triangle.get_triangle()["incurred"]
 
         pipe = cl.Pipeline(
@@ -235,6 +280,41 @@ class Reserving:
         # incurred: cumulative Triangle
         # exposure: Triangle or vector aligned to origins (e.g., Earned Premium)
         return pipe.fit(incurred, model__sample_weight=exposure)
+
+    def _apply_bf_apriori_to_exposure(self, exposure: cl.Triangle) -> cl.Triangle:
+        if not self._bf_apriori_by_uwy:
+            return exposure
+
+        factors_by_origin: list[float] = []
+        missing_origins: list[str] = []
+        for origin in exposure.origin:
+            key_candidates: list[str] = [str(origin)]
+            if hasattr(origin, "year"):
+                key_candidates.append(str(origin.year))
+
+            factor = None
+            for key in key_candidates:
+                if key in self._bf_apriori_by_uwy:
+                    factor = self._bf_apriori_by_uwy[key]
+                    break
+
+            if factor is None:
+                missing_origins.append(str(origin))
+                continue
+
+            factors_by_origin.append(float(factor))
+
+        if missing_origins:
+            raise ValueError(
+                "Missing BF apriori factors for origins: " + ", ".join(missing_origins)
+            )
+
+        adjusted = exposure.copy()
+        adjusted_values = adjusted.values.copy()
+        for i, factor in enumerate(factors_by_origin):
+            adjusted_values[0, 0, i, 0] = adjusted_values[0, 0, i, 0] * factor
+        adjusted.values = adjusted_values
+        return adjusted
 
     def get_results(self):
         return self.df_results.copy()

@@ -1,7 +1,17 @@
 from source.reserving import Reserving
 from source.config_manager import ConfigManager
 from typing import Optional, List, Tuple
-from dash import Dash, dcc, html, Input, Output, State, callback_context, no_update
+from dash import (
+    Dash,
+    dcc,
+    html,
+    Input,
+    Output,
+    State,
+    callback_context,
+    no_update,
+    dash_table,
+)
 from datetime import datetime
 import plotly.graph_objs as go
 import pandas as pd
@@ -75,6 +85,8 @@ class Dashboard:
         self._default_drop_store: List[List[str | int]] = []
         self._default_tail_attachment_age: Optional[int] = None
         self._default_tail_fit_period_selection: List[int] = []
+        self._default_bf_apriori = 0.6
+        self._default_bf_apriori_rows: List[dict[str, object]] = []
 
         self._load_session_defaults()
 
@@ -86,6 +98,7 @@ class Dashboard:
 
     def _load_session_defaults(self) -> None:
         if self._config is None:
+            self._default_bf_apriori_rows = self._build_bf_apriori_rows()
             return
         session = self._config.load_session()
         self._default_average = session.get("average", self._default_average)
@@ -107,6 +120,9 @@ class Dashboard:
                 self._default_tail_attachment_age = None
         self._default_tail_fit_period_selection = self._normalize_tail_fit_selection(
             session.get("tail_fit_period")
+        )
+        self._default_bf_apriori_rows = self._build_bf_apriori_rows(
+            session.get("bf_apriori_by_uwy")
         )
 
     def _get_segment_key(self) -> str:
@@ -402,6 +418,76 @@ class Dashboard:
             normalized.append(dev)
         return normalized
 
+    def _get_uwy_labels(self) -> List[str]:
+        triangle = self._reserving._triangle.get_triangle("incurred")["incurred"]
+        labels: List[str] = []
+        for origin in triangle.origin:
+            if hasattr(origin, "year"):
+                label = str(origin.year)
+            else:
+                origin_text = str(origin)
+                if len(origin_text) >= 4 and origin_text[:4].isdigit():
+                    label = origin_text[:4]
+                else:
+                    label = origin_text
+            if label not in labels:
+                labels.append(label)
+        return labels
+
+    def _build_bf_apriori_rows(self, raw: object = None) -> List[dict[str, object]]:
+        uwy_labels = self._get_uwy_labels()
+        mapping: dict[str, float] = {}
+
+        if isinstance(raw, dict):
+            for key, value in raw.items():
+                try:
+                    numeric = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if pd.isna(numeric) or numeric < 0:
+                    continue
+                mapping[str(key)] = numeric
+
+        if isinstance(raw, list):
+            for row in raw:
+                if not isinstance(row, dict):
+                    continue
+                uwy = str(row.get("uwy", "")).strip()
+                if not uwy:
+                    continue
+                try:
+                    numeric = float(row.get("apriori"))
+                except (TypeError, ValueError):
+                    continue
+                if pd.isna(numeric) or numeric < 0:
+                    continue
+                mapping[uwy] = numeric
+
+        rows: List[dict[str, object]] = []
+        for uwy in uwy_labels:
+            factor = mapping.get(uwy, self._default_bf_apriori)
+            rows.append({"uwy": uwy, "apriori": float(factor)})
+        return rows
+
+    def _bf_rows_to_mapping(
+        self,
+        rows: Optional[List[dict[str, object]]],
+    ) -> dict[str, float]:
+        normalized_rows = self._build_bf_apriori_rows(rows)
+        mapping: dict[str, float] = {}
+        for row in normalized_rows:
+            uwy = str(row.get("uwy", "")).strip()
+            if not uwy:
+                continue
+            try:
+                value = float(row.get("apriori"))
+            except (TypeError, ValueError):
+                value = self._default_bf_apriori
+            if pd.isna(value) or value < 0:
+                value = self._default_bf_apriori
+            mapping[uwy] = value
+        return mapping
+
     def _derive_tail_fit_period(
         self, selection: Optional[List[int]]
     ) -> Optional[Tuple[int, Optional[int]]]:
@@ -461,6 +547,7 @@ class Dashboard:
         tail_attachment_age: Optional[int],
         tail_curve: str,
         fit_period: Optional[Tuple[int, Optional[int]]],
+        bf_apriori_by_uwy: Optional[dict[str, float]],
     ) -> None:
         self._reserving.set_development(
             average=average,
@@ -472,7 +559,10 @@ class Dashboard:
             attachment_age=tail_attachment_age,
             fit_period=fit_period,
         )
-        self._reserving.set_bornhuetter_ferguson(apriori=0.6)
+        if bf_apriori_by_uwy:
+            self._reserving.set_bornhuetter_ferguson(apriori=bf_apriori_by_uwy)
+        else:
+            self._reserving.set_bornhuetter_ferguson(apriori=self._default_bf_apriori)
         self._reserving.reserve(final_ultimate="chainladder")
         self._extract_data()
 
@@ -846,6 +936,7 @@ class Dashboard:
             Input("tail-fit-period-store", "data"),
             Input("average-method", "value"),
             Input("tail-method", "value"),
+            Input("bf-apriori-table", "data"),
             Input("sync-interval", "n_intervals"),
             State("results-store", "data"),
         )
@@ -855,6 +946,7 @@ class Dashboard:
             tail_fit_period_selection,
             average,
             tail_curve,
+            bf_apriori_rows,
             _n_intervals,
             current_payload,
         ):
@@ -880,6 +972,7 @@ class Dashboard:
             drops = self._drops_to_tuples(drop_store)
             average = average or self._default_average
             tail_curve = tail_curve or self._default_tail_curve
+            bf_apriori_by_uwy = self._bf_rows_to_mapping(bf_apriori_rows)
             parsed_tail = None
             if tail_attachment_age is not None:
                 try:
@@ -894,6 +987,7 @@ class Dashboard:
                     parsed_tail,
                     tail_curve,
                     fit_period,
+                    bf_apriori_by_uwy,
                 )
             except Exception as exc:
                 logging.error(f"Failed to recalculate reserving: {exc}", exc_info=True)
@@ -906,6 +1000,7 @@ class Dashboard:
                         "drops": drop_store or [],
                         "tail_attachment_age": parsed_tail,
                         "tail_fit_period": tail_fit_period_selection or [],
+                        "bf_apriori_by_uwy": bf_apriori_by_uwy,
                     }
                 )
 
@@ -1823,6 +1918,9 @@ class Dashboard:
                 "none",
             )
         )
+        initial_bf_apriori_rows = self._build_bf_apriori_rows(
+            self._default_bf_apriori_rows
+        )
         return html.Div(
             [
                 dcc.Store(id="drop-store", data=self._default_drop_store),
@@ -2246,10 +2344,92 @@ class Dashboard:
                                                     },
                                                 ),
                                                 html.P(
-                                                    "Placeholder for apriori factors by underwriting year/origin.",
+                                                    "Set expected loss ratios by underwriting year. These values are applied through the BF exposure input.",
                                                     style={
                                                         "marginTop": "6px",
                                                         "color": COLOR_MUTED,
+                                                    },
+                                                ),
+                                                html.Div(
+                                                    [
+                                                        dash_table.DataTable(
+                                                            id="bf-apriori-table",
+                                                            columns=[
+                                                                {
+                                                                    "name": "Underwriting year",
+                                                                    "id": "uwy",
+                                                                    "editable": False,
+                                                                },
+                                                                {
+                                                                    "name": "Expected loss ratio",
+                                                                    "id": "apriori",
+                                                                    "type": "text",
+                                                                    "presentation": "input",
+                                                                    "editable": True,
+                                                                },
+                                                            ],
+                                                            data=initial_bf_apriori_rows,
+                                                            editable=True,
+                                                            row_deletable=False,
+                                                            style_as_list_view=True,
+                                                            css=[
+                                                                {
+                                                                    "selector": ".dash-spreadsheet td input",
+                                                                    "rule": "text-align: left; caret-color: #1f2a37; width: 100%; border: 0; background: transparent;",
+                                                                },
+                                                                {
+                                                                    "selector": ".dash-spreadsheet td input:focus",
+                                                                    "rule": "outline: none;",
+                                                                },
+                                                                {
+                                                                    "selector": ".dash-spreadsheet td",
+                                                                    "rule": "cursor: text;",
+                                                                },
+                                                            ],
+                                                            style_table={
+                                                                "overflowX": "auto",
+                                                                "maxWidth": "560px",
+                                                            },
+                                                            style_header={
+                                                                "fontWeight": 600,
+                                                                "backgroundColor": "#f2f5f9",
+                                                                "border": f"1px solid {COLOR_BORDER}",
+                                                                "fontFamily": FONT_FAMILY,
+                                                            },
+                                                            style_cell={
+                                                                "padding": "8px",
+                                                                "fontFamily": FONT_FAMILY,
+                                                                "fontSize": "13px",
+                                                                "border": f"1px solid {COLOR_BORDER}",
+                                                                "textAlign": "left",
+                                                            },
+                                                            style_data={
+                                                                "backgroundColor": COLOR_SURFACE,
+                                                            },
+                                                            style_cell_conditional=[
+                                                                {
+                                                                    "if": {
+                                                                        "column_id": "uwy"
+                                                                    },
+                                                                    "width": "50%",
+                                                                },
+                                                                {
+                                                                    "if": {
+                                                                        "column_id": "apriori"
+                                                                    },
+                                                                    "width": "50%",
+                                                                },
+                                                            ],
+                                                        )
+                                                    ],
+                                                    style={
+                                                        "marginTop": "14px",
+                                                        "background": COLOR_SURFACE,
+                                                        "border": f"1px solid {COLOR_BORDER}",
+                                                        "borderRadius": RADIUS_LG,
+                                                        "padding": "12px",
+                                                        "boxShadow": SHADOW_SOFT,
+                                                        "maxWidth": "620px",
                                                     },
                                                 ),
                                             ],
