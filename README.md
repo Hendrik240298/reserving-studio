@@ -12,6 +12,10 @@ The Chainladder tab displays link ratios, loss development factors, and fitted p
 
 <img src=".github/images/chainladder-tab.png" alt="Chainladder tab preview" width="100%" />
 
+<img src=".github/images/bornhuetter-tab.png" alt="Bornhuetter tab preview" width="100%" />
+
+<img src=".github/images/results-tab.png" alt="Results tab preview" width="100%" />
+
 # Get started
 
 ## Install (uv)
