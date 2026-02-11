@@ -22,6 +22,12 @@ import numpy as np
 _LIVE_RESULTS_BY_SEGMENT: dict[str, dict] = {}
 
 FONT_FAMILY = '"Manrope", "Segoe UI", "Helvetica Neue", Arial, sans-serif'
+FIGURE_FONT_SIZE = 12
+FIGURE_TITLE_FONT_SIZE = 16
+TABLE_HEADER_FONT_SIZE = 13
+TABLE_CELL_FONT_SIZE = 12
+HEATMAP_TEXT_FONT_SIZE = 10
+ALERT_ANNOTATION_FONT_SIZE = 14
 COLOR_BG = "#f7f8fa"
 COLOR_SURFACE = "#ffffff"
 COLOR_BORDER = "#e3e7ee"
@@ -250,7 +256,11 @@ class Dashboard:
                             xref="paper",
                             yref="paper",
                             showarrow=False,
-                            font=dict(color="red", size=14),
+                            font=dict(
+                                color="red",
+                                size=ALERT_ANNOTATION_FONT_SIZE,
+                                family=FONT_FAMILY,
+                            ),
                         )
                     ],
                 )
@@ -285,7 +295,11 @@ class Dashboard:
                         fill_color="#f2f5f9",
                         align="center",
                         line_color=COLOR_BORDER,
-                        font=dict(color=COLOR_TEXT, size=11, family=FONT_FAMILY),
+                        font=dict(
+                            color=COLOR_TEXT,
+                            size=TABLE_HEADER_FONT_SIZE,
+                            family=FONT_FAMILY,
+                        ),
                         height=28,
                     ),
                     cells=dict(
@@ -293,7 +307,11 @@ class Dashboard:
                         fill_color=COLOR_SURFACE,
                         align="center",
                         line_color=COLOR_BORDER,
-                        font=dict(color=COLOR_TEXT, size=10, family=FONT_FAMILY),
+                        font=dict(
+                            color=COLOR_TEXT,
+                            size=TABLE_CELL_FONT_SIZE,
+                            family=FONT_FAMILY,
+                        ),
                         height=26,
                     ),
                 )
@@ -305,6 +323,21 @@ class Dashboard:
         fig.update_layout(
             title=title,
             template="plotly_white",
+            font=dict(color=COLOR_TEXT, size=FIGURE_FONT_SIZE, family=FONT_FAMILY),
+            title_font=dict(
+                color=COLOR_TEXT,
+                size=FIGURE_TITLE_FONT_SIZE,
+                family=FONT_FAMILY,
+            ),
+            hoverlabel=dict(
+                bgcolor=COLOR_SURFACE,
+                bordercolor=COLOR_BORDER,
+                font=dict(
+                    color=COLOR_TEXT,
+                    size=FIGURE_FONT_SIZE,
+                    family=FONT_FAMILY,
+                ),
+            ),
             margin=dict(l=8, r=8, t=48, b=8),
             width=max(900, table_width + 16),
             height=min(760, 170 + len(df_display.index) * 28),
@@ -1160,7 +1193,11 @@ class Dashboard:
                             xref="paper",
                             yref="paper",
                             showarrow=False,
-                            font=dict(color="red", size=14),
+                            font=dict(
+                                color="red",
+                                size=ALERT_ANNOTATION_FONT_SIZE,
+                                family=FONT_FAMILY,
+                            ),
                         )
                     ],
                 )
@@ -1201,6 +1238,21 @@ class Dashboard:
             xaxis_title="Development (Months)",
             yaxis_title="% of Ultimate",
             template="plotly_white",
+            font=dict(color=COLOR_TEXT, size=FIGURE_FONT_SIZE, family=FONT_FAMILY),
+            title_font=dict(
+                color=COLOR_TEXT,
+                size=FIGURE_TITLE_FONT_SIZE,
+                family=FONT_FAMILY,
+            ),
+            hoverlabel=dict(
+                bgcolor=COLOR_SURFACE,
+                bordercolor=COLOR_BORDER,
+                font=dict(
+                    color=COLOR_TEXT,
+                    size=FIGURE_FONT_SIZE,
+                    family=FONT_FAMILY,
+                ),
+            ),
             legend=dict(x=1.02, y=1, xanchor="left", yanchor="top"),
             height=600,
             autosize=True,
@@ -1232,7 +1284,11 @@ class Dashboard:
                             xref="paper",
                             yref="paper",
                             showarrow=False,
-                            font=dict(color="red", size=14),
+                            font=dict(
+                                color="red",
+                                size=ALERT_ANNOTATION_FONT_SIZE,
+                                family=FONT_FAMILY,
+                            ),
                         )
                     ],
                 )
@@ -1303,7 +1359,11 @@ class Dashboard:
                         values=header_values,
                         fill_color=header_colors,
                         align="center",
-                        font=dict(color="white", size=11, family="Arial"),
+                        font=dict(
+                            color="white",
+                            size=TABLE_HEADER_FONT_SIZE,
+                            family=FONT_FAMILY,
+                        ),
                         height=35,
                     ),
                     cells=dict(
@@ -1325,7 +1385,11 @@ class Dashboard:
                             "center",
                             "right",
                         ],
-                        font=dict(color="black", size=10, family="Arial"),
+                        font=dict(
+                            color="black",
+                            size=TABLE_CELL_FONT_SIZE,
+                            family=FONT_FAMILY,
+                        ),
                         height=28,
                     ),
                 )
@@ -1335,6 +1399,21 @@ class Dashboard:
         fig.update_layout(
             title=title,
             template="plotly_white",
+            font=dict(color=COLOR_TEXT, size=FIGURE_FONT_SIZE, family=FONT_FAMILY),
+            title_font=dict(
+                color=COLOR_TEXT,
+                size=FIGURE_TITLE_FONT_SIZE,
+                family=FONT_FAMILY,
+            ),
+            hoverlabel=dict(
+                bgcolor=COLOR_SURFACE,
+                bordercolor=COLOR_BORDER,
+                font=dict(
+                    color=COLOR_TEXT,
+                    size=FIGURE_FONT_SIZE,
+                    family=FONT_FAMILY,
+                ),
+            ),
             height=min(
                 650, 200 + len(df_display) * 28
             ),  # Dynamic height based on rows, increased for wider table
@@ -1380,7 +1459,11 @@ class Dashboard:
                             xref="paper",
                             yref="paper",
                             showarrow=False,
-                            font=dict(color="red", size=14),
+                            font=dict(
+                                color="red",
+                                size=ALERT_ANNOTATION_FONT_SIZE,
+                                family=FONT_FAMILY,
+                            ),
                         )
                     ],
                 )
@@ -1559,7 +1642,11 @@ class Dashboard:
                 ],
                 text=text_values,
                 texttemplate="%{text}",
-                textfont={"size": 10},  # Reduced font size to match 70% zoom
+                textfont={
+                    "size": HEATMAP_TEXT_FONT_SIZE,
+                    "family": FONT_FAMILY,
+                    "color": COLOR_TEXT,
+                },
                 colorscale="RdBu_r",
                 showscale=False,
                 zmin=0,
@@ -1577,6 +1664,21 @@ class Dashboard:
             xaxis_title="Development Period",
             yaxis_title="Underwriting Year",
             template="plotly_white",
+            font=dict(color=COLOR_TEXT, size=FIGURE_FONT_SIZE, family=FONT_FAMILY),
+            title_font=dict(
+                color=COLOR_TEXT,
+                size=FIGURE_TITLE_FONT_SIZE,
+                family=FONT_FAMILY,
+            ),
+            hoverlabel=dict(
+                bgcolor=COLOR_SURFACE,
+                bordercolor=COLOR_BORDER,
+                font=dict(
+                    color=COLOR_TEXT,
+                    size=FIGURE_FONT_SIZE,
+                    family=FONT_FAMILY,
+                ),
+            ),
             width=fig_width,
             height=fig_height,
             yaxis=dict(autorange="reversed"),  # Reverse y-axis so oldest year at top
@@ -1837,7 +1939,11 @@ class Dashboard:
                 [0.7916, "#bdd2ec"],
                 [1.0, "#9bbbe0"],
             ],
-            textfont={"size": 10, "family": FONT_FAMILY, "color": COLOR_TEXT},
+            textfont={
+                "size": HEATMAP_TEXT_FONT_SIZE,
+                "family": FONT_FAMILY,
+                "color": COLOR_TEXT,
+            },
             xgap=1,
             ygap=1,
             hoverongaps=False,
@@ -1845,11 +1951,24 @@ class Dashboard:
         fig.update_layout(
             paper_bgcolor=COLOR_SURFACE,
             plot_bgcolor=COLOR_SURFACE,
-            font={"family": FONT_FAMILY, "color": COLOR_TEXT, "size": 11},
+            font={
+                "family": FONT_FAMILY,
+                "color": COLOR_TEXT,
+                "size": FIGURE_FONT_SIZE,
+            },
+            title_font={
+                "family": FONT_FAMILY,
+                "color": COLOR_TEXT,
+                "size": FIGURE_TITLE_FONT_SIZE,
+            },
             hoverlabel={
                 "bgcolor": COLOR_SURFACE,
                 "bordercolor": COLOR_BORDER,
-                "font": {"family": FONT_FAMILY, "color": COLOR_TEXT, "size": 11},
+                "font": {
+                    "family": FONT_FAMILY,
+                    "color": COLOR_TEXT,
+                    "size": FIGURE_FONT_SIZE,
+                },
             },
             margin={"l": 8, "r": 8, "t": 48, "b": 8},
             width=max(900, table_width + 16),
@@ -2395,11 +2514,12 @@ class Dashboard:
                                                                 "backgroundColor": "#f2f5f9",
                                                                 "border": f"1px solid {COLOR_BORDER}",
                                                                 "fontFamily": FONT_FAMILY,
+                                                                "fontSize": f"{TABLE_HEADER_FONT_SIZE}px",
                                                             },
                                                             style_cell={
                                                                 "padding": "8px",
                                                                 "fontFamily": FONT_FAMILY,
-                                                                "fontSize": "13px",
+                                                                "fontSize": f"{TABLE_CELL_FONT_SIZE}px",
                                                                 "border": f"1px solid {COLOR_BORDER}",
                                                                 "textAlign": "left",
                                                             },
