@@ -1,5 +1,7 @@
 import json
 import logging
+import time
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Tuple
@@ -99,6 +101,8 @@ class Dashboard:
         self._default_tail_fit_period_selection: List[int] = []
         self._default_bf_apriori = 0.6
         self._default_bf_apriori_rows: List[dict[str, object]] = []
+        self._results_cache: dict[str, dict] = {}
+        self._recalc_request_seq = 0
 
         self._load_session_defaults()
 
@@ -679,6 +683,175 @@ class Dashboard:
             "last_updated": timestamp,
         }
 
+    def _build_results_cache_key(
+        self,
+        drop_store: Optional[List[List[str | int]]],
+        average: Optional[str],
+        tail_attachment_age: Optional[int],
+        tail_curve: Optional[str],
+        tail_fit_period_selection: Optional[List[int]],
+        bf_apriori_by_uwy: Optional[dict[str, float]],
+    ) -> str:
+        normalized_drops: list[list[str | int]] = []
+        for item in drop_store or []:
+            if not isinstance(item, list) or len(item) != 2:
+                continue
+            try:
+                normalized_drops.append([str(item[0]), int(item[1])])
+            except (TypeError, ValueError):
+                continue
+        normalized_drops.sort(key=lambda item: (str(item[0]), int(item[1])))
+
+        normalized_fit_period = self._normalize_tail_fit_selection(
+            tail_fit_period_selection
+        )
+        normalized_fit_period.sort()
+
+        normalized_bf: dict[str, float] = {}
+        for key, value in sorted((bf_apriori_by_uwy or {}).items()):
+            try:
+                normalized_bf[str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+
+        payload = {
+            "segment": self._get_segment_key(),
+            "average": average or self._default_average,
+            "tail_curve": tail_curve or self._default_tail_curve,
+            "tail_attachment_age": tail_attachment_age,
+            "tail_fit_period_selection": normalized_fit_period,
+            "drops": normalized_drops,
+            "bf_apriori_by_uwy": normalized_bf,
+        }
+        return json.dumps(payload, sort_keys=True)
+
+    def _build_params_state(
+        self,
+        *,
+        drop_store: Optional[List[List[str | int]]],
+        average: Optional[str],
+        tail_attachment_age: Optional[int],
+        tail_curve: Optional[str],
+        tail_fit_period_selection: Optional[List[int]],
+        bf_apriori_by_uwy: Optional[dict[str, float]],
+        request_id: int,
+        source: str,
+        force_recalc: bool,
+        sync_version: Optional[int] = None,
+    ) -> dict:
+        normalized_drop_store = self._normalize_drop_store(drop_store)
+        normalized_tail_fit = self._normalize_tail_fit_selection(
+            tail_fit_period_selection
+        )
+
+        parsed_tail = None
+        if tail_attachment_age is not None:
+            try:
+                parsed_tail = int(tail_attachment_age)
+            except (TypeError, ValueError):
+                parsed_tail = None
+
+        normalized_bf = {
+            key: float(value)
+            for key, value in self._bf_rows_to_mapping(
+                self._build_bf_apriori_rows(bf_apriori_by_uwy)
+            ).items()
+        }
+
+        return {
+            "request_id": int(request_id),
+            "source": source,
+            "force_recalc": bool(force_recalc),
+            "drop_store": normalized_drop_store,
+            "tail_attachment_age": parsed_tail,
+            "tail_fit_period_selection": normalized_tail_fit,
+            "average": average or self._default_average,
+            "tail_curve": tail_curve or self._default_tail_curve,
+            "bf_apriori_by_uwy": normalized_bf,
+            "sync_version": sync_version,
+        }
+
+    def _load_session_params_state(self, request_id: int, force_recalc: bool) -> dict:
+        if self._config is None:
+            return self._build_params_state(
+                drop_store=self._default_drop_store,
+                average=self._default_average,
+                tail_attachment_age=self._default_tail_attachment_age,
+                tail_curve=self._default_tail_curve,
+                tail_fit_period_selection=self._default_tail_fit_period_selection,
+                bf_apriori_by_uwy=self._bf_rows_to_mapping(
+                    self._default_bf_apriori_rows
+                ),
+                request_id=request_id,
+                source="load",
+                force_recalc=force_recalc,
+                sync_version=None,
+            )
+
+        session = self._config.load_session()
+        return self._build_params_state(
+            drop_store=session.get("drops"),
+            average=session.get("average", self._default_average),
+            tail_attachment_age=session.get("tail_attachment_age"),
+            tail_curve=session.get("tail_curve", self._default_tail_curve),
+            tail_fit_period_selection=session.get("tail_fit_period"),
+            bf_apriori_by_uwy=session.get("bf_apriori_by_uwy"),
+            request_id=request_id,
+            source="load",
+            force_recalc=force_recalc,
+            sync_version=self._config.get_sync_version(),
+        )
+
+    def _get_or_build_results_payload(
+        self,
+        drop_store: Optional[List[List[str | int]]],
+        average: Optional[str],
+        tail_attachment_age: Optional[int],
+        tail_curve: Optional[str],
+        tail_fit_period_selection: Optional[List[int]],
+        bf_apriori_by_uwy: Optional[dict[str, float]],
+        force_recalc: bool = False,
+    ) -> dict:
+        cache_key = self._build_results_cache_key(
+            drop_store,
+            average,
+            tail_attachment_age,
+            tail_curve,
+            tail_fit_period_selection,
+            bf_apriori_by_uwy,
+        )
+        cached_payload = None if force_recalc else self._results_cache.get(cache_key)
+        if cached_payload is not None:
+            logging.info("Using cached reserving payload for current parameters")
+            return deepcopy(cached_payload)
+
+        fit_period = self._derive_tail_fit_period(tail_fit_period_selection)
+        started = time.perf_counter()
+        self._apply_recalculation(
+            average or self._default_average,
+            self._drops_to_tuples(drop_store),
+            tail_attachment_age,
+            tail_curve or self._default_tail_curve,
+            fit_period,
+            bf_apriori_by_uwy,
+        )
+        recalc_elapsed_ms = (time.perf_counter() - started) * 1000
+        logging.info("Recalculation completed in %.0f ms", recalc_elapsed_ms)
+
+        payload_started = time.perf_counter()
+        payload = self._build_results_payload(
+            drop_store=drop_store,
+            average=average,
+            tail_attachment_age=tail_attachment_age,
+            tail_curve=tail_curve,
+            tail_fit_period_selection=tail_fit_period_selection,
+        )
+        payload_elapsed_ms = (time.perf_counter() - payload_started) * 1000
+        logging.info("Payload build completed in %.0f ms", payload_elapsed_ms)
+        payload["cache_key"] = cache_key
+        self._results_cache[cache_key] = deepcopy(payload)
+        return payload
+
     def _register_callbacks(self) -> None:
         clientside_callback(
             """
@@ -722,6 +895,118 @@ class Dashboard:
             Input("sync-publish-message", "data"),
             State("sync-user-key", "data"),
             State("sync-tab-id", "data"),
+            prevent_initial_call=True,
+        )
+
+        clientside_callback(
+            """
+            function(paramsState, figure) {
+                if (!figure || !figure.data || !Array.isArray(figure.data)) {
+                    return window.dash_clientside.no_update;
+                }
+
+                var cloned = JSON.parse(JSON.stringify(figure));
+                if (!cloned.layout) {
+                    cloned.layout = {};
+                }
+
+                var heatmap = null;
+                for (var i = 0; i < cloned.data.length; i += 1) {
+                    if (cloned.data[i] && cloned.data[i].type === "heatmap") {
+                        heatmap = cloned.data[i];
+                        break;
+                    }
+                }
+                if (!heatmap || !Array.isArray(heatmap.x) || !Array.isArray(heatmap.y)) {
+                    return window.dash_clientside.no_update;
+                }
+
+                var xValues = heatmap.x.map(function (value) { return String(value); });
+                var yValues = heatmap.y.map(function (value) { return String(value); });
+
+                function parseDevStart(label) {
+                    if (typeof label !== "string" || label === "UWY") {
+                        return null;
+                    }
+                    var split = label.split("-");
+                    var value = parseInt(split[0], 10);
+                    return Number.isNaN(value) ? null : value;
+                }
+
+                function buildDropLines(rowIndex, colIndex) {
+                    return [
+                        {
+                            type: "line",
+                            x0: colIndex - 0.5,
+                            y0: rowIndex - 0.5,
+                            x1: colIndex + 0.5,
+                            y1: rowIndex + 0.5,
+                            line: { color: "black", width: 2 },
+                            xref: "x",
+                            yref: "y"
+                        },
+                        {
+                            type: "line",
+                            x0: colIndex - 0.5,
+                            y0: rowIndex + 0.5,
+                            x1: colIndex + 0.5,
+                            y1: rowIndex - 0.5,
+                            line: { color: "black", width: 2 },
+                            xref: "x",
+                            yref: "y"
+                        }
+                    ];
+                }
+
+                var existingShapes = Array.isArray(cloned.layout.shapes)
+                    ? cloned.layout.shapes
+                    : [];
+                var preservedShapes = existingShapes.filter(function (shape) {
+                    return !shape || shape.type !== "line";
+                });
+                var dropShapes = [];
+
+                var dropStore = (paramsState && Array.isArray(paramsState.drop_store))
+                    ? paramsState.drop_store
+                    : [];
+
+                dropStore.forEach(function (item) {
+                    if (!Array.isArray(item) || item.length !== 2) {
+                        return;
+                    }
+                    var origin = String(item[0]);
+                    var dev = parseInt(item[1], 10);
+                    if (!origin || Number.isNaN(dev)) {
+                        return;
+                    }
+
+                    var rowIndex = yValues.indexOf(origin);
+                    if (rowIndex < 0) {
+                        return;
+                    }
+
+                    var colIndex = -1;
+                    for (var col = 0; col < xValues.length; col += 1) {
+                        var start = parseDevStart(xValues[col]);
+                        if (start === dev) {
+                            colIndex = col;
+                            break;
+                        }
+                    }
+                    if (colIndex < 0) {
+                        return;
+                    }
+
+                    dropShapes = dropShapes.concat(buildDropLines(rowIndex, colIndex));
+                });
+
+                cloned.layout.shapes = preservedShapes.concat(dropShapes);
+                return cloned;
+            }
+            """,
+            Output("triangle-heatmap", "figure", allow_duplicate=True),
+            Input("params-store", "data"),
+            State("triangle-heatmap", "figure"),
             prevent_initial_call=True,
         )
 
@@ -976,205 +1261,269 @@ class Dashboard:
             )
 
         @self.app.callback(
-            Output("drop-store", "data"),
-            Output("tail-attachment-store", "data"),
-            Output("tail-fit-period-store", "data"),
+            Output("params-store", "data"),
             Input("triangle-heatmap", "clickData"),
-            State("drop-store", "data"),
-            State("tail-attachment-store", "data"),
-            State("tail-fit-period-store", "data"),
+            Input("average-method", "value"),
+            Input("tail-method", "value"),
+            Input("bf-apriori-table", "data"),
+            Input("sync-inbox", "value"),
+            Input("page-location", "pathname"),
+            State("params-store", "data"),
+            State("results-store", "data"),
         )
-        def _toggle_drop_click(
+        def _reduce_params(
             click,
-            drop_store,
-            tail_attachment_age,
-            tail_fit_period_selection,
+            average,
+            tail_curve,
+            bf_apriori_rows,
+            sync_inbox,
+            _pathname,
+            current_params,
+            current_results,
         ):
-            selected_click = click
+            ctx = callback_context
+            trigger = "page-location"
+            if ctx.triggered:
+                trigger = ctx.triggered[0]["prop_id"].split(".")[0]
 
-            if (
-                not selected_click
-                or "points" not in selected_click
-                or not selected_click["points"]
-            ):
-                return drop_store, tail_attachment_age, tail_fit_period_selection
+            current_request_id = 0
+            if isinstance(current_params, dict):
+                try:
+                    current_request_id = int(current_params.get("request_id", 0))
+                except (TypeError, ValueError):
+                    current_request_id = 0
 
-            point = selected_click["points"][0]
-            origin = point.get("y")
-            dev_label = point.get("x")
-            dev = self._parse_dev_label(dev_label)
-            if dev is None:
-                return drop_store, tail_attachment_age, tail_fit_period_selection
-
-            if origin == "Tail":
-                if tail_attachment_age == dev:
-                    return drop_store, None, tail_fit_period_selection
-                return drop_store, dev, tail_fit_period_selection
-
-            if origin == "LDF":
-                updated = self._toggle_tail_fit_selection(
-                    tail_fit_period_selection or [],
-                    dev,
+            if trigger == "page-location" or not isinstance(current_params, dict):
+                next_params = self._load_session_params_state(
+                    request_id=current_request_id + 1,
+                    force_recalc=True,
                 )
-                return drop_store, tail_attachment_age, updated
+                logging.info(
+                    "[params-reducer] load request=%s force_recalc=%s",
+                    next_params.get("request_id"),
+                    next_params.get("force_recalc"),
+                )
+                return next_params
 
-            if origin == "LDF" or dev_label is None:
-                return drop_store, tail_attachment_age, tail_fit_period_selection
+            working_params = self._build_params_state(
+                drop_store=current_params.get("drop_store"),
+                average=current_params.get("average"),
+                tail_attachment_age=current_params.get("tail_attachment_age"),
+                tail_curve=current_params.get("tail_curve"),
+                tail_fit_period_selection=current_params.get(
+                    "tail_fit_period_selection"
+                ),
+                bf_apriori_by_uwy=current_params.get("bf_apriori_by_uwy"),
+                request_id=current_request_id,
+                source="local",
+                force_recalc=False,
+                sync_version=None,
+            )
+            changed = False
 
-            updated = self._toggle_drop(drop_store or [], str(origin), dev)
-            return updated, tail_attachment_age, tail_fit_period_selection
+            if trigger == "triangle-heatmap":
+                if not click or "points" not in click or not click["points"]:
+                    return no_update
+                point = click["points"][0]
+                origin = point.get("y")
+                dev_label = point.get("x")
+                dev = self._parse_dev_label(dev_label)
+                if dev is None:
+                    return no_update
+                if origin == "Tail":
+                    next_tail = (
+                        None if working_params["tail_attachment_age"] == dev else dev
+                    )
+                    if working_params["tail_attachment_age"] != next_tail:
+                        working_params["tail_attachment_age"] = next_tail
+                        changed = True
+                elif origin == "LDF":
+                    updated_fit = self._toggle_tail_fit_selection(
+                        working_params["tail_fit_period_selection"],
+                        dev,
+                    )
+                    if updated_fit != working_params["tail_fit_period_selection"]:
+                        working_params["tail_fit_period_selection"] = updated_fit
+                        changed = True
+                elif dev_label is not None:
+                    updated_drops = self._toggle_drop(
+                        working_params["drop_store"],
+                        str(origin),
+                        dev,
+                    )
+                    if updated_drops != working_params["drop_store"]:
+                        working_params["drop_store"] = updated_drops
+                        changed = True
+
+            elif trigger == "average-method":
+                next_average = average or self._default_average
+                if next_average != working_params["average"]:
+                    working_params["average"] = next_average
+                    changed = True
+
+            elif trigger == "tail-method":
+                next_tail_curve = tail_curve or self._default_tail_curve
+                if next_tail_curve != working_params["tail_curve"]:
+                    working_params["tail_curve"] = next_tail_curve
+                    changed = True
+
+            elif trigger == "bf-apriori-table":
+                next_bf = self._bf_rows_to_mapping(bf_apriori_rows)
+                if next_bf != working_params["bf_apriori_by_uwy"]:
+                    working_params["bf_apriori_by_uwy"] = next_bf
+                    changed = True
+
+            elif trigger == "sync-inbox":
+                message = self._parse_sync_payload(sync_inbox)
+                if not message:
+                    return no_update
+                if message.get("type") != "session_changed":
+                    return no_update
+                if message.get("user_key") != self._get_segment_key():
+                    return no_update
+                incoming_raw = message.get("sync_version", 0)
+                try:
+                    incoming_version = int(incoming_raw)
+                except (TypeError, ValueError):
+                    return no_update
+
+                current_sync_version = 0
+                if isinstance(current_results, dict):
+                    try:
+                        current_sync_version = int(
+                            current_results.get("sync_version", 0)
+                        )
+                    except (TypeError, ValueError):
+                        current_sync_version = 0
+                if incoming_version <= current_sync_version:
+                    return no_update
+                if self._config is None:
+                    return no_update
+
+                session = self._config.load_session()
+                synced_params = self._build_params_state(
+                    drop_store=session.get("drops"),
+                    average=session.get("average", self._default_average),
+                    tail_attachment_age=session.get("tail_attachment_age"),
+                    tail_curve=session.get("tail_curve", self._default_tail_curve),
+                    tail_fit_period_selection=session.get("tail_fit_period"),
+                    bf_apriori_by_uwy=session.get("bf_apriori_by_uwy"),
+                    request_id=current_request_id + 1,
+                    source="sync",
+                    force_recalc=False,
+                    sync_version=incoming_version,
+                )
+                logging.info(
+                    "[params-reducer] sync request=%s sync_version=%s",
+                    synced_params.get("request_id"),
+                    incoming_version,
+                )
+                return synced_params
+
+            if not changed:
+                return no_update
+
+            working_params["request_id"] = current_request_id + 1
+            working_params["source"] = "local"
+            working_params["force_recalc"] = False
+            working_params["sync_version"] = None
+            logging.info(
+                "[params-reducer] local request=%s trigger=%s",
+                working_params.get("request_id"),
+                trigger,
+            )
+            return working_params
 
         @self.app.callback(
             Output("triangle-heatmap", "clickData"),
-            Input("drop-store", "data"),
-            Input("tail-attachment-store", "data"),
-            Input("tail-fit-period-store", "data"),
+            Input("params-store", "data"),
             prevent_initial_call=True,
         )
-        def _clear_clicks(
-            _drop_store, _tail_attachment_age, _tail_fit_period_selection
-        ):
+        def _clear_clicks(_params):
             return None
 
         @self.app.callback(
             Output("results-store", "data"),
             Output("sync-publish-message", "data"),
-            Input("drop-store", "data"),
-            Input("tail-attachment-store", "data"),
-            Input("tail-fit-period-store", "data"),
-            Input("average-method", "value"),
-            Input("tail-method", "value"),
-            Input("bf-apriori-table", "data"),
-            Input("sync-inbox", "value"),
+            Input("params-store", "data"),
             State("results-store", "data"),
             State("sync-ready", "data"),
         )
-        def _update_results(
-            drop_store,
-            tail_attachment_age,
-            tail_fit_period_selection,
-            average,
-            tail_curve,
-            bf_apriori_rows,
-            sync_inbox,
-            current_payload,
-            sync_ready,
-        ):
-            ctx = callback_context
-            if not ctx.triggered:
+        def _update_results(params, current_payload, sync_ready):
+            if not params or not isinstance(params, dict):
+                return no_update, no_update
+
+            callback_started = time.perf_counter()
+            request_id = params.get("request_id", "n/a")
+            drop_store = params.get("drop_store") or []
+            average = params.get("average") or self._default_average
+            tail_attachment_age = params.get("tail_attachment_age")
+            tail_curve = params.get("tail_curve") or self._default_tail_curve
+            tail_fit_period_selection = params.get("tail_fit_period_selection") or []
+            bf_apriori_by_uwy = params.get("bf_apriori_by_uwy") or {}
+            force_recalc = bool(params.get("force_recalc"))
+
+            cache_key = self._build_results_cache_key(
+                drop_store,
+                average,
+                tail_attachment_age,
+                tail_curve,
+                tail_fit_period_selection,
+                bf_apriori_by_uwy,
+            )
+
+            if (
+                not force_recalc
+                and isinstance(current_payload, dict)
+                and current_payload.get("cache_key") == cache_key
+            ):
+                logging.info(
+                    "[recalc] skip unchanged request=%s cache_key=%s",
+                    request_id,
+                    cache_key,
+                )
+                total_elapsed_ms = (time.perf_counter() - callback_started) * 1000
+                logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
                 return current_payload, no_update
 
-            trigger = ctx.triggered[0]["prop_id"].split(".")[0]
-            if trigger == "sync-inbox":
-                message = self._parse_sync_payload(sync_inbox)
-                if not message:
-                    logging.debug("Ignoring sync message: payload parsing failed")
-                    return no_update, no_update
-                if message.get("type") != "session_changed":
-                    logging.debug("Ignoring sync message: unsupported type")
-                    return no_update, no_update
-                if message.get("user_key") != self._get_segment_key():
-                    logging.debug("Ignoring sync message: user_key mismatch")
-                    return no_update, no_update
-
-                incoming_raw = message.get("sync_version", 0)
-                try:
-                    incoming_version = int(incoming_raw)
-                except (TypeError, ValueError):
-                    logging.debug("Ignoring sync message: invalid sync_version")
-                    return no_update, no_update
-
-                current_version = 0
-                if isinstance(current_payload, dict):
-                    try:
-                        current_version = int(current_payload.get("sync_version", 0))
-                    except (TypeError, ValueError):
-                        current_version = 0
-
-                if incoming_version <= current_version:
-                    logging.debug("Ignoring sync message: stale version")
-                    return no_update, no_update
-
-                if self._config is None:
-                    logging.debug("Ignoring sync message: config unavailable")
-                    return no_update, no_update
-
-                session = self._config.load_session()
-                average = session.get("average", self._default_average)
-                tail_curve = session.get("tail_curve", self._default_tail_curve)
-                drop_store = self._normalize_drop_store(session.get("drops"))
-
-                parsed_tail = None
-                tail_attachment_age = session.get("tail_attachment_age")
-                if tail_attachment_age is not None:
-                    try:
-                        parsed_tail = int(tail_attachment_age)
-                    except (TypeError, ValueError):
-                        parsed_tail = None
-
-                tail_fit_period_selection = self._normalize_tail_fit_selection(
-                    session.get("tail_fit_period")
-                )
-                bf_apriori_by_uwy = self._bf_rows_to_mapping(
-                    self._build_bf_apriori_rows(session.get("bf_apriori_by_uwy"))
-                )
-                fit_period = self._derive_tail_fit_period(tail_fit_period_selection)
-
-                try:
-                    self._apply_recalculation(
-                        average,
-                        self._drops_to_tuples(drop_store),
-                        parsed_tail,
-                        tail_curve,
-                        fit_period,
-                        bf_apriori_by_uwy,
-                    )
-                except Exception as exc:
-                    logging.error(
-                        f"Failed to apply remote sync update: {exc}",
-                        exc_info=True,
-                    )
-
-                results_payload = self._build_results_payload(
+            logging.info(
+                "[recalc] start request=%s source=%s force=%s",
+                request_id,
+                params.get("source"),
+                force_recalc,
+            )
+            try:
+                results_payload = self._get_or_build_results_payload(
                     drop_store=drop_store,
                     average=average,
-                    tail_attachment_age=parsed_tail,
+                    tail_attachment_age=tail_attachment_age,
                     tail_curve=tail_curve,
                     tail_fit_period_selection=tail_fit_period_selection,
-                )
-                results_payload["sync_version"] = incoming_version
-                segment_key = self._get_segment_key()
-                _LIVE_RESULTS_BY_SEGMENT[segment_key] = results_payload
-                logging.info(
-                    "Applied remote sync update for segment '%s' at version %s",
-                    segment_key,
-                    incoming_version,
-                )
-                return results_payload, no_update
-
-            parsed_tail = None
-            drops = self._drops_to_tuples(drop_store)
-            average = average or self._default_average
-            tail_curve = tail_curve or self._default_tail_curve
-            bf_apriori_by_uwy = self._bf_rows_to_mapping(bf_apriori_rows)
-            parsed_tail = None
-            if tail_attachment_age is not None:
-                try:
-                    parsed_tail = int(tail_attachment_age)
-                except (TypeError, ValueError):
-                    parsed_tail = None
-            fit_period = self._derive_tail_fit_period(tail_fit_period_selection)
-            try:
-                self._apply_recalculation(
-                    average,
-                    drops,
-                    parsed_tail,
-                    tail_curve,
-                    fit_period,
-                    bf_apriori_by_uwy,
+                    bf_apriori_by_uwy=bf_apriori_by_uwy,
+                    force_recalc=force_recalc,
                 )
             except Exception as exc:
                 logging.error(f"Failed to recalculate reserving: {exc}", exc_info=True)
+                return no_update, no_update
+
+            source = params.get("source")
+            if source == "sync":
+                incoming_sync = params.get("sync_version")
+                try:
+                    sync_version = int(incoming_sync)
+                except (TypeError, ValueError):
+                    sync_version = 0
+                results_payload["sync_version"] = sync_version
+                segment_key = self._get_segment_key()
+                _LIVE_RESULTS_BY_SEGMENT[segment_key] = results_payload
+                logging.info(
+                    "[recalc] finish request=%s sync_version=%s",
+                    request_id,
+                    sync_version,
+                )
+                total_elapsed_ms = (time.perf_counter() - callback_started) * 1000
+                logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
+                return results_payload, no_update
 
             sync_version = 0
             if self._config is not None:
@@ -1182,9 +1531,9 @@ class Dashboard:
                     {
                         "average": average,
                         "tail_curve": tail_curve,
-                        "drops": drop_store or [],
-                        "tail_attachment_age": parsed_tail,
-                        "tail_fit_period": tail_fit_period_selection or [],
+                        "drops": drop_store,
+                        "tail_attachment_age": tail_attachment_age,
+                        "tail_fit_period": tail_fit_period_selection,
                         "bf_apriori_by_uwy": bf_apriori_by_uwy,
                     }
                 )
@@ -1196,21 +1545,35 @@ class Dashboard:
             else:
                 sync_version = 1
 
-            results_payload = self._build_results_payload(
-                drop_store=drop_store,
-                average=average,
-                tail_attachment_age=parsed_tail,
-                tail_curve=tail_curve,
-                tail_fit_period_selection=tail_fit_period_selection,
-            )
             results_payload["sync_version"] = sync_version
-
             segment_key = self._get_segment_key()
             _LIVE_RESULTS_BY_SEGMENT[segment_key] = results_payload
+
+            previous_sync_version = 0
+            if isinstance(current_payload, dict):
+                try:
+                    previous_sync_version = int(current_payload.get("sync_version", 0))
+                except (TypeError, ValueError):
+                    previous_sync_version = 0
+
             if not bool(sync_ready):
                 logging.warning(
                     "Tab sync bridge unavailable; update applied only in current tab"
                 )
+            if sync_version <= previous_sync_version:
+                logging.info(
+                    "Session unchanged; skipping sync publish for segment '%s'",
+                    segment_key,
+                )
+                logging.info(
+                    "[recalc] finish request=%s sync_version=%s (no publish)",
+                    request_id,
+                    sync_version,
+                )
+                total_elapsed_ms = (time.perf_counter() - callback_started) * 1000
+                logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
+                return results_payload, no_update
+
             publish_message = {
                 "sync_version": sync_version,
                 "updated_at": results_payload.get("last_updated"),
@@ -1220,7 +1583,34 @@ class Dashboard:
                 segment_key,
                 sync_version,
             )
+            logging.info(
+                "[recalc] finish request=%s sync_version=%s",
+                request_id,
+                sync_version,
+            )
+            total_elapsed_ms = (time.perf_counter() - callback_started) * 1000
+            logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
             return results_payload, publish_message
+
+        @self.app.callback(
+            Output("average-method", "value"),
+            Output("tail-method", "value"),
+            Output("bf-apriori-table", "data"),
+            Input("params-store", "data"),
+        )
+        def _hydrate_controls(params):
+            if not isinstance(params, dict):
+                return (
+                    self._default_average,
+                    self._default_tail_curve,
+                    self._build_bf_apriori_rows(self._default_bf_apriori_rows),
+                )
+            bf_rows = self._build_bf_apriori_rows(params.get("bf_apriori_by_uwy"))
+            return (
+                params.get("average", self._default_average),
+                params.get("tail_curve", self._default_tail_curve),
+                bf_rows,
+            )
 
         @self.app.callback(
             Output("triangle-heatmap", "figure"),
@@ -1645,26 +2035,31 @@ class Dashboard:
             index=triangle_data.index, columns=triangle_data.columns
         )
         dropped_mask = triangle_data.isna() & raw_link_ratios.notna()
-        dropped_mask.loc[["LDF", "Tail"]] = False
+        for summary_row in ("LDF", "Tail"):
+            if summary_row in dropped_mask.index:
+                dropped_mask.loc[summary_row, :] = False
         expanded_triangle = triangle_data.fillna(raw_link_ratios)
 
         # Separate link ratios from LDF/Tail rows
         link_ratio_rows = expanded_triangle.index[:-2]  # All except last 2
         ldf_tail_rows = expanded_triangle.index[-2:]  # Last 2: LDF and Tail
+        link_ratio_row_positions = list(range(max(len(expanded_triangle.index) - 2, 0)))
 
         # Column-wise normalization for link ratios
         normalized_data = expanded_triangle.copy()
-        for col in expanded_triangle.columns:
-            col_data = expanded_triangle.loc[link_ratio_rows, col].dropna()
+        for col_idx, col in enumerate(expanded_triangle.columns):
+            col_series = expanded_triangle.iloc[link_ratio_row_positions, col_idx]
+            col_data = col_series.dropna()
             if len(col_data) > 0:
                 col_min = col_data.min()
                 col_max = col_data.max()
                 if col_max > col_min:
-                    normalized_data.loc[link_ratio_rows, col] = (
-                        expanded_triangle.loc[link_ratio_rows, col] - col_min
-                    ) / (col_max - col_min)
+                    normalized_values = (col_series - col_min) / (col_max - col_min)
+                    normalized_data.iloc[link_ratio_row_positions, col_idx] = (
+                        normalized_values.to_numpy()
+                    )
                 else:
-                    normalized_data.loc[link_ratio_rows, col] = 0.5
+                    normalized_data.iloc[link_ratio_row_positions, col_idx] = 0.5
 
         # Global logarithmic normalization for LDF and Tail rows
         ldf_tail_data = expanded_triangle.loc[ldf_tail_rows]
@@ -2213,15 +2608,8 @@ class Dashboard:
         )
         return html.Div(
             [
-                dcc.Store(id="drop-store", data=self._default_drop_store),
-                dcc.Store(
-                    id="tail-attachment-store",
-                    data=self._default_tail_attachment_age,
-                ),
-                dcc.Store(
-                    id="tail-fit-period-store",
-                    data=self._default_tail_fit_period_selection,
-                ),
+                dcc.Location(id="page-location", refresh=False),
+                dcc.Store(id="params-store", data=None),
                 dcc.Store(id="results-store", data=results_payload),
                 dcc.Store(id="data-view-store", data="cumulative"),
                 dcc.Store(id="active-tab", data="data"),

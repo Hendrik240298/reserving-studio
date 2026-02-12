@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import yaml
 import logging
+import os
 from pathlib import Path
 from datetime import datetime
 import re
+import threading
 
 
 class ConfigManager:
+    _SESSION_LOCK = threading.RLock()
+
     def __init__(self, config: dict, config_path: Path | None = None):
         self._config_path = Path(config_path) if config_path else None
         self._config = config
@@ -102,14 +106,49 @@ class ConfigManager:
         return self._session_path
 
     def load_session(self) -> dict:
+        with self._SESSION_LOCK:
+            return self._load_session_unlocked()
+
+    def _load_session_unlocked(self) -> dict:
         session_path = self.get_session_path()
         if not session_path.exists():
             return {}
-        with session_path.open("r") as f:
-            return yaml.safe_load(f) or {}
+        try:
+            with session_path.open("r") as f:
+                payload = yaml.safe_load(f) or {}
+        except yaml.YAMLError as exc:
+            logging.error("Failed to parse session YAML at %s: %s", session_path, exc)
+            timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S%fZ")
+            corrupt_path = session_path.with_suffix(
+                session_path.suffix + f".corrupt.{timestamp}"
+            )
+            try:
+                session_path.replace(corrupt_path)
+                logging.warning(
+                    "Moved corrupted session file to %s; starting with defaults",
+                    corrupt_path,
+                )
+            except OSError as move_exc:
+                logging.error(
+                    "Failed to move corrupted session file %s: %s",
+                    session_path,
+                    move_exc,
+                )
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        return payload
+
+    def _normalize_session_payload(self, payload: dict) -> dict:
+        normalized = payload.copy()
+        normalized.pop("sync_version", None)
+        normalized.pop("updated_at", None)
+        normalized.setdefault("segment", self._segment)
+        return normalized
 
     def get_sync_version(self) -> int:
-        session = self.load_session()
+        with self._SESSION_LOCK:
+            session = self._load_session_unlocked()
         raw_version = session.get("sync_version", 0)
         try:
             version = int(raw_version)
@@ -120,18 +159,45 @@ class ConfigManager:
         return version
 
     def save_session_with_version(self, data: dict) -> int:
-        current_version = self.get_sync_version()
-        next_version = current_version + 1
-        payload = data.copy()
-        payload["sync_version"] = next_version
-        self.save_session(payload)
-        return next_version
+        with self._SESSION_LOCK:
+            session = self._load_session_unlocked()
+            raw_version = session.get("sync_version", 0)
+            try:
+                current_version = int(raw_version)
+            except (TypeError, ValueError):
+                current_version = 0
+            if current_version < 0:
+                current_version = 0
+
+            normalized_current = self._normalize_session_payload(session)
+            normalized_incoming = self._normalize_session_payload(data)
+            if normalized_current == normalized_incoming:
+                return current_version
+
+            next_version = current_version + 1
+            payload = data.copy()
+            payload["sync_version"] = next_version
+            self._save_session_unlocked(payload)
+            return next_version
 
     def save_session(self, data: dict) -> None:
+        with self._SESSION_LOCK:
+            current_session = self._load_session_unlocked()
+            normalized_current = self._normalize_session_payload(current_session)
+            normalized_incoming = self._normalize_session_payload(data)
+            if normalized_current == normalized_incoming:
+                return
+            self._save_session_unlocked(data)
+
+    def _save_session_unlocked(self, data: dict) -> None:
         session_path = self.get_session_path()
         session_path.parent.mkdir(parents=True, exist_ok=True)
         payload = data.copy()
         payload.setdefault("segment", self._segment)
         payload["updated_at"] = datetime.utcnow().isoformat() + "Z"
-        with session_path.open("w") as f:
+        tmp_path = session_path.with_suffix(session_path.suffix + ".tmp")
+        with tmp_path.open("w") as f:
             yaml.safe_dump(payload, f, sort_keys=False)
+            f.flush()
+            os.fsync(f.fileno())
+        tmp_path.replace(session_path)

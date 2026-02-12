@@ -220,9 +220,9 @@ class Reserving:
         self.df_results = self.df_results.merge(
             ultimate, right_index=True, left_index=True
         )
-        logging.info(
-            f"ldfs: {self.result.named_steps.tail.ldf_['incurred'].to_frame().iloc[0]}"
-        )
+        # logging.info(
+        #     f"ldfs: {self.result.named_steps.tail.ldf_['incurred'].to_frame().iloc[0]}"
+        # )
 
     class CorrectTail:
         def fit(self, X, y=None):
@@ -233,15 +233,20 @@ class Reserving:
             X_tail_corrected = X.copy()
             # Find the index of 'incurred' in the vdims
             incurred_idx = list(X.ldf_.vdims).index("incurred")
-            logging.info(f"incurred index in vdims: {incurred_idx}")
-            logging.info(
-                f"Original tail LDFs: {X_tail_corrected.ldf_.values[:, incurred_idx, :, -1]}"
-            )
+            logger = logging.getLogger(__name__)
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("incurred index in vdims: %s", incurred_idx)
+                logger.debug(
+                    "Original tail LDFs: %s",
+                    X_tail_corrected.ldf_.values[:, incurred_idx, :, -1],
+                )
             # Set the tail link ratio (last development period) to 1.0 for 'incurred'
             X_tail_corrected.ldf_.values[:, incurred_idx, :, -1] = 1.0
-            logging.info(
-                f"Corrected tail LDFs: {X_tail_corrected.ldf_.values[:, incurred_idx, :, -1]}"
-            )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "Corrected tail LDFs: %s",
+                    X_tail_corrected.ldf_.values[:, incurred_idx, :, -1],
+                )
             return X_tail_corrected
 
     def correct_tail(self):
