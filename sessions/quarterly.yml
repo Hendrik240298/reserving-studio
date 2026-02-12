@@ -45,6 +45,10 @@ drops:
   - 24
 - - '1998'
   - 48
+- - '2000'
+  - 21
+- - '2004'
+  - 18
 tail_attachment_age: null
 tail_fit_period:
 - 3
@@ -62,6 +66,6 @@ bf_apriori_by_uwy:
   '2004': 0.6
   '2005': 0.6
   '2006': 0.6
-sync_version: 180
+sync_version: 204
 segment: quarterly
-updated_at: '2026-02-12T19:24:42.873129Z'
+updated_at: '2026-02-12T19:42:35.161502Z'

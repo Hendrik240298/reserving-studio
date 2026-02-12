@@ -1191,12 +1191,64 @@ class Dashboard:
 
         clientside_callback(
             """
-            function(paramsState, figure) {
-                if (!figure || !figure.data || !Array.isArray(figure.data)) {
-                    return window.dash_clientside.no_update;
+            function(paramsState, basePayload, currentOverlaySignature) {
+                if (!basePayload || typeof basePayload !== "object") {
+                    return [window.dash_clientside.no_update, window.dash_clientside.no_update];
                 }
 
-                var cloned = JSON.parse(JSON.stringify(figure));
+                var baseFigure = basePayload.figure;
+                var figureVersion = String(basePayload.figure_version || "0");
+                if (!baseFigure || !baseFigure.data || !Array.isArray(baseFigure.data)) {
+                    return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+                }
+
+                function normalizeDropStore(items) {
+                    if (!Array.isArray(items)) {
+                        return [];
+                    }
+                    var normalized = [];
+                    for (var i = 0; i < items.length; i += 1) {
+                        var item = items[i];
+                        if (!Array.isArray(item) || item.length !== 2) {
+                            continue;
+                        }
+                        var origin = String(item[0]);
+                        var dev = parseInt(item[1], 10);
+                        if (!origin || Number.isNaN(dev)) {
+                            continue;
+                        }
+                        normalized.push([origin, dev]);
+                    }
+                    normalized.sort(function(a, b) {
+                        if (a[0] < b[0]) {
+                            return -1;
+                        }
+                        if (a[0] > b[0]) {
+                            return 1;
+                        }
+                        return a[1] - b[1];
+                    });
+                    var deduped = [];
+                    for (var j = 0; j < normalized.length; j += 1) {
+                        if (j === 0 || normalized[j][0] !== normalized[j - 1][0] || normalized[j][1] !== normalized[j - 1][1]) {
+                            deduped.push(normalized[j]);
+                        }
+                    }
+                    return deduped;
+                }
+
+                var normalizedDropStore = normalizeDropStore(
+                    paramsState && paramsState.drop_store
+                );
+                var nextSignature = JSON.stringify({
+                    figure_version: figureVersion,
+                    drop_store: normalizedDropStore,
+                });
+                if (currentOverlaySignature === nextSignature) {
+                    return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+                }
+
+                var cloned = JSON.parse(JSON.stringify(baseFigure));
                 if (!cloned.layout) {
                     cloned.layout = {};
                 }
@@ -1257,11 +1309,7 @@ class Dashboard:
                 });
                 var dropShapes = [];
 
-                var dropStore = (paramsState && Array.isArray(paramsState.drop_store))
-                    ? paramsState.drop_store
-                    : [];
-
-                dropStore.forEach(function (item) {
+                normalizedDropStore.forEach(function (item) {
                     if (!Array.isArray(item) || item.length !== 2) {
                         return;
                     }
@@ -1292,13 +1340,14 @@ class Dashboard:
                 });
 
                 cloned.layout.shapes = preservedShapes.concat(dropShapes);
-                return cloned;
+                return [cloned, nextSignature];
             }
             """,
-            Output("triangle-heatmap", "figure", allow_duplicate=True),
+            Output("triangle-heatmap", "figure"),
+            Output("triangle-overlay-signature", "data"),
             Input("params-store", "data"),
-            State("triangle-heatmap", "figure"),
-            prevent_initial_call=True,
+            Input("triangle-base-figure", "data"),
+            State("triangle-overlay-signature", "data"),
         )
 
         @self.app.callback(
@@ -1797,6 +1846,11 @@ class Dashboard:
                 logging.error(f"Failed to recalculate reserving: {exc}", exc_info=True)
                 return no_update, no_update
 
+            try:
+                results_payload["figure_version"] = int(request_id)
+            except (TypeError, ValueError):
+                results_payload["figure_version"] = 0
+
             source = params.get("source")
             if source == "sync":
                 incoming_sync = params.get("sync_version")
@@ -1904,7 +1958,7 @@ class Dashboard:
             )
 
         @self.app.callback(
-            Output("triangle-heatmap", "figure"),
+            Output("triangle-base-figure", "data"),
             Output("emergence-plot", "figure"),
             Output("results-table", "figure"),
             Input("results-store", "data"),
@@ -1912,12 +1966,15 @@ class Dashboard:
         def _hydrate_tabs(results_payload):
             if not results_payload:
                 return (
-                    self._plot_triangle_heatmap_clean(
-                        self.triangle,
-                        "Triangle - Link Ratios",
-                        self._default_tail_attachment_age,
-                        self._default_tail_fit_period_selection,
-                    ),
+                    {
+                        "figure": self._plot_triangle_heatmap_clean(
+                            self.triangle,
+                            "Triangle - Link Ratios",
+                            self._default_tail_attachment_age,
+                            self._default_tail_fit_period_selection,
+                        ).to_dict(),
+                        "figure_version": 0,
+                    },
                     self._plot_emergence(
                         self.emergence_pattern,
                         "Emergence Pattern",
@@ -1929,7 +1986,10 @@ class Dashboard:
                 )
 
             return (
-                results_payload.get("triangle_figure"),
+                {
+                    "figure": results_payload.get("triangle_figure"),
+                    "figure_version": results_payload.get("figure_version", 0),
+                },
                 results_payload.get("emergence_figure"),
                 results_payload.get("results_figure"),
             )
@@ -2340,7 +2400,6 @@ class Dashboard:
             logging.info("Triangle heatmap core reused in %.0f ms", core_elapsed_ms)
 
         expanded_triangle = core_payload["expanded_triangle"]
-        dropped_mask = core_payload["dropped_mask"]
         z_data = core_payload["z_data"]
         text_values = core_payload["text_values"]
         customdata = core_payload["customdata"]
@@ -2676,34 +2735,6 @@ class Dashboard:
 
         shape_defs: list[dict[str, object]] = []
 
-        for row_label, col_label in dropped_mask.stack()[dropped_mask.stack()].index:
-            row_pos = expanded_triangle.index.get_loc(row_label) + 1
-            col_pos = expanded_triangle.columns.get_loc(col_label) + 1
-            shape_defs.append(
-                {
-                    "type": "line",
-                    "x0": col_pos - 0.5,
-                    "y0": row_pos - 0.5,
-                    "x1": col_pos + 0.5,
-                    "y1": row_pos + 0.5,
-                    "line": {"color": "black", "width": 2},
-                    "xref": "x",
-                    "yref": "y",
-                }
-            )
-            shape_defs.append(
-                {
-                    "type": "line",
-                    "x0": col_pos - 0.5,
-                    "y0": row_pos + 0.5,
-                    "x1": col_pos + 0.5,
-                    "y1": row_pos - 0.5,
-                    "line": {"color": "black", "width": 2},
-                    "xref": "x",
-                    "yref": "y",
-                }
-            )
-
         if tail_attachment_age is not None:
             try:
                 tail_row_pos = expanded_triangle.index.get_loc("Tail") + 1
@@ -2877,6 +2908,7 @@ class Dashboard:
             tail_fit_period_selection=self._default_tail_fit_period_selection,
             bf_apriori_by_uwy=self._bf_rows_to_mapping(self._default_bf_apriori_rows),
         )
+        results_payload["figure_version"] = 0
         initial_sync_version = 0
         if self._config is not None:
             initial_sync_version = self._config.get_sync_version()
@@ -2901,6 +2933,14 @@ class Dashboard:
                 dcc.Location(id="page-location", refresh=False),
                 dcc.Store(id="params-store", data=None),
                 dcc.Store(id="results-store", data=results_payload),
+                dcc.Store(
+                    id="triangle-base-figure",
+                    data={
+                        "figure": results_payload.get("triangle_figure"),
+                        "figure_version": results_payload.get("figure_version", 0),
+                    },
+                ),
+                dcc.Store(id="triangle-overlay-signature", data=None),
                 dcc.Store(id="data-view-store", data="cumulative"),
                 dcc.Store(id="active-tab", data="data"),
                 dcc.Store(id="sidebar-collapsed", data=False),
