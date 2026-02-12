@@ -1,10 +1,11 @@
 import json
+import hashlib
 import logging
 import time
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Callable, Optional, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -48,27 +49,6 @@ SIDEBAR_EXPANDED_WIDTH = "240px"
 SIDEBAR_COLLAPSED_WIDTH = "0px"
 
 
-def format_to_millions(value):
-    """
-    Format values with dynamic units.
-    Returns empty string for NaN/None values.
-
-    Args:
-        value: Numeric value to format
-
-    Returns:
-        Formatted string (e.g., '1.23m', '512.00k', '900') or empty string for NaN
-    """
-    if pd.isna(value) or value is None:
-        return ""
-    abs_value = abs(value)
-    if abs_value >= 1_000_000:
-        return f"{value / 1_000_000:.2f}m"
-    if abs_value >= 1_000:
-        return f"{value / 1_000:.2f}k"
-    return f"{value:.0f}"
-
-
 class Dashboard:
     def __init__(
         self,
@@ -101,7 +81,12 @@ class Dashboard:
         self._default_tail_fit_period_selection: List[int] = []
         self._default_bf_apriori = 0.6
         self._default_bf_apriori_rows: List[dict[str, object]] = []
-        self._results_cache: dict[str, dict] = {}
+        self._payload_cache: dict[str, dict] = {}
+        self._triangle_figure_cache: dict[str, dict] = {}
+        self._emergence_figure_cache: dict[str, dict] = {}
+        self._results_table_figure_cache: dict[str, dict] = {}
+        self._heatmap_core_cache: dict[str, dict] = {}
+        self._cache_max_entries = 32
         self._recalc_request_seq = 0
 
         self._load_session_defaults()
@@ -639,6 +624,7 @@ class Dashboard:
         tail_attachment_age: Optional[int],
         tail_curve: Optional[str],
         tail_fit_period_selection: Optional[List[int]],
+        bf_apriori_by_uwy: Optional[dict[str, float]],
     ) -> dict:
         timestamp = datetime.utcnow().isoformat() + "Z"
         display = "None"
@@ -653,25 +639,56 @@ class Dashboard:
         else:
             fit_period_display = f"lower={fit_period[0]}, upper={fit_period[1]}"
 
-        triangle_fig = self._plot_triangle_heatmap_clean(
-            self.triangle,
-            "Triangle - Link Ratios",
+        visual_cache_key = self._build_visual_cache_key(
+            drop_store,
+            average,
             tail_attachment_age,
+            tail_curve,
             tail_fit_period_selection,
         )
-        emergence_fig = self._plot_emergence(
-            self.emergence_pattern,
-            "Emergence Pattern",
+        results_table_cache_key = self._build_results_cache_key(
+            drop_store,
+            average,
+            tail_attachment_age,
+            tail_curve,
+            tail_fit_period_selection,
+            bf_apriori_by_uwy=bf_apriori_by_uwy,
         )
-        results_fig = self._plot_reserving_results_table(
-            self.results,
-            "Reserving Results",
+
+        triangle_figure = self._get_or_build_cached_figure(
+            cache=self._triangle_figure_cache,
+            cache_key=visual_cache_key,
+            label="Triangle figure",
+            builder=lambda: self._plot_triangle_heatmap_clean(
+                self.triangle,
+                "Triangle - Link Ratios",
+                tail_attachment_age,
+                tail_fit_period_selection,
+            ).to_dict(),
+        )
+        emergence_figure = self._get_or_build_cached_figure(
+            cache=self._emergence_figure_cache,
+            cache_key=visual_cache_key,
+            label="Emergence figure",
+            builder=lambda: self._plot_emergence(
+                self.emergence_pattern,
+                "Emergence Pattern",
+            ).to_dict(),
+        )
+        results_figure = self._get_or_build_cached_figure(
+            cache=self._results_table_figure_cache,
+            cache_key=results_table_cache_key,
+            label="Results table figure",
+            builder=lambda: self._plot_reserving_results_table(
+                self.results,
+                "Reserving Results",
+            ).to_dict(),
         )
 
         return {
-            "triangle_figure": triangle_fig.to_dict(),
-            "emergence_figure": emergence_fig.to_dict(),
-            "results_figure": results_fig.to_dict(),
+            "triangle_figure": triangle_figure,
+            "emergence_figure": emergence_figure,
+            "results_figure": results_figure,
             "drops_display": display,
             "average": average,
             "tail_curve": tail_curve,
@@ -681,6 +698,277 @@ class Dashboard:
             "tail_fit_period_selection": tail_fit_period_selection or [],
             "tail_fit_period_display": fit_period_display,
             "last_updated": timestamp,
+        }
+
+    def _build_visual_cache_key(
+        self,
+        drop_store: Optional[List[List[str | int]]],
+        average: Optional[str],
+        tail_attachment_age: Optional[int],
+        tail_curve: Optional[str],
+        tail_fit_period_selection: Optional[List[int]],
+    ) -> str:
+        return self._build_results_cache_key(
+            drop_store,
+            average,
+            tail_attachment_age,
+            tail_curve,
+            tail_fit_period_selection,
+            bf_apriori_by_uwy=None,
+        )
+
+    def _cache_get(self, cache: dict[str, dict], key: str) -> Optional[dict]:
+        cached_value = cache.get(key)
+        if cached_value is None:
+            return None
+        cache.pop(key, None)
+        cache[key] = cached_value
+        return deepcopy(cached_value)
+
+    def _cache_set(self, cache: dict[str, dict], key: str, value: dict) -> None:
+        cache.pop(key, None)
+        cache[key] = deepcopy(value)
+        while len(cache) > self._cache_max_entries:
+            oldest_key = next(iter(cache))
+            cache.pop(oldest_key, None)
+
+    def _get_or_build_cached_figure(
+        self,
+        *,
+        cache: dict[str, dict],
+        cache_key: str,
+        label: str,
+        builder: Callable[[], dict],
+    ) -> dict:
+        started = time.perf_counter()
+        cached_figure = self._cache_get(cache, cache_key)
+        if cached_figure is not None:
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            logging.info("%s reused in %.0f ms", label, elapsed_ms)
+            return cached_figure
+
+        figure_dict = builder()
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        logging.info("%s built in %.0f ms", label, elapsed_ms)
+        self._cache_set(cache, cache_key, figure_dict)
+        return figure_dict
+
+    def _hash_dataframe(self, frame: pd.DataFrame) -> str:
+        hasher = hashlib.blake2b(digest_size=16)
+        hasher.update(str(frame.shape).encode("utf-8"))
+        for value in frame.index:
+            hasher.update(str(value).encode("utf-8"))
+            hasher.update(b"|")
+        for value in frame.columns:
+            hasher.update(str(value).encode("utf-8"))
+            hasher.update(b"|")
+        values = np.ascontiguousarray(frame.to_numpy(dtype=float, copy=False))
+        hasher.update(values.tobytes())
+        return hasher.hexdigest()
+
+    def _build_heatmap_core_cache_key(
+        self,
+        triangle_data: pd.DataFrame,
+        incurred_data: pd.DataFrame,
+        premium_data: pd.DataFrame,
+    ) -> str:
+        payload = {
+            "segment": self._get_segment_key(),
+            "triangle": self._hash_dataframe(triangle_data),
+            "incurred": self._hash_dataframe(incurred_data),
+            "premium": self._hash_dataframe(premium_data),
+        }
+        return json.dumps(payload, sort_keys=True)
+
+    def _format_millions_array(self, values: np.ndarray) -> np.ndarray:
+        formatted = np.full(values.shape, "", dtype=object)
+        valid_mask = ~np.isnan(values)
+        if not np.any(valid_mask):
+            return formatted
+
+        abs_values = np.abs(values)
+        millions_mask = valid_mask & (abs_values >= 1_000_000)
+        thousands_mask = valid_mask & (abs_values >= 1_000) & (~millions_mask)
+        units_mask = valid_mask & (~millions_mask) & (~thousands_mask)
+
+        if np.any(millions_mask):
+            formatted[millions_mask] = np.char.mod(
+                "%.2fm",
+                values[millions_mask] / 1_000_000,
+            )
+        if np.any(thousands_mask):
+            formatted[thousands_mask] = np.char.mod(
+                "%.2fk",
+                values[thousands_mask] / 1_000,
+            )
+        if np.any(units_mask):
+            formatted[units_mask] = np.char.mod("%.0f", values[units_mask])
+        return formatted
+
+    def _build_triangle_customdata(
+        self,
+        expanded_triangle: pd.DataFrame,
+        incurred_data: pd.DataFrame,
+        premium_data: pd.DataFrame,
+    ) -> np.ndarray:
+        row_keys: list[object] = []
+        year_to_incurred_index: dict[int, object] = {}
+        for idx in incurred_data.index:
+            if hasattr(idx, "year"):
+                year_to_incurred_index.setdefault(int(idx.year), idx)
+
+        for tri_idx in expanded_triangle.index:
+            if isinstance(tri_idx, str):
+                row_keys.append(None)
+                continue
+            if hasattr(tri_idx, "year"):
+                year = int(tri_idx.year)
+            else:
+                tri_text = str(tri_idx)
+                try:
+                    year = int(tri_text[:4])
+                except (TypeError, ValueError):
+                    row_keys.append(None)
+                    continue
+            row_keys.append(year_to_incurred_index.get(year))
+
+        invalid_column = "__invalid_dev_label__"
+        left_columns: list[object] = []
+        right_columns: list[object] = []
+        valid_dev_columns = np.zeros(len(expanded_triangle.columns), dtype=bool)
+        for j, col in enumerate(expanded_triangle.columns):
+            try:
+                parts = str(col).split("-")
+                left_columns.append(int(parts[0]))
+                right_columns.append(int(parts[1]))
+                valid_dev_columns[j] = True
+            except (TypeError, ValueError, IndexError):
+                left_columns.append(invalid_column)
+                right_columns.append(invalid_column)
+
+        aligned_incurred = incurred_data.reindex(index=row_keys)
+        aligned_premium = premium_data.reindex(index=row_keys)
+
+        left_values = aligned_incurred.reindex(columns=left_columns).to_numpy(
+            dtype=float
+        )
+        right_values = aligned_incurred.reindex(columns=right_columns).to_numpy(
+            dtype=float
+        )
+        premium_values = aligned_premium.reindex(columns=left_columns).to_numpy(
+            dtype=float
+        )
+
+        column_mask = np.broadcast_to(
+            valid_dev_columns.reshape(1, -1),
+            left_values.shape,
+        )
+        has_left = (~np.isnan(left_values)) & column_mask
+        has_right = (~np.isnan(right_values)) & column_mask
+        has_premium = (~np.isnan(premium_values)) & column_mask
+
+        left_display = self._format_millions_array(left_values)
+        right_display = self._format_millions_array(right_values)
+        premium_display = self._format_millions_array(premium_values)
+
+        incurred_display = np.full(left_values.shape, "", dtype=object)
+        both_mask = has_left & has_right
+        left_only_mask = has_left & (~has_right)
+        if np.any(both_mask):
+            merged = np.char.add(
+                np.char.add(left_display.astype(str), " --> "),
+                right_display.astype(str),
+            )
+            incurred_display[both_mask] = merged[both_mask]
+        if np.any(left_only_mask):
+            incurred_display[left_only_mask] = left_display[left_only_mask]
+
+        premium_strings = np.full(premium_values.shape, "", dtype=object)
+        if np.any(has_premium):
+            premium_strings[has_premium] = premium_display[has_premium]
+
+        return np.stack([incurred_display, premium_strings], axis=-1)
+
+    def _build_heatmap_core(
+        self,
+        triangle_data: pd.DataFrame,
+        incurred_data: pd.DataFrame,
+        premium_data: pd.DataFrame,
+        reserving: Reserving,
+    ) -> dict:
+        raw_link_ratios = (
+            reserving._triangle.get_triangle().link_ratio["incurred"].to_frame()
+        )
+        raw_link_ratios = raw_link_ratios.reindex(
+            index=triangle_data.index,
+            columns=triangle_data.columns,
+        )
+        dropped_mask = triangle_data.isna() & raw_link_ratios.notna()
+        for summary_row in ("LDF", "Tail"):
+            if summary_row in dropped_mask.index:
+                dropped_mask.loc[summary_row, :] = False
+        expanded_triangle = triangle_data.fillna(raw_link_ratios)
+
+        link_ratio_row_positions = list(range(max(len(expanded_triangle.index) - 2, 0)))
+        ldf_tail_rows = expanded_triangle.index[-2:]
+
+        normalized_data = expanded_triangle.copy()
+        for col_idx in range(len(expanded_triangle.columns)):
+            col_series = expanded_triangle.iloc[link_ratio_row_positions, col_idx]
+            col_data = col_series.dropna()
+            if len(col_data) == 0:
+                continue
+            col_min = col_data.min()
+            col_max = col_data.max()
+            if col_max > col_min:
+                normalized_values = (col_series - col_min) / (col_max - col_min)
+                normalized_data.iloc[link_ratio_row_positions, col_idx] = (
+                    normalized_values.to_numpy()
+                )
+            else:
+                normalized_data.iloc[link_ratio_row_positions, col_idx] = 0.5
+
+        ldf_tail_data = expanded_triangle.loc[ldf_tail_rows]
+        ldf_tail_min = ldf_tail_data.min().min()
+        ldf_tail_max = ldf_tail_data.max().max()
+
+        if ldf_tail_max > ldf_tail_min and ldf_tail_min > 0:
+            log_min = np.log(ldf_tail_min)
+            log_max = np.log(ldf_tail_max)
+            denom = log_max - log_min
+            for row in ldf_tail_rows:
+                row_values = expanded_triangle.loc[row]
+                row_mask = row_values.notna()
+                if row_mask.any():
+                    normalized_data.loc[row, row_mask] = (
+                        np.log(row_values[row_mask]) - log_min
+                    ) / denom
+        else:
+            for row in ldf_tail_rows:
+                row_values = expanded_triangle.loc[row]
+                row_mask = row_values.notna()
+                if row_mask.any():
+                    normalized_data.loc[row, row_mask] = 0.5
+
+        text_values = expanded_triangle.round(3).astype(str).to_numpy(dtype=object)
+        text_values = np.where(text_values == "nan", "", text_values)
+
+        z_data = normalized_data.to_numpy(dtype=float, copy=True)
+        expanded_values = expanded_triangle.to_numpy(dtype=float)
+        z_data = np.where(np.isnan(expanded_values), np.nan, z_data)
+
+        customdata = self._build_triangle_customdata(
+            expanded_triangle,
+            incurred_data,
+            premium_data,
+        )
+
+        return {
+            "expanded_triangle": expanded_triangle,
+            "dropped_mask": dropped_mask,
+            "z_data": z_data,
+            "text_values": text_values,
+            "customdata": customdata,
         }
 
     def _build_results_cache_key(
@@ -820,10 +1108,12 @@ class Dashboard:
             tail_fit_period_selection,
             bf_apriori_by_uwy,
         )
-        cached_payload = None if force_recalc else self._results_cache.get(cache_key)
+        cached_payload = (
+            None if force_recalc else self._cache_get(self._payload_cache, cache_key)
+        )
         if cached_payload is not None:
             logging.info("Using cached reserving payload for current parameters")
-            return deepcopy(cached_payload)
+            return cached_payload
 
         fit_period = self._derive_tail_fit_period(tail_fit_period_selection)
         started = time.perf_counter()
@@ -845,11 +1135,12 @@ class Dashboard:
             tail_attachment_age=tail_attachment_age,
             tail_curve=tail_curve,
             tail_fit_period_selection=tail_fit_period_selection,
+            bf_apriori_by_uwy=bf_apriori_by_uwy,
         )
         payload_elapsed_ms = (time.perf_counter() - payload_started) * 1000
         logging.info("Payload build completed in %.0f ms", payload_elapsed_ms)
         payload["cache_key"] = cache_key
-        self._results_cache[cache_key] = deepcopy(payload)
+        self._cache_set(self._payload_cache, cache_key, payload)
         return payload
 
     def _register_callbacks(self) -> None:
@@ -2004,6 +2295,7 @@ class Dashboard:
         Returns:
             Plotly Figure object
         """
+        figure_started = time.perf_counter()
         if triangle_data is None:
             return go.Figure(
                 layout=go.Layout(
@@ -2026,161 +2318,32 @@ class Dashboard:
                 )
             )
 
-        # Get raw triangle data to include dropped link ratios
-        raw_link_ratios = (
-            reserving._triangle.get_triangle().link_ratio["incurred"].to_frame()
+        core_started = time.perf_counter()
+        core_cache_key = self._build_heatmap_core_cache_key(
+            triangle_data,
+            incurred_data,
+            premium_data,
         )
-        # Align raw with processed triangle
-        raw_link_ratios = raw_link_ratios.reindex(
-            index=triangle_data.index, columns=triangle_data.columns
-        )
-        dropped_mask = triangle_data.isna() & raw_link_ratios.notna()
-        for summary_row in ("LDF", "Tail"):
-            if summary_row in dropped_mask.index:
-                dropped_mask.loc[summary_row, :] = False
-        expanded_triangle = triangle_data.fillna(raw_link_ratios)
-
-        # Separate link ratios from LDF/Tail rows
-        link_ratio_rows = expanded_triangle.index[:-2]  # All except last 2
-        ldf_tail_rows = expanded_triangle.index[-2:]  # Last 2: LDF and Tail
-        link_ratio_row_positions = list(range(max(len(expanded_triangle.index) - 2, 0)))
-
-        # Column-wise normalization for link ratios
-        normalized_data = expanded_triangle.copy()
-        for col_idx, col in enumerate(expanded_triangle.columns):
-            col_series = expanded_triangle.iloc[link_ratio_row_positions, col_idx]
-            col_data = col_series.dropna()
-            if len(col_data) > 0:
-                col_min = col_data.min()
-                col_max = col_data.max()
-                if col_max > col_min:
-                    normalized_values = (col_series - col_min) / (col_max - col_min)
-                    normalized_data.iloc[link_ratio_row_positions, col_idx] = (
-                        normalized_values.to_numpy()
-                    )
-                else:
-                    normalized_data.iloc[link_ratio_row_positions, col_idx] = 0.5
-
-        # Global logarithmic normalization for LDF and Tail rows
-        ldf_tail_data = expanded_triangle.loc[ldf_tail_rows]
-        ldf_tail_min = ldf_tail_data.min().min()
-        ldf_tail_max = ldf_tail_data.max().max()
-
-        if ldf_tail_max > ldf_tail_min and ldf_tail_min > 0:
-            log_min = np.log(ldf_tail_min)
-            log_max = np.log(ldf_tail_max)
-            for col in expanded_triangle.columns:
-                for row in ldf_tail_rows:
-                    if not pd.isna(expanded_triangle.loc[row, col]):
-                        normalized_data.loc[row, col] = (
-                            np.log(expanded_triangle.loc[row, col]) - log_min
-                        ) / (log_max - log_min)
+        core_payload = self._cache_get(self._heatmap_core_cache, core_cache_key)
+        if core_payload is None:
+            core_payload = self._build_heatmap_core(
+                triangle_data,
+                incurred_data,
+                premium_data,
+                reserving,
+            )
+            self._cache_set(self._heatmap_core_cache, core_cache_key, core_payload)
+            core_elapsed_ms = (time.perf_counter() - core_started) * 1000
+            logging.info("Triangle heatmap core built in %.0f ms", core_elapsed_ms)
         else:
-            # If all LDF/Tail values are the same, set to mid-range
-            for col in expanded_triangle.columns:
-                for row in ldf_tail_rows:
-                    if not pd.isna(expanded_triangle.loc[row, col]):
-                        normalized_data.loc[row, col] = 0.5
+            core_elapsed_ms = (time.perf_counter() - core_started) * 1000
+            logging.info("Triangle heatmap core reused in %.0f ms", core_elapsed_ms)
 
-        # Set dropped link ratios to special z-value for unique color
-        # normalized_data[dropped_mask] = -1  # Removed for boundary approach
-
-        # Format text to hide NaN values
-        text_values = expanded_triangle.round(3).astype(str).values
-        # Replace 'nan' strings with empty strings
-        text_values = np.where(text_values == "nan", "", text_values)
-
-        # Create a mask for NaN values to prevent them from being colored
-        z_data = normalized_data.values.copy()
-        z_data = np.where(np.isnan(expanded_triangle.values), np.nan, z_data)
-
-        # Prepare customdata for hover: align incurred and premium with link ratio columns
-        # Link ratio columns are like '3-6', '6-9' (strings), incurred columns are integers like 3, 6, 9
-        # Show both left and right end: for '6-9', show incurred at 6 and at 9
-        customdata_incurred = np.empty(
-            (len(triangle_data.index), len(triangle_data.columns)), dtype=object
-        )
-        customdata_premium = np.empty(
-            (len(triangle_data.index), len(triangle_data.columns)), dtype=object
-        )
-
-        # Convert triangle index to match incurred index (convert Period to year)
-        triangle_idx_to_incurred_idx = {}
-        for tri_idx in expanded_triangle.index:
-            if isinstance(tri_idx, str):
-                # LDF and Tail rows - no match in incurred data
-                triangle_idx_to_incurred_idx[tri_idx] = None
-            else:
-                # Convert Period to year and find matching Timestamp in incurred data
-                year = (
-                    tri_idx.year if hasattr(tri_idx, "year") else int(str(tri_idx)[:4])
-                )
-                for inc_idx in incurred_data.index:
-                    if inc_idx.year == year:
-                        triangle_idx_to_incurred_idx[tri_idx] = inc_idx
-                        break
-
-        # Fill customdata for all rows
-        matches_found = 0
-        for i, row_idx in enumerate(expanded_triangle.index):
-            # Get corresponding incurred index
-            incurred_idx = triangle_idx_to_incurred_idx.get(row_idx)
-
-            for j, col in enumerate(expanded_triangle.columns):
-                # Extract left and right values from link ratio column (e.g., '6-9' -> 6, 9)
-                try:
-                    parts = col.split("-")
-                    left_period = int(parts[0])
-                    right_period = int(parts[1])
-                except (ValueError, AttributeError, IndexError):
-                    # If not in expected format, skip
-                    customdata_incurred[i, j] = ""
-                    customdata_premium[i, j] = ""
-                    continue
-
-                # Try to get incurred values for both left and right periods
-                if incurred_idx is not None and incurred_idx in incurred_data.index:
-                    left_val = None
-                    right_val = None
-
-                    if left_period in incurred_data.columns:
-                        left_val = incurred_data.loc[incurred_idx, left_period]
-                        matches_found += 1
-
-                    if right_period in incurred_data.columns:
-                        right_val = incurred_data.loc[incurred_idx, right_period]
-
-                    # Format as "left_value --> right_value"
-                    if not bool(pd.isna(left_val)) and not bool(pd.isna(right_val)):
-                        customdata_incurred[i, j] = (
-                            f"{format_to_millions(left_val)} --> {format_to_millions(right_val)}"
-                        )
-                    elif not bool(pd.isna(left_val)):
-                        customdata_incurred[i, j] = format_to_millions(left_val)
-                    else:
-                        customdata_incurred[i, j] = ""
-                else:
-                    customdata_incurred[i, j] = ""
-
-                # Try to get premium value (use left period, premium is stable)
-                if (
-                    incurred_idx is not None
-                    and incurred_idx in premium_data.index
-                    and left_period in premium_data.columns
-                ):
-                    prem_val = premium_data.loc[incurred_idx, left_period]
-                    customdata_premium[i, j] = format_to_millions(prem_val)
-                else:
-                    customdata_premium[i, j] = ""
-
-        import logging
-
-        logging.info(
-            f"Matches found for incurred data: {matches_found} out of {len(expanded_triangle.index) * len(expanded_triangle.columns)}"
-        )
-
-        # Stack customdata arrays
-        customdata = np.stack([customdata_incurred, customdata_premium], axis=-1)
+        expanded_triangle = core_payload["expanded_triangle"]
+        dropped_mask = core_payload["dropped_mask"]
+        z_data = core_payload["z_data"]
+        text_values = core_payload["text_values"]
+        customdata = core_payload["customdata"]
 
         # Calculate figure dimensions based on cell size
         n_cols = len(expanded_triangle.columns)
@@ -2376,6 +2539,8 @@ class Dashboard:
                             yref="y",
                         )
 
+        total_elapsed_ms = (time.perf_counter() - figure_started) * 1000
+        logging.info("Triangle heatmap total built in %.0f ms", total_elapsed_ms)
         return fig
 
     def _plot_triangle_heatmap(
@@ -2408,15 +2573,44 @@ class Dashboard:
         """
         Plot chainladder heatmap with cleaner, table-like styling.
         """
-        fig = self._create_triangle_heatmap(
+        render_started = time.perf_counter()
+        core_cache_key = self._build_heatmap_core_cache_key(
             triangle_data,
             self.incurred,
             self.premium,
-            title,
-            self._reserving,
-            tail_attachment_age,
-            tail_fit_period_selection,
         )
+        core_payload = self._cache_get(self._heatmap_core_cache, core_cache_key)
+        if core_payload is None:
+            core_payload = self._build_heatmap_core(
+                triangle_data,
+                self.incurred,
+                self.premium,
+                self._reserving,
+            )
+            self._cache_set(self._heatmap_core_cache, core_cache_key, core_payload)
+            core_elapsed_ms = (time.perf_counter() - render_started) * 1000
+            logging.info(
+                "Triangle heatmap core built for clean view in %.0f ms",
+                core_elapsed_ms,
+            )
+        else:
+            core_elapsed_ms = (time.perf_counter() - render_started) * 1000
+            logging.info(
+                "Triangle heatmap core reused for clean view in %.0f ms",
+                core_elapsed_ms,
+            )
+
+        expanded_triangle = core_payload["expanded_triangle"]
+        dropped_mask = core_payload["dropped_mask"]
+        z_data = core_payload["z_data"]
+        text_values = core_payload["text_values"]
+        customdata = core_payload["customdata"]
+
+        x_labels = [str(value) for value in expanded_triangle.columns]
+        y_labels = [
+            str(idx)[:4] if idx not in ["LDF", "Tail"] else str(idx)
+            for idx in expanded_triangle.index
+        ]
 
         n_cols = len(triangle_data.columns)
         n_rows = len(triangle_data.index)
@@ -2424,49 +2618,32 @@ class Dashboard:
         table_height = min(760, 170 + (n_rows * 28))
         header_bg_value = -0.2
 
-        heatmap_trace = next(
-            (trace for trace in fig.data if isinstance(trace, go.Heatmap)),
-            None,
+        z_with_headers = np.full(
+            (len(y_labels) + 1, len(x_labels) + 1),
+            header_bg_value,
+            dtype=float,
         )
-        if heatmap_trace is not None:
-            x_labels = [str(value) for value in heatmap_trace.x]
-            y_labels = [str(value) for value in heatmap_trace.y]
-            z_values = np.array(heatmap_trace.z, dtype=float)
-            text_values = np.array(heatmap_trace.text, dtype=object)
+        z_with_headers[1:, 1:] = z_data
 
-            if heatmap_trace.customdata is None:
-                custom_values = np.empty(
-                    (len(y_labels), len(x_labels), 2), dtype=object
-                )
-                custom_values[:] = ""
-            else:
-                custom_values = np.array(heatmap_trace.customdata, dtype=object)
+        text_with_headers = np.full(
+            (len(y_labels) + 1, len(x_labels) + 1),
+            "",
+            dtype=object,
+        )
+        text_with_headers[0, 0] = "<b>UWY</b>"
+        text_with_headers[0, 1:] = [f"<b>{label}</b>" for label in x_labels]
+        text_with_headers[1:, 0] = [f"<b>{label}</b>" for label in y_labels]
+        text_with_headers[1:, 1:] = text_values
 
-            z_with_headers = np.full(
-                (len(y_labels) + 1, len(x_labels) + 1),
-                header_bg_value,
-                dtype=float,
-            )
-            z_with_headers[1:, 1:] = z_values
+        custom_with_headers = np.empty(
+            (len(y_labels) + 1, len(x_labels) + 1, 2),
+            dtype=object,
+        )
+        custom_with_headers[:] = ""
+        custom_with_headers[1:, 1:] = customdata
 
-            text_with_headers = np.full(
-                (len(y_labels) + 1, len(x_labels) + 1),
-                "",
-                dtype=object,
-            )
-            text_with_headers[0, 0] = "<b>UWY</b>"
-            text_with_headers[0, 1:] = [f"<b>{label}</b>" for label in x_labels]
-            text_with_headers[1:, 0] = [f"<b>{label}</b>" for label in y_labels]
-            text_with_headers[1:, 1:] = text_values
-
-            custom_with_headers = np.empty(
-                (len(y_labels) + 1, len(x_labels) + 1, 2),
-                dtype=object,
-            )
-            custom_with_headers[:] = ""
-            custom_with_headers[1:, 1:] = custom_values
-
-            heatmap_trace.update(
+        fig = go.Figure(
+            data=go.Heatmap(
                 z=z_with_headers,
                 x=["UWY"] + x_labels,
                 y=["Dev"] + y_labels,
@@ -2478,38 +2655,163 @@ class Dashboard:
                 zmin=header_bg_value,
                 zmax=1,
                 hoverongaps=False,
+                colorscale=[
+                    [0.0, "#f2f5f9"],
+                    [0.1666, "#f2f5f9"],
+                    [0.1667, "#f5f8fc"],
+                    [0.375, "#e7eff9"],
+                    [0.5833, "#d7e5f5"],
+                    [0.7916, "#bdd2ec"],
+                    [1.0, "#9bbbe0"],
+                ],
+                textfont={
+                    "size": HEATMAP_TEXT_FONT_SIZE,
+                    "family": FONT_FAMILY,
+                    "color": COLOR_TEXT,
+                },
+                xgap=1,
+                ygap=1,
+            )
+        )
+
+        shape_defs: list[dict[str, object]] = []
+
+        for row_label, col_label in dropped_mask.stack()[dropped_mask.stack()].index:
+            row_pos = expanded_triangle.index.get_loc(row_label) + 1
+            col_pos = expanded_triangle.columns.get_loc(col_label) + 1
+            shape_defs.append(
+                {
+                    "type": "line",
+                    "x0": col_pos - 0.5,
+                    "y0": row_pos - 0.5,
+                    "x1": col_pos + 0.5,
+                    "y1": row_pos + 0.5,
+                    "line": {"color": "black", "width": 2},
+                    "xref": "x",
+                    "yref": "y",
+                }
+            )
+            shape_defs.append(
+                {
+                    "type": "line",
+                    "x0": col_pos - 0.5,
+                    "y0": row_pos + 0.5,
+                    "x1": col_pos + 0.5,
+                    "y1": row_pos - 0.5,
+                    "line": {"color": "black", "width": 2},
+                    "xref": "x",
+                    "yref": "y",
+                }
             )
 
-            shifted_shapes = []
-            for shape in fig.layout.shapes or []:
-                shape_json = shape.to_plotly_json()
-                for coord in ["x0", "x1", "y0", "y1"]:
-                    value = shape_json.get(coord)
-                    if isinstance(value, (int, float, np.integer, np.floating)):
-                        shape_json[coord] = float(value) + 1.0
-                shifted_shapes.append(shape_json)
-            fig.update_layout(shapes=shifted_shapes)
+        if tail_attachment_age is not None:
+            try:
+                tail_row_pos = expanded_triangle.index.get_loc("Tail") + 1
+            except KeyError:
+                tail_row_pos = None
 
-        fig.update_traces(
-            selector=dict(type="heatmap"),
-            colorscale=[
-                [0.0, "#f2f5f9"],
-                [0.1666, "#f2f5f9"],
-                [0.1667, "#f5f8fc"],
-                [0.375, "#e7eff9"],
-                [0.5833, "#d7e5f5"],
-                [0.7916, "#bdd2ec"],
-                [1.0, "#9bbbe0"],
-            ],
-            textfont={
-                "size": HEATMAP_TEXT_FONT_SIZE,
-                "family": FONT_FAMILY,
-                "color": COLOR_TEXT,
-            },
-            xgap=1,
-            ygap=1,
-            hoverongaps=False,
-        )
+            if tail_row_pos is not None:
+                selected_col = None
+                for col in expanded_triangle.columns:
+                    col_age = self._parse_dev_label(col)
+                    if col_age == tail_attachment_age:
+                        selected_col = col
+                        break
+
+                if selected_col is not None:
+                    col_pos = expanded_triangle.columns.get_loc(selected_col) + 1
+                    shape_defs.append(
+                        {
+                            "type": "rect",
+                            "x0": col_pos - 0.5,
+                            "y0": tail_row_pos - 0.5,
+                            "x1": col_pos + 0.5,
+                            "y1": tail_row_pos + 0.5,
+                            "line": {"color": "black", "width": 2},
+                            "fillcolor": "rgba(0,0,0,0)",
+                            "xref": "x",
+                            "yref": "y",
+                        }
+                    )
+
+        fit_period = self._derive_tail_fit_period(tail_fit_period_selection)
+        if fit_period is not None:
+            try:
+                ldf_row_pos = expanded_triangle.index.get_loc("LDF") + 1
+            except KeyError:
+                ldf_row_pos = None
+
+            if ldf_row_pos is not None:
+                lower_value, upper_value = fit_period
+                lower_col = None
+                upper_col = None
+                for col in expanded_triangle.columns:
+                    col_age = self._parse_dev_label(col)
+                    if col_age == lower_value:
+                        lower_col = col
+                    if upper_value is not None and col_age == upper_value:
+                        upper_col = col
+
+                if lower_col is not None:
+                    lower_pos = expanded_triangle.columns.get_loc(lower_col) + 1
+                    if upper_value is None or upper_col is None:
+                        shape_defs.append(
+                            {
+                                "type": "rect",
+                                "x0": lower_pos - 0.5,
+                                "y0": ldf_row_pos - 0.5,
+                                "x1": lower_pos + 0.5,
+                                "y1": ldf_row_pos + 0.5,
+                                "line": {"color": "black", "width": 2},
+                                "fillcolor": "rgba(0,0,0,0)",
+                                "xref": "x",
+                                "yref": "y",
+                            }
+                        )
+                    else:
+                        upper_pos = expanded_triangle.columns.get_loc(upper_col) + 1
+                        start_pos = min(lower_pos, upper_pos)
+                        end_pos = max(lower_pos, upper_pos)
+                        shape_defs.append(
+                            {
+                                "type": "rect",
+                                "x0": start_pos - 0.5,
+                                "y0": ldf_row_pos - 0.5,
+                                "x1": end_pos + 0.5,
+                                "y1": ldf_row_pos + 0.5,
+                                "line": {"color": "black", "width": 2},
+                                "fillcolor": "rgba(0,0,0,0)",
+                                "xref": "x",
+                                "yref": "y",
+                            }
+                        )
+                        shape_defs.append(
+                            {
+                                "type": "rect",
+                                "x0": lower_pos - 0.5,
+                                "y0": ldf_row_pos - 0.5,
+                                "x1": lower_pos + 0.5,
+                                "y1": ldf_row_pos + 0.5,
+                                "line": {"color": "black", "width": 3},
+                                "fillcolor": "rgba(0,0,0,0)",
+                                "xref": "x",
+                                "yref": "y",
+                            }
+                        )
+                        shape_defs.append(
+                            {
+                                "type": "rect",
+                                "x0": upper_pos - 0.5,
+                                "y0": ldf_row_pos - 0.5,
+                                "x1": upper_pos + 0.5,
+                                "y1": ldf_row_pos + 0.5,
+                                "line": {"color": "black", "width": 3},
+                                "fillcolor": "rgba(0,0,0,0)",
+                                "xref": "x",
+                                "yref": "y",
+                            }
+                        )
+
         fig.update_layout(
             paper_bgcolor=COLOR_SURFACE,
             plot_bgcolor=COLOR_SURFACE,
@@ -2538,6 +2840,8 @@ class Dashboard:
             autosize=False,
             xaxis_title=None,
             yaxis_title=None,
+            shapes=shape_defs,
+            uirevision="static",
         )
         fig.update_xaxes(
             showgrid=False,
@@ -2548,8 +2852,11 @@ class Dashboard:
         fig.update_yaxes(
             showgrid=False,
             showticklabels=False,
+            autorange="reversed",
         )
 
+        total_elapsed_ms = (time.perf_counter() - render_started) * 1000
+        logging.info("Triangle heatmap clean built in %.0f ms", total_elapsed_ms)
         return fig
 
     def _create_layout(self):
@@ -2568,6 +2875,7 @@ class Dashboard:
             tail_attachment_age=self._default_tail_attachment_age,
             tail_curve=self._default_tail_curve,
             tail_fit_period_selection=self._default_tail_fit_period_selection,
+            bf_apriori_by_uwy=self._bf_rows_to_mapping(self._default_bf_apriori_rows),
         )
         initial_sync_version = 0
         if self._config is not None:
@@ -2577,24 +2885,6 @@ class Dashboard:
         existing_payload = _LIVE_RESULTS_BY_SEGMENT.get(segment_key)
         if existing_payload:
             results_payload = existing_payload
-        if self._default_tail_fit_period_selection:
-            fit_period = self._derive_tail_fit_period(
-                self._default_tail_fit_period_selection
-            )
-            if fit_period is None:
-                fit_period_display = "lower=None, upper=None"
-            else:
-                fit_period_display = f"lower={fit_period[0]}, upper={fit_period[1]}"
-            results_payload["tail_fit_period_selection"] = (
-                self._default_tail_fit_period_selection
-            )
-            results_payload["tail_fit_period_display"] = fit_period_display
-            results_payload["triangle_figure"] = self._plot_triangle_heatmap_clean(
-                self.triangle,
-                "Triangle - Link Ratios",
-                self._default_tail_attachment_age,
-                self._default_tail_fit_period_selection,
-            ).to_dict()
         _LIVE_RESULTS_BY_SEGMENT[segment_key] = results_payload
         initial_data_triangle, initial_data_weights, initial_ratio_mode = (
             self._build_data_tab_display(
