@@ -1,6 +1,14 @@
-from source.reserving import Reserving
-from source.config_manager import ConfigManager
+import json
+import logging
+from datetime import datetime
+from pathlib import Path
 from typing import Optional, List, Tuple
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objs as go
+from source.config_manager import ConfigManager
+from source.reserving import Reserving
 from dash import (
     Dash,
     dcc,
@@ -9,14 +17,10 @@ from dash import (
     Output,
     State,
     callback_context,
+    clientside_callback,
     no_update,
     dash_table,
 )
-from datetime import datetime
-import plotly.graph_objs as go
-import pandas as pd
-import logging
-import numpy as np
 
 
 _LIVE_RESULTS_BY_SEGMENT: dict[str, dict] = {}
@@ -78,8 +82,10 @@ class Dashboard:
         """
         self._reserving = reserving
         self._config = config
+        assets_folder = Path(__file__).resolve().parent.parent / "assets"
         self.app = Dash(
             __name__,
+            assets_folder=str(assets_folder),
             suppress_callback_exceptions=True,
             external_stylesheets=[
                 "https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap",
@@ -112,12 +118,7 @@ class Dashboard:
             "tail_curve",
             self._default_tail_curve,
         )
-        raw_drops = session.get("drops", []) or []
-        normalized: List[List[str | int]] = []
-        for item in raw_drops:
-            if isinstance(item, (list, tuple)) and len(item) == 2:
-                normalized.append([item[0], item[1]])
-        self._default_drop_store = normalized
+        self._default_drop_store = self._normalize_drop_store(session.get("drops"))
         tail_attachment_age = session.get("tail_attachment_age")
         if tail_attachment_age is not None:
             try:
@@ -135,6 +136,34 @@ class Dashboard:
         if self._config is None:
             return "default"
         return self._config.get_segment()
+
+    def _normalize_drop_store(self, raw: object) -> List[List[str | int]]:
+        normalized: List[List[str | int]] = []
+        if not isinstance(raw, list):
+            return normalized
+        for item in raw:
+            if not isinstance(item, (list, tuple)) or len(item) != 2:
+                continue
+            origin, dev = item[0], item[1]
+            try:
+                normalized.append([str(origin), int(dev)])
+            except (TypeError, ValueError):
+                continue
+        return normalized
+
+    def _parse_sync_payload(self, raw_payload: object) -> Optional[dict[str, object]]:
+        if not raw_payload:
+            return None
+        if isinstance(raw_payload, dict):
+            payload = raw_payload
+        else:
+            try:
+                payload = json.loads(str(raw_payload))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return None
+        if not isinstance(payload, dict):
+            return None
+        return payload
 
     def _extract_data(self):
         """Extract data from domain objects and store as instance variables."""
@@ -651,6 +680,51 @@ class Dashboard:
         }
 
     def _register_callbacks(self) -> None:
+        clientside_callback(
+            """
+            function(userKey) {
+                if (!userKey) {
+                    return false;
+                }
+                return Boolean(window.ReservingTabSync);
+            }
+            """,
+            Output("sync-ready", "data"),
+            Input("sync-user-key", "data"),
+        )
+
+        clientside_callback(
+            """
+            function(userKey, tabId) {
+                if (!window.ReservingTabSync) {
+                    return tabId || "";
+                }
+                return window.ReservingTabSync.configure(userKey || "default", tabId || null);
+            }
+            """,
+            Output("sync-tab-id", "data"),
+            Input("sync-user-key", "data"),
+            State("sync-tab-id", "data"),
+        )
+
+        clientside_callback(
+            """
+            function(message, userKey, tabId) {
+                if (!message || !window.ReservingTabSync) {
+                    return window.dash_clientside.no_update;
+                }
+                window.ReservingTabSync.configure(userKey || "default", tabId || null);
+                window.ReservingTabSync.publish(message);
+                return window.dash_clientside.no_update;
+            }
+            """,
+            Output("sync-publish-signal", "children"),
+            Input("sync-publish-message", "data"),
+            State("sync-user-key", "data"),
+            State("sync-tab-id", "data"),
+            prevent_initial_call=True,
+        )
+
         @self.app.callback(
             Output("active-tab", "data"),
             Input("nav-data", "n_clicks"),
@@ -964,14 +1038,16 @@ class Dashboard:
 
         @self.app.callback(
             Output("results-store", "data"),
+            Output("sync-publish-message", "data"),
             Input("drop-store", "data"),
             Input("tail-attachment-store", "data"),
             Input("tail-fit-period-store", "data"),
             Input("average-method", "value"),
             Input("tail-method", "value"),
             Input("bf-apriori-table", "data"),
-            Input("sync-interval", "n_intervals"),
+            Input("sync-inbox", "value"),
             State("results-store", "data"),
+            State("sync-ready", "data"),
         )
         def _update_results(
             drop_store,
@@ -980,26 +1056,101 @@ class Dashboard:
             average,
             tail_curve,
             bf_apriori_rows,
-            _n_intervals,
+            sync_inbox,
             current_payload,
+            sync_ready,
         ):
             ctx = callback_context
             if not ctx.triggered:
-                return current_payload
+                return current_payload, no_update
 
             trigger = ctx.triggered[0]["prop_id"].split(".")[0]
-            if trigger == "sync-interval":
+            if trigger == "sync-inbox":
+                message = self._parse_sync_payload(sync_inbox)
+                if not message:
+                    logging.debug("Ignoring sync message: payload parsing failed")
+                    return no_update, no_update
+                if message.get("type") != "session_changed":
+                    logging.debug("Ignoring sync message: unsupported type")
+                    return no_update, no_update
+                if message.get("user_key") != self._get_segment_key():
+                    logging.debug("Ignoring sync message: user_key mismatch")
+                    return no_update, no_update
+
+                incoming_raw = message.get("sync_version", 0)
+                try:
+                    incoming_version = int(incoming_raw)
+                except (TypeError, ValueError):
+                    logging.debug("Ignoring sync message: invalid sync_version")
+                    return no_update, no_update
+
+                current_version = 0
+                if isinstance(current_payload, dict):
+                    try:
+                        current_version = int(current_payload.get("sync_version", 0))
+                    except (TypeError, ValueError):
+                        current_version = 0
+
+                if incoming_version <= current_version:
+                    logging.debug("Ignoring sync message: stale version")
+                    return no_update, no_update
+
+                if self._config is None:
+                    logging.debug("Ignoring sync message: config unavailable")
+                    return no_update, no_update
+
+                session = self._config.load_session()
+                average = session.get("average", self._default_average)
+                tail_curve = session.get("tail_curve", self._default_tail_curve)
+                drop_store = self._normalize_drop_store(session.get("drops"))
+
+                parsed_tail = None
+                tail_attachment_age = session.get("tail_attachment_age")
+                if tail_attachment_age is not None:
+                    try:
+                        parsed_tail = int(tail_attachment_age)
+                    except (TypeError, ValueError):
+                        parsed_tail = None
+
+                tail_fit_period_selection = self._normalize_tail_fit_selection(
+                    session.get("tail_fit_period")
+                )
+                bf_apriori_by_uwy = self._bf_rows_to_mapping(
+                    self._build_bf_apriori_rows(session.get("bf_apriori_by_uwy"))
+                )
+                fit_period = self._derive_tail_fit_period(tail_fit_period_selection)
+
+                try:
+                    self._apply_recalculation(
+                        average,
+                        self._drops_to_tuples(drop_store),
+                        parsed_tail,
+                        tail_curve,
+                        fit_period,
+                        bf_apriori_by_uwy,
+                    )
+                except Exception as exc:
+                    logging.error(
+                        f"Failed to apply remote sync update: {exc}",
+                        exc_info=True,
+                    )
+
+                results_payload = self._build_results_payload(
+                    drop_store=drop_store,
+                    average=average,
+                    tail_attachment_age=parsed_tail,
+                    tail_curve=tail_curve,
+                    tail_fit_period_selection=tail_fit_period_selection,
+                )
+                results_payload["sync_version"] = incoming_version
                 segment_key = self._get_segment_key()
-                latest_payload = _LIVE_RESULTS_BY_SEGMENT.get(segment_key)
-                if not latest_payload:
-                    return no_update
-                if not current_payload:
-                    return latest_payload
-                current_updated = current_payload.get("last_updated")
-                latest_updated = latest_payload.get("last_updated")
-                if latest_updated and latest_updated != current_updated:
-                    return latest_payload
-                return no_update
+                _LIVE_RESULTS_BY_SEGMENT[segment_key] = results_payload
+                logging.info(
+                    "Applied remote sync update for segment '%s' at version %s",
+                    segment_key,
+                    incoming_version,
+                )
+                return results_payload, no_update
 
             parsed_tail = None
             drops = self._drops_to_tuples(drop_store)
@@ -1025,8 +1176,9 @@ class Dashboard:
             except Exception as exc:
                 logging.error(f"Failed to recalculate reserving: {exc}", exc_info=True)
 
+            sync_version = 0
             if self._config is not None:
-                self._config.save_session(
+                sync_version = self._config.save_session_with_version(
                     {
                         "average": average,
                         "tail_curve": tail_curve,
@@ -1036,6 +1188,13 @@ class Dashboard:
                         "bf_apriori_by_uwy": bf_apriori_by_uwy,
                     }
                 )
+            elif isinstance(current_payload, dict):
+                try:
+                    sync_version = int(current_payload.get("sync_version", 0)) + 1
+                except (TypeError, ValueError):
+                    sync_version = 1
+            else:
+                sync_version = 1
 
             results_payload = self._build_results_payload(
                 drop_store=drop_store,
@@ -1044,17 +1203,29 @@ class Dashboard:
                 tail_curve=tail_curve,
                 tail_fit_period_selection=tail_fit_period_selection,
             )
+            results_payload["sync_version"] = sync_version
 
             segment_key = self._get_segment_key()
             _LIVE_RESULTS_BY_SEGMENT[segment_key] = results_payload
-            return results_payload
+            if not bool(sync_ready):
+                logging.warning(
+                    "Tab sync bridge unavailable; update applied only in current tab"
+                )
+            publish_message = {
+                "sync_version": sync_version,
+                "updated_at": results_payload.get("last_updated"),
+            }
+            logging.info(
+                "Publishing sync update for segment '%s' at version %s",
+                segment_key,
+                sync_version,
+            )
+            return results_payload, publish_message
 
         @self.app.callback(
             Output("triangle-heatmap", "figure"),
             Output("emergence-plot", "figure"),
             Output("results-table", "figure"),
-            Output("average-method", "value"),
-            Output("tail-method", "value"),
             Input("results-store", "data"),
         )
         def _hydrate_tabs(results_payload):
@@ -1074,16 +1245,12 @@ class Dashboard:
                         self.results,
                         "Reserving Results",
                     ),
-                    self._default_average,
-                    self._default_tail_curve,
                 )
 
             return (
                 results_payload.get("triangle_figure"),
                 results_payload.get("emergence_figure"),
                 results_payload.get("results_figure"),
-                results_payload.get("average", self._default_average),
-                results_payload.get("tail_curve", self._default_tail_curve),
             )
 
         @self.app.callback(
@@ -2007,6 +2174,10 @@ class Dashboard:
             tail_curve=self._default_tail_curve,
             tail_fit_period_selection=self._default_tail_fit_period_selection,
         )
+        initial_sync_version = 0
+        if self._config is not None:
+            initial_sync_version = self._config.get_sync_version()
+        results_payload["sync_version"] = initial_sync_version
         segment_key = self._get_segment_key()
         existing_payload = _LIVE_RESULTS_BY_SEGMENT.get(segment_key)
         if existing_payload:
@@ -2055,7 +2226,17 @@ class Dashboard:
                 dcc.Store(id="data-view-store", data="cumulative"),
                 dcc.Store(id="active-tab", data="data"),
                 dcc.Store(id="sidebar-collapsed", data=False),
-                dcc.Interval(id="sync-interval", interval=1000, n_intervals=0),
+                dcc.Store(id="sync-user-key", data=segment_key),
+                dcc.Store(id="sync-tab-id", data=""),
+                dcc.Store(id="sync-ready", data=False),
+                dcc.Store(id="sync-publish-message", data=None),
+                dcc.Input(
+                    id="sync-inbox",
+                    type="text",
+                    value="",
+                    style={"display": "none"},
+                ),
+                html.Div(id="sync-publish-signal", style={"display": "none"}),
                 html.Div(
                     [
                         html.Div(

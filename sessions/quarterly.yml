@@ -1,4 +1,4 @@
-average: volume
+average: simple
 tail_curve: weibull
 drops:
 - - '1996'
@@ -27,6 +27,10 @@ drops:
   - 39
 - - '1997'
   - 48
+- - '1998'
+  - 21
+- - '1995'
+  - 6
 tail_attachment_age: 105
 tail_fit_period:
 - 3
@@ -45,5 +49,6 @@ bf_apriori_by_uwy:
   '2004': 0.6
   '2005': 0.2
   '2006': 0.2
+sync_version: 35
 segment: quarterly
-updated_at: '2026-02-11T21:07:17.433696Z'
+updated_at: '2026-02-12T13:02:30.464552Z'

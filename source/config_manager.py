@@ -108,6 +108,25 @@ class ConfigManager:
         with session_path.open("r") as f:
             return yaml.safe_load(f) or {}
 
+    def get_sync_version(self) -> int:
+        session = self.load_session()
+        raw_version = session.get("sync_version", 0)
+        try:
+            version = int(raw_version)
+        except (TypeError, ValueError):
+            return 0
+        if version < 0:
+            return 0
+        return version
+
+    def save_session_with_version(self, data: dict) -> int:
+        current_version = self.get_sync_version()
+        next_version = current_version + 1
+        payload = data.copy()
+        payload["sync_version"] = next_version
+        self.save_session(payload)
+        return next_version
+
     def save_session(self, data: dict) -> None:
         session_path = self.get_session_path()
         session_path.parent.mkdir(parents=True, exist_ok=True)
