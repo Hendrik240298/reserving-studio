@@ -15,6 +15,8 @@ class Reserving:
         self.development = None
         self.tail = None
         self.bf = None
+        self._chainladder_result = None
+        self._bornhuetter_result = None
         self._bf_apriori_by_uwy: Optional[dict[str, float]] = None
         self._selected_ultimate_by_uwy: dict[str, str] = {}
 
@@ -176,6 +178,8 @@ class Reserving:
 
         chainladder = self.chainladder()
         bornhuetter = self.bornhuetter_ferguson()
+        self._chainladder_result = chainladder
+        self._bornhuetter_result = bornhuetter
 
         self._triangle_transformed = chainladder.named_steps.dev.fit_transform(
             self._triangle.get_triangle()
@@ -374,16 +378,22 @@ class Reserving:
         # Calculate emergence triangle: for each UWY, show incurred as % of ultimate over development
         triangle_df = self._triangle.get_triangle()["incurred"].to_frame()
 
-        # Get ultimate per UWY from results
-        ultimate = self.df_results["ultimate"]
+        # Emergence should always be measured against Chainladder ultimates.
+        ultimate = self.df_results["cl_ultimate"]
 
         # Calculate emergence by dividing each row by its ultimate
         emergence = triangle_df.copy()
         for uwy in triangle_df.index:
             emergence.loc[uwy] = triangle_df.loc[uwy] / ultimate.loc[uwy]
 
-        # Get expected emergence pattern from tail CDF (includes tail, so cut off last 4 entries)
-        cdf_values = self.result.named_steps.tail.cdf_["incurred"].to_frame().iloc[0]
+        # Use Chainladder tail CDF for expected emergence regardless of selected results method.
+        if self._chainladder_result is None:
+            raise ValueError("Chainladder results not available. Call reserve() first.")
+        cdf_values = (
+            self._chainladder_result.named_steps.tail.cdf_["incurred"]
+            .to_frame()
+            .iloc[0]
+        )
         # Cut off the last 4 tail periods to match triangle length
         cdf_values = cdf_values.iloc[:-4]
         expected_pattern = 1 / cdf_values

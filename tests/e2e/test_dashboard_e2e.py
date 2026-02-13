@@ -161,6 +161,44 @@ def test_results_selection_is_per_uwy_and_persists(
 
 
 @pytest.mark.e2e
+def test_results_selection_does_not_change_emergence_plot(
+    dash_base_url: str,
+    page: Page,
+) -> None:
+    wait_for_dashboard_ready(page, dash_base_url)
+
+    page.click("#nav-chainladder")
+    wait_for_graph_ready(page, "emergence-plot")
+    emergence_before = graph_fingerprint(page, "emergence-plot")
+
+    page.click("#nav-results")
+    wait_for_results_table_ready(page)
+    baseline = read_results_column_values(
+        page,
+        ["UWY", "CL Ultimate (EUR)", "BF Ultimate (EUR)", "Selected Ultimate (EUR)"],
+    )
+    differing_indices = [
+        idx
+        for idx, (cl_value, bf_value) in enumerate(
+            zip(baseline["CL Ultimate (EUR)"], baseline["BF Ultimate (EUR)"])
+        )
+        if cl_value != bf_value
+    ]
+    assert differing_indices
+    target_idx = differing_indices[0]
+    target_uwy = baseline["UWY"][target_idx]
+
+    click_results_method_cell(page, target_uwy, "bornhuetter_ferguson")
+    wait_for_results_column_change(page, baseline)
+
+    page.click("#nav-chainladder")
+    wait_for_graph_ready(page, "emergence-plot")
+    emergence_after = graph_fingerprint(page, "emergence-plot")
+
+    assert emergence_after == emergence_before
+
+
+@pytest.mark.e2e
 def test_results_selection_uses_border_only_visual_indicator(
     dash_base_url: str,
     page: Page,
