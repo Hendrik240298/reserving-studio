@@ -155,6 +155,7 @@ def read_results_row_values(page: Page, headers: list[str]) -> dict[str, str]:
                 "BF Ultimate (EUR)": "bf_ultimate_display",
                 "BF Loss Ratio": "bf_loss_ratio_display",
                 "Selected Ultimate (EUR)": "ultimate_display",
+                "Selected Loss Ratio": "selected_loss_ratio_display",
                 "IBNR (EUR)": "ibnr_display",
             };
 
@@ -192,6 +193,7 @@ def read_results_column_values(page: Page, headers: list[str]) -> dict[str, list
                 "BF Ultimate (EUR)": "bf_ultimate_display",
                 "BF Loss Ratio": "bf_loss_ratio_display",
                 "Selected Ultimate (EUR)": "ultimate_display",
+                "Selected Loss Ratio": "selected_loss_ratio_display",
                 "IBNR (EUR)": "ibnr_display",
             };
             const output = {};
@@ -274,11 +276,28 @@ def edit_first_bf_apriori_value(page: Page, new_value: str) -> None:
 def click_results_method_cell(page: Page, uwy: str, method: str) -> None:
     normalized = method.strip().lower()
     if normalized == "chainladder":
-        column = "cl_ultimate_display"
+        candidate_columns = ["cl_ultimate_display", "cl_loss_ratio_display"]
     elif normalized == "bornhuetter_ferguson":
-        column = "bf_ultimate_display"
+        candidate_columns = ["bf_ultimate_display", "bf_loss_ratio_display"]
     else:
         raise AssertionError(f"Unknown method: {method}")
+
+    column = page.evaluate(
+        """
+        (candidates) => {
+            for (const candidate of candidates) {
+                const cell = document.querySelector(`#results-table td[data-dash-row="0"][data-dash-column="${candidate}"]`);
+                if (cell) {
+                    return candidate;
+                }
+            }
+            return null;
+        }
+        """,
+        candidate_columns,
+    )
+    if not isinstance(column, str) or not column:
+        raise AssertionError(f"Could not locate method column for {method}")
 
     row_index = page.evaluate(
         """

@@ -198,11 +198,81 @@ def test_results_selection_uses_border_only_visual_indicator(
         target_uwy,
         "bf_ultimate_display",
     )
-    bf_lr_style = read_results_cell_style(
-        page,
-        target_uwy,
-        "bf_loss_ratio_display",
-    )
-
     assert bf_ultimate_style["background_color"] == bg_before
-    assert bf_lr_style["background_color"] == bg_before
+
+
+@pytest.mark.e2e
+def test_results_view_toggle_switches_absolute_and_relative(
+    dash_base_url: str,
+    page: Page,
+) -> None:
+    wait_for_dashboard_ready(page, dash_base_url)
+    page.click("#nav-results")
+    wait_for_results_table_ready(page)
+
+    baseline = read_results_column_values(
+        page,
+        [
+            "UWY",
+            "CL Ultimate (EUR)",
+            "BF Ultimate (EUR)",
+            "Selected Ultimate (EUR)",
+            "CL Loss Ratio",
+            "BF Loss Ratio",
+            "Selected Loss Ratio",
+            "IBNR (EUR)",
+        ],
+    )
+    assert baseline["CL Ultimate (EUR)"]
+    assert baseline["BF Ultimate (EUR)"]
+    assert baseline["Selected Ultimate (EUR)"]
+    assert baseline["CL Loss Ratio"] == []
+    assert baseline["BF Loss Ratio"] == []
+    assert baseline["Selected Loss Ratio"] == []
+
+    page.click("#results-view-toggle")
+    relative_values = wait_for_results_column_change(page, baseline)
+
+    assert relative_values["CL Ultimate (EUR)"] == []
+    assert relative_values["BF Ultimate (EUR)"] == []
+    assert relative_values["Selected Ultimate (EUR)"] == []
+    assert relative_values["CL Loss Ratio"]
+    assert relative_values["BF Loss Ratio"]
+    assert relative_values["Selected Loss Ratio"]
+    assert relative_values["IBNR (EUR)"] == baseline["IBNR (EUR)"]
+
+    target_idx = -1
+    selected_method = "bornhuetter_ferguson"
+    for idx, (selected_value, bf_value) in enumerate(
+        zip(relative_values["Selected Loss Ratio"], relative_values["BF Loss Ratio"])
+    ):
+        if selected_value != bf_value:
+            target_idx = idx
+            selected_method = "bornhuetter_ferguson"
+            break
+
+    if target_idx < 0:
+        for idx, (selected_value, cl_value) in enumerate(
+            zip(
+                relative_values["Selected Loss Ratio"], relative_values["CL Loss Ratio"]
+            )
+        ):
+            if selected_value != cl_value:
+                target_idx = idx
+                selected_method = "chainladder"
+                break
+
+    assert target_idx >= 0
+    target_uwy = relative_values["UWY"][target_idx]
+    click_results_method_cell(page, target_uwy, selected_method)
+    after_selection = wait_for_results_column_change(page, relative_values)
+    if selected_method == "bornhuetter_ferguson":
+        assert (
+            after_selection["Selected Loss Ratio"][target_idx]
+            == after_selection["BF Loss Ratio"][target_idx]
+        )
+    else:
+        assert (
+            after_selection["Selected Loss Ratio"][target_idx]
+            == after_selection["CL Loss Ratio"][target_idx]
+        )

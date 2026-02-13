@@ -20,8 +20,6 @@ drops:
 - - '1997'
   - 15
 - - '1999'
-  - 9
-- - '1999'
   - 15
 - - '1999'
   - 27
@@ -59,12 +57,6 @@ drops:
   - 72
 - - '1999'
   - 39
-- - '2001'
-  - 15
-- - '2000'
-  - 9
-- - '2002'
-  - 6
 tail_attachment_age: 69
 tail_fit_period:
 - 3
@@ -75,7 +67,7 @@ bf_apriori_by_uwy:
   '1997': 0.6
   '1998': 0.6
   '1999': 0.6
-  '2000': 0.6
+  '2000': 0.7
   '2001': 0.6
   '2002': 0.6
   '2003': 0.6
@@ -83,18 +75,18 @@ bf_apriori_by_uwy:
   '2005': 0.6
   '2006': 0.5
 selected_ultimate_by_uwy:
-  '1995': chainladder
+  '1995': bornhuetter_ferguson
   '1996': bornhuetter_ferguson
-  '1997': chainladder
+  '1997': bornhuetter_ferguson
   '1998': chainladder
-  '1999': chainladder
+  '1999': bornhuetter_ferguson
   '2000': bornhuetter_ferguson
-  '2001': chainladder
+  '2001': bornhuetter_ferguson
   '2002': bornhuetter_ferguson
-  '2003': chainladder
-  '2004': chainladder
-  '2005': bornhuetter_ferguson
-  '2006': chainladder
-sync_version: 401
+  '2003': bornhuetter_ferguson
+  '2004': bornhuetter_ferguson
+  '2005': chainladder
+  '2006': bornhuetter_ferguson
+sync_version: 436
 segment: quarterly
-updated_at: '2026-02-13T17:04:47.059375Z'
+updated_at: '2026-02-13T17:25:58.137020Z'

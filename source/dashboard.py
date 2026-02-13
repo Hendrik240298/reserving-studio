@@ -289,6 +289,9 @@ class Dashboard:
 
             cl_lr_display = "N/A" if premium <= 0 else f"{(cl_ultimate / premium):.2%}"
             bf_lr_display = "N/A" if premium <= 0 else f"{(bf_ultimate / premium):.2%}"
+            selected_lr_display = (
+                "N/A" if premium <= 0 else f"{(selected_ultimate / premium):.2%}"
+            )
 
             rows.append(
                 {
@@ -301,23 +304,195 @@ class Dashboard:
                     "bf_ultimate_display": f"{bf_ultimate:,.2f}",
                     "bf_loss_ratio_display": bf_lr_display,
                     "ultimate_display": f"{selected_ultimate:,.2f}",
+                    "selected_loss_ratio_display": selected_lr_display,
                     "ibnr_display": f"{ibnr:,.2f}",
                 }
             )
         return rows
 
+    def _build_results_table_columns(self, results_view_mode: str) -> List[dict]:
+        normalized_mode = (results_view_mode or "absolute").lower()
+        base_columns = [
+            {
+                "name": "UWY",
+                "id": "uwy",
+            },
+            {
+                "name": "Incurred (EUR)",
+                "id": "incurred_display",
+            },
+            {
+                "name": "Premium (EUR)",
+                "id": "premium_display",
+            },
+            {
+                "name": "Incurred Loss Ratio",
+                "id": "incurred_loss_ratio_display",
+            },
+        ]
+        if normalized_mode == "relative":
+            method_columns = [
+                {
+                    "name": "CL Loss Ratio",
+                    "id": "cl_loss_ratio_display",
+                },
+                {
+                    "name": "BF Loss Ratio",
+                    "id": "bf_loss_ratio_display",
+                },
+                {
+                    "name": "Selected Loss Ratio",
+                    "id": "selected_loss_ratio_display",
+                },
+            ]
+        else:
+            method_columns = [
+                {
+                    "name": "CL Ultimate (EUR)",
+                    "id": "cl_ultimate_display",
+                },
+                {
+                    "name": "BF Ultimate (EUR)",
+                    "id": "bf_ultimate_display",
+                },
+                {
+                    "name": "Selected Ultimate (EUR)",
+                    "id": "ultimate_display",
+                },
+            ]
+        return (
+            base_columns
+            + method_columns
+            + [
+                {
+                    "name": "IBNR (EUR)",
+                    "id": "ibnr_display",
+                }
+            ]
+        )
+
+    @staticmethod
+    def _estimate_results_column_width_px(values: List[str], headers: List[str]) -> int:
+        all_values = [str(value) for value in values] + [
+            str(header) for header in headers
+        ]
+        longest = max((len(value) for value in all_values), default=0)
+        return max(70, min(260, (longest * 9) + 32))
+
+    def _build_results_style_cell_conditional(
+        self,
+        rows: List[dict],
+    ) -> List[dict]:
+        def _column_values(column_id: str) -> List[str]:
+            return [
+                str(row.get(column_id, "")) for row in rows if isinstance(row, dict)
+            ]
+
+        uwy_width = self._estimate_results_column_width_px(
+            _column_values("uwy"), ["UWY"]
+        )
+        incurred_width = self._estimate_results_column_width_px(
+            _column_values("incurred_display"),
+            ["Incurred (EUR)"],
+        )
+        premium_width = self._estimate_results_column_width_px(
+            _column_values("premium_display"),
+            ["Premium (EUR)"],
+        )
+        incurred_lr_width = self._estimate_results_column_width_px(
+            _column_values("incurred_loss_ratio_display"),
+            ["Incurred Loss Ratio"],
+        )
+        cl_method_width = self._estimate_results_column_width_px(
+            _column_values("cl_ultimate_display")
+            + _column_values("cl_loss_ratio_display"),
+            ["CL Ultimate (EUR)", "CL Loss Ratio"],
+        )
+        bf_method_width = self._estimate_results_column_width_px(
+            _column_values("bf_ultimate_display")
+            + _column_values("bf_loss_ratio_display"),
+            ["BF Ultimate (EUR)", "BF Loss Ratio"],
+        )
+        selected_width = self._estimate_results_column_width_px(
+            _column_values("ultimate_display")
+            + _column_values("selected_loss_ratio_display"),
+            ["Selected Ultimate (EUR)", "Selected Loss Ratio"],
+        )
+        ibnr_width = self._estimate_results_column_width_px(
+            _column_values("ibnr_display"),
+            ["IBNR (EUR)"],
+        )
+
+        column_widths = {
+            "uwy": uwy_width,
+            "incurred_display": incurred_width,
+            "premium_display": premium_width,
+            "incurred_loss_ratio_display": incurred_lr_width,
+            "cl_ultimate_display": cl_method_width,
+            "cl_loss_ratio_display": cl_method_width,
+            "bf_ultimate_display": bf_method_width,
+            "bf_loss_ratio_display": bf_method_width,
+            "ultimate_display": selected_width,
+            "selected_loss_ratio_display": selected_width,
+            "ibnr_display": ibnr_width,
+        }
+
+        conditional_styles: List[dict] = []
+        for column_id, width_px in column_widths.items():
+            width = f"{width_px}px"
+            conditional_styles.append(
+                {
+                    "if": {"column_id": column_id},
+                    "width": width,
+                    "minWidth": width,
+                    "maxWidth": width,
+                }
+            )
+
+        conditional_styles.extend(
+            [
+                {
+                    "if": {"column_id": "uwy"},
+                    "textAlign": "center",
+                },
+                {
+                    "if": {"column_id": "incurred_loss_ratio_display"},
+                    "textAlign": "center",
+                },
+                {
+                    "if": {"column_id": "cl_loss_ratio_display"},
+                    "textAlign": "center",
+                },
+                {
+                    "if": {"column_id": "bf_loss_ratio_display"},
+                    "textAlign": "center",
+                },
+                {
+                    "if": {"column_id": "selected_loss_ratio_display"},
+                    "textAlign": "center",
+                },
+            ]
+        )
+        return conditional_styles
+
     def _build_results_selection_styles(
         self,
         selected_ultimate_by_uwy: dict[str, str],
+        results_view_mode: str,
     ) -> List[dict]:
+        normalized_mode = (results_view_mode or "absolute").lower()
         styles: List[dict] = []
         for uwy, method in selected_ultimate_by_uwy.items():
             if method == "chainladder":
-                left_column = "cl_ultimate_display"
-                right_column = "cl_loss_ratio_display"
+                if normalized_mode == "relative":
+                    target_column = "cl_loss_ratio_display"
+                else:
+                    target_column = "cl_ultimate_display"
             elif method == "bornhuetter_ferguson":
-                left_column = "bf_ultimate_display"
-                right_column = "bf_loss_ratio_display"
+                if normalized_mode == "relative":
+                    target_column = "bf_loss_ratio_display"
+                else:
+                    target_column = "bf_ultimate_display"
             else:
                 continue
 
@@ -326,26 +501,13 @@ class Dashboard:
                 {
                     "if": {
                         "filter_query": "{uwy} = '" + safe_uwy + "'",
-                        "column_id": left_column,
+                        "column_id": target_column,
                     },
-                    "borderTop": "0px",
-                    "borderRight": f"1px solid {COLOR_SURFACE}",
-                    "borderBottom": "0px",
-                    "borderLeft": "2px solid black",
-                    "boxShadow": "inset 0 2px 0 0 black, inset 0 -2px 0 0 black",
-                }
-            )
-            styles.append(
-                {
-                    "if": {
-                        "filter_query": "{uwy} = '" + safe_uwy + "'",
-                        "column_id": right_column,
-                    },
-                    "borderTop": "0px",
+                    "borderTop": "2px solid black",
                     "borderRight": "2px solid black",
-                    "borderBottom": "0px",
-                    "borderLeft": f"1px solid {COLOR_SURFACE}",
-                    "boxShadow": "inset 0 2px 0 0 black, inset 0 -2px 0 0 black",
+                    "borderBottom": "2px solid black",
+                    "borderLeft": "2px solid black",
+                    "boxShadow": "none",
                 }
             )
         return styles
@@ -1342,11 +1504,57 @@ class Dashboard:
             )
 
         @self.app.callback(
+            Output("results-view-store", "data"),
+            Input("results-view-toggle", "n_clicks"),
+            State("results-view-store", "data"),
+            prevent_initial_call=True,
+        )
+        def _toggle_results_view(_n_clicks, current_mode):
+            if current_mode == "relative":
+                return "absolute"
+            return "relative"
+
+        @self.app.callback(
+            Output("results-view-toggle-track", "style"),
+            Output("results-view-toggle-knob", "style"),
+            Output("results-view-mode-label", "children"),
+            Input("results-view-store", "data"),
+        )
+        def _hydrate_results_view_toggle(mode):
+            is_relative = mode == "relative"
+            track_style = {
+                "width": "42px",
+                "height": "24px",
+                "borderRadius": "999px",
+                "backgroundColor": COLOR_ACCENT if is_relative else "#cbd5e1",
+                "position": "relative",
+                "transition": "background-color 0.2s ease",
+                "display": "inline-block",
+            }
+            knob_style = {
+                "width": "18px",
+                "height": "18px",
+                "borderRadius": "50%",
+                "backgroundColor": "#ffffff",
+                "position": "absolute",
+                "top": "3px",
+                "left": "21px" if is_relative else "3px",
+                "boxShadow": "0 1px 4px rgba(0,0,0,0.22)",
+                "transition": "left 0.2s ease",
+            }
+            mode_label = "Relative" if is_relative else "Absolute"
+            return track_style, knob_style, mode_label
+
+        @self.app.callback(
+            Output("results-table", "columns"),
             Output("results-table", "data"),
+            Output("results-table", "style_cell_conditional"),
             Output("results-table", "style_data_conditional"),
             Input("results-store", "data"),
+            Input("results-view-store", "data"),
         )
-        def _hydrate_results_table(results_payload):
+        def _hydrate_results_table(results_payload, results_view_mode):
+            normalized_mode = (results_view_mode or "absolute").lower()
             rows = []
             if isinstance(results_payload, dict):
                 payload_rows = results_payload.get("results_table_rows")
@@ -1354,6 +1562,8 @@ class Dashboard:
                     rows = payload_rows
             if not rows:
                 rows = self._build_results_table_rows(self.results)
+            columns = self._build_results_table_columns(normalized_mode)
+            cell_styles = self._build_results_style_cell_conditional(rows)
             base_styles = [
                 {
                     "if": {"state": "active"},
@@ -1375,8 +1585,11 @@ class Dashboard:
                 selected_mapping = self._params_service.build_selected_ultimate_by_uwy(
                     results_payload.get("selected_ultimate_by_uwy")
                 )
-            selection_styles = self._build_results_selection_styles(selected_mapping)
-            return rows, base_styles + selection_styles
+            selection_styles = self._build_results_selection_styles(
+                selected_mapping,
+                normalized_mode,
+            )
+            return columns, rows, cell_styles, base_styles + selection_styles
 
         @self.app.callback(
             Output("results-table", "active_cell"),
@@ -1572,6 +1785,7 @@ class Dashboard:
                 ),
                 dcc.Store(id="triangle-overlay-signature", data=None),
                 dcc.Store(id="data-view-store", data="cumulative"),
+                dcc.Store(id="results-view-store", data="absolute"),
                 dcc.Store(id="active-tab", data="data"),
                 dcc.Store(id="sidebar-collapsed", data=False),
                 dcc.Store(id="sync-user-key", data=segment_key),
@@ -2103,50 +2317,68 @@ class Dashboard:
                                         ),
                                         html.Div(
                                             [
+                                                html.Div(
+                                                    [
+                                                        html.Label(
+                                                            "Results view",
+                                                            style={
+                                                                "fontWeight": 600,
+                                                                "marginBottom": "6px",
+                                                                "display": "block",
+                                                            },
+                                                        ),
+                                                        html.Div(
+                                                            [
+                                                                html.Button(
+                                                                    html.Div(
+                                                                        id="results-view-toggle-track",
+                                                                        children=[
+                                                                            html.Div(
+                                                                                id="results-view-toggle-knob"
+                                                                            )
+                                                                        ],
+                                                                        style={
+                                                                            "width": "42px",
+                                                                            "height": "24px",
+                                                                            "borderRadius": "999px",
+                                                                            "backgroundColor": "#cbd5e1",
+                                                                            "position": "relative",
+                                                                            "display": "inline-block",
+                                                                        },
+                                                                    ),
+                                                                    id="results-view-toggle",
+                                                                    n_clicks=0,
+                                                                    style={
+                                                                        "border": "none",
+                                                                        "background": "transparent",
+                                                                        "padding": "0",
+                                                                        "cursor": "pointer",
+                                                                    },
+                                                                ),
+                                                                html.Span(
+                                                                    "Absolute",
+                                                                    id="results-view-mode-label",
+                                                                    style={
+                                                                        "color": COLOR_TEXT,
+                                                                        "fontSize": "14px",
+                                                                    },
+                                                                ),
+                                                            ],
+                                                            style={
+                                                                "display": "flex",
+                                                                "alignItems": "center",
+                                                                "gap": "10px",
+                                                                "marginTop": "4px",
+                                                            },
+                                                        ),
+                                                    ],
+                                                    style={"marginBottom": "12px"},
+                                                ),
                                                 dash_table.DataTable(
                                                     id="results-table",
-                                                    columns=[
-                                                        {
-                                                            "name": "UWY",
-                                                            "id": "uwy",
-                                                        },
-                                                        {
-                                                            "name": "Incurred (EUR)",
-                                                            "id": "incurred_display",
-                                                        },
-                                                        {
-                                                            "name": "Premium (EUR)",
-                                                            "id": "premium_display",
-                                                        },
-                                                        {
-                                                            "name": "Incurred Loss Ratio",
-                                                            "id": "incurred_loss_ratio_display",
-                                                        },
-                                                        {
-                                                            "name": "CL Ultimate (EUR)",
-                                                            "id": "cl_ultimate_display",
-                                                        },
-                                                        {
-                                                            "name": "CL Loss Ratio",
-                                                            "id": "cl_loss_ratio_display",
-                                                        },
-                                                        {
-                                                            "name": "BF Ultimate (EUR)",
-                                                            "id": "bf_ultimate_display",
-                                                        },
-                                                        {
-                                                            "name": "BF Loss Ratio",
-                                                            "id": "bf_loss_ratio_display",
-                                                        },
-                                                        {
-                                                            "name": "Selected Ultimate (EUR)",
-                                                            "id": "ultimate_display",
-                                                        },
-                                                        {
-                                                            "name": "IBNR (EUR)",
-                                                            "id": "ibnr_display",
-                                                        },
-                                                    ],
+                                                    columns=self._build_results_table_columns(
+                                                        "absolute"
+                                                    ),
                                                     data=results_payload.get(
                                                         "results_table_rows", []
                                                     ),
@@ -2187,32 +2419,13 @@ class Dashboard:
                                                     style_data={
                                                         "backgroundColor": COLOR_SURFACE,
                                                     },
-                                                    style_cell_conditional=[
-                                                        {
-                                                            "if": {"column_id": "uwy"},
-                                                            "textAlign": "center",
-                                                            "minWidth": "70px",
-                                                        },
-                                                        {
-                                                            "if": {
-                                                                "column_id": "incurred_loss_ratio_display"
-                                                            },
-                                                            "textAlign": "center",
-                                                        },
-                                                        {
-                                                            "if": {
-                                                                "column_id": "cl_loss_ratio_display"
-                                                            },
-                                                            "textAlign": "center",
-                                                        },
-                                                        {
-                                                            "if": {
-                                                                "column_id": "bf_loss_ratio_display"
-                                                            },
-                                                            "textAlign": "center",
-                                                        },
-                                                    ],
-                                                )
+                                                    style_cell_conditional=self._build_results_style_cell_conditional(
+                                                        results_payload.get(
+                                                            "results_table_rows",
+                                                            [],
+                                                        )
+                                                    ),
+                                                ),
                                             ],
                                             id="tab-results",
                                             style={

@@ -82,10 +82,12 @@ class ReservingService:
                 incurred_lr_display = f"{(incurred / premium):.2%}"
                 cl_lr_display = f"{(cl_ultimate / premium):.2%}"
                 bf_lr_display = f"{(bf_ultimate / premium):.2%}"
+                selected_lr_display = f"{(selected_ultimate / premium):.2%}"
             else:
                 incurred_lr_display = "N/A"
                 cl_lr_display = "N/A"
                 bf_lr_display = "N/A"
+                selected_lr_display = "N/A"
 
             rows.append(
                 {
@@ -98,6 +100,7 @@ class ReservingService:
                     "bf_ultimate_display": f"{bf_ultimate:,.2f}",
                     "bf_loss_ratio_display": bf_lr_display,
                     "ultimate_display": f"{selected_ultimate:,.2f}",
+                    "selected_loss_ratio_display": selected_lr_display,
                     "ibnr_display": f"{ibnr:,.2f}",
                 }
             )
