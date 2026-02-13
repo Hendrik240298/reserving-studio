@@ -2222,6 +2222,9 @@ class Dashboard:
             else:
                 incurred_loss_ratios.append(f"{(inc / prem):.2%}")
 
+        # Compute IBNR = selected ultimate - incurred
+        ibnr_values = df_display["ultimate"] - df_display["incurred"]
+
         # Create enhanced table data with formatted values showing both CL and BF methods
         header_values = [
             "UWY",
@@ -2233,6 +2236,7 @@ class Dashboard:
             "BF Ultimate (€)",
             "BF Loss Ratio",
             "Selected Ultimate (€)",
+            "IBNR (€)",
         ]
 
         cell_values = [
@@ -2245,6 +2249,7 @@ class Dashboard:
             [f"{val:,.0f}" for val in df_display["bf_ultimate"]],
             [f"{val:.2%}" for val in df_display["bf_loss_ratio"]],
             [f"{val:,.0f}" for val in df_display["ultimate"]],
+            [f"{val:,.0f}" for val in ibnr_values],
         ]
 
         # Color coding: neutral for basic data, blue for CL, orange for BF, green for selected
@@ -2258,6 +2263,7 @@ class Dashboard:
             "#e67e22",
             "#e67e22",
             "#27ae60",
+            "#16a085",
         ]
 
         fig = go.Figure(
@@ -2291,6 +2297,7 @@ class Dashboard:
                             "center",
                             "right",
                             "center",
+                            "right",
                             "right",
                         ],
                         font=dict(
