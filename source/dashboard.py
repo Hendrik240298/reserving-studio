@@ -1,17 +1,27 @@
 import json
-import hashlib
 import logging
 import time
 from copy import deepcopy
-from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional, List, Tuple
+from typing import Optional, List, Tuple
 
-import numpy as np
 import pandas as pd
-import plotly.graph_objs as go
 from source.config_manager import ConfigManager
+from source.presentation import (
+    build_heatmap_core,
+    build_heatmap_core_cache_key,
+    plot_data_triangle_table,
+    plot_emergence,
+    plot_reserving_results_table,
+    plot_triangle_heatmap_clean,
+)
 from source.reserving import Reserving
+from source.services import (
+    CacheService,
+    ParamsService,
+    ReservingService,
+    SessionSyncService,
+)
 from dash import (
     Dash,
     dcc,
@@ -88,18 +98,136 @@ class Dashboard:
         self._heatmap_core_cache: dict[str, dict] = {}
         self._cache_max_entries = 32
         self._recalc_request_seq = 0
+        self._cache_service = CacheService(max_entries=self._cache_max_entries)
+        self._params_service = ParamsService(
+            default_average=self._default_average,
+            default_tail_curve=self._default_tail_curve,
+            default_bf_apriori=self._default_bf_apriori,
+            get_uwy_labels=self._get_uwy_labels,
+            load_session=self._config.load_session
+            if self._config is not None
+            else None,
+            get_sync_version=(
+                self._config.get_sync_version if self._config is not None else None
+            ),
+        )
 
         self._load_session_defaults()
 
         # Extract data from domain objects
         self._extract_data()
 
+        self._reserving_service = ReservingService(
+            reserving=self._reserving,
+            params_service=self._params_service,
+            cache_service=self._cache_service,
+            default_average=self._default_average,
+            default_tail_curve=self._default_tail_curve,
+            default_bf_apriori=self._default_bf_apriori,
+            segment_key_provider=self._get_segment_key,
+            extract_data=self._extract_data,
+            get_triangle=lambda: self.triangle,
+            get_emergence=lambda: self.emergence_pattern,
+            get_results=lambda: self.results,
+            build_triangle_figure=lambda triangle_data,
+            title,
+            attachment,
+            fit_selection: self._build_triangle_figure_dict(
+                triangle_data,
+                title,
+                attachment,
+                fit_selection,
+            ),
+            build_emergence_figure=lambda emergence_data, title: plot_emergence(
+                emergence_pattern=emergence_data,
+                title=title,
+                font_family=FONT_FAMILY,
+                figure_font_size=FIGURE_FONT_SIZE,
+                figure_title_font_size=FIGURE_TITLE_FONT_SIZE,
+                alert_annotation_font_size=ALERT_ANNOTATION_FONT_SIZE,
+                color_text=COLOR_TEXT,
+                color_surface=COLOR_SURFACE,
+                color_border=COLOR_BORDER,
+            ).to_dict(),
+            build_results_table_figure=lambda results_df,
+            title: plot_reserving_results_table(
+                results_df=results_df,
+                title=title,
+                font_family=FONT_FAMILY,
+                figure_font_size=FIGURE_FONT_SIZE,
+                figure_title_font_size=FIGURE_TITLE_FONT_SIZE,
+                table_header_font_size=TABLE_HEADER_FONT_SIZE,
+                table_cell_font_size=TABLE_CELL_FONT_SIZE,
+                alert_annotation_font_size=ALERT_ANNOTATION_FONT_SIZE,
+                color_text=COLOR_TEXT,
+                color_surface=COLOR_SURFACE,
+                color_border=COLOR_BORDER,
+            ).to_dict(),
+            payload_cache=self._payload_cache,
+            triangle_cache=self._triangle_figure_cache,
+            emergence_cache=self._emergence_figure_cache,
+            results_table_cache=self._results_table_figure_cache,
+        )
+        self._session_sync_service = SessionSyncService(
+            config=self._config,
+            segment_key_provider=self._get_segment_key,
+            live_results_store=_LIVE_RESULTS_BY_SEGMENT,
+        )
+
         self._register_callbacks()
         logging.info("Dashboard initialized successfully")
 
+    def _build_triangle_figure_dict(
+        self,
+        triangle_data: Optional[pd.DataFrame],
+        title: str,
+        tail_attachment_age: Optional[int],
+        tail_fit_period_selection: Optional[List[int]],
+    ) -> dict:
+        if triangle_data is None:
+            triangle_data = self.triangle
+        core_cache_key = build_heatmap_core_cache_key(
+            segment_key=self._get_segment_key(),
+            triangle_data=triangle_data,
+            incurred_data=self.incurred,
+            premium_data=self.premium,
+        )
+        core_payload = self._cache_service.get(self._heatmap_core_cache, core_cache_key)
+        if core_payload is None:
+            core_payload = build_heatmap_core(
+                triangle_data=triangle_data,
+                incurred_data=self.incurred,
+                premium_data=self.premium,
+                reserving=self._reserving,
+            )
+            self._cache_service.set(
+                self._heatmap_core_cache, core_cache_key, core_payload
+            )
+
+        figure, _ = plot_triangle_heatmap_clean(
+            triangle_data=triangle_data,
+            incurred_data=self.incurred,
+            premium_data=self.premium,
+            reserving=self._reserving,
+            title=title,
+            tail_attachment_age=tail_attachment_age,
+            tail_fit_period_selection=tail_fit_period_selection,
+            parse_dev_label=self._params_service.parse_dev_label,
+            derive_tail_fit_period=self._params_service.derive_tail_fit_period,
+            core_payload=core_payload,
+            font_family=FONT_FAMILY,
+            figure_font_size=FIGURE_FONT_SIZE,
+            figure_title_font_size=FIGURE_TITLE_FONT_SIZE,
+            heatmap_text_font_size=HEATMAP_TEXT_FONT_SIZE,
+            color_text=COLOR_TEXT,
+            color_surface=COLOR_SURFACE,
+            color_border=COLOR_BORDER,
+        )
+        return figure.to_dict()
+
     def _load_session_defaults(self) -> None:
         if self._config is None:
-            self._default_bf_apriori_rows = self._build_bf_apriori_rows()
+            self._default_bf_apriori_rows = self._params_service.build_bf_apriori_rows()
             return
         session = self._config.load_session()
         self._default_average = session.get("average", self._default_average)
@@ -107,17 +235,21 @@ class Dashboard:
             "tail_curve",
             self._default_tail_curve,
         )
-        self._default_drop_store = self._normalize_drop_store(session.get("drops"))
+        self._default_drop_store = self._params_service.normalize_drop_store(
+            session.get("drops")
+        )
         tail_attachment_age = session.get("tail_attachment_age")
         if tail_attachment_age is not None:
             try:
                 self._default_tail_attachment_age = int(tail_attachment_age)
             except (TypeError, ValueError):
                 self._default_tail_attachment_age = None
-        self._default_tail_fit_period_selection = self._normalize_tail_fit_selection(
-            session.get("tail_fit_period")
+        self._default_tail_fit_period_selection = (
+            self._params_service.normalize_tail_fit_selection(
+                session.get("tail_fit_period")
+            )
         )
-        self._default_bf_apriori_rows = self._build_bf_apriori_rows(
+        self._default_bf_apriori_rows = self._params_service.build_bf_apriori_rows(
             session.get("bf_apriori_by_uwy")
         )
 
@@ -125,20 +257,6 @@ class Dashboard:
         if self._config is None:
             return "default"
         return self._config.get_segment()
-
-    def _normalize_drop_store(self, raw: object) -> List[List[str | int]]:
-        normalized: List[List[str | int]] = []
-        if not isinstance(raw, list):
-            return normalized
-        for item in raw:
-            if not isinstance(item, (list, tuple)) or len(item) != 2:
-                continue
-            origin, dev = item[0], item[1]
-            try:
-                normalized.append([str(origin), int(dev)])
-            except (TypeError, ValueError):
-                continue
-        return normalized
 
     def _parse_sync_payload(self, raw_payload: object) -> Optional[dict[str, object]]:
         if not raw_payload:
@@ -177,24 +295,6 @@ class Dashboard:
             self.premium = None
             self.results = None
             raise  # Re-raise to see the actual error
-
-    def _format_triangle_row_labels(self, index: pd.Index) -> list[str]:
-        labels: list[str] = []
-        for idx in index:
-            if hasattr(idx, "year"):
-                labels.append(str(idx.year))
-            else:
-                labels.append(str(idx))
-        return labels
-
-    def _format_triangle_column_labels(self, columns: pd.Index) -> list[str]:
-        labels: list[str] = []
-        for col in columns:
-            if isinstance(col, (int, np.integer)):
-                labels.append(str(int(col)))
-            else:
-                labels.append(str(col))
-        return labels
 
     def _get_data_tab_triangle(
         self,
@@ -255,156 +355,6 @@ class Dashboard:
         weights_df = den_aligned
         return divided_df, weights_df, True
 
-    def _plot_data_triangle_table(
-        self,
-        triangle_df: pd.DataFrame,
-        title: str,
-        weights_df: Optional[pd.DataFrame] = None,
-        ratio_mode: bool = False,
-    ) -> go.Figure:
-        if triangle_df is None or triangle_df.empty:
-            return go.Figure(
-                layout=go.Layout(
-                    title=f"{title} - No data available",
-                    annotations=[
-                        dict(
-                            text="Triangle data not available.",
-                            x=0.5,
-                            y=0.5,
-                            xref="paper",
-                            yref="paper",
-                            showarrow=False,
-                            font=dict(
-                                color="red",
-                                size=ALERT_ANNOTATION_FONT_SIZE,
-                                family=FONT_FAMILY,
-                            ),
-                        )
-                    ],
-                )
-            )
-
-        df_display = self._append_data_triangle_average_rows(triangle_df, weights_df)
-        row_labels = self._format_triangle_row_labels(df_display.index)
-        col_labels = self._format_triangle_column_labels(df_display.columns)
-
-        def _format_cell(value: object) -> str:
-            if pd.isna(value):
-                return ""
-            numeric_value = pd.to_numeric(value, errors="coerce")
-            if pd.isna(numeric_value):
-                return ""
-            if ratio_mode:
-                return f"{numeric_value:.3f}"
-            return f"{numeric_value:,.0f}"
-
-        table_values: list[list[str]] = [row_labels]
-        for col in df_display.columns:
-            table_values.append([_format_cell(v) for v in df_display[col]])
-
-        headers = ["UWY"] + col_labels
-
-        fig = go.Figure(
-            data=[
-                go.Table(
-                    columnwidth=[130] + [62] * len(col_labels),
-                    header=dict(
-                        values=headers,
-                        fill_color="#f2f5f9",
-                        align="center",
-                        line_color=COLOR_BORDER,
-                        font=dict(
-                            color=COLOR_TEXT,
-                            size=TABLE_HEADER_FONT_SIZE,
-                            family=FONT_FAMILY,
-                        ),
-                        height=28,
-                    ),
-                    cells=dict(
-                        values=table_values,
-                        fill_color=COLOR_SURFACE,
-                        align="center",
-                        line_color=COLOR_BORDER,
-                        font=dict(
-                            color=COLOR_TEXT,
-                            size=TABLE_CELL_FONT_SIZE,
-                            family=FONT_FAMILY,
-                        ),
-                        height=26,
-                    ),
-                )
-            ]
-        )
-
-        table_width = 130 + (62 * len(col_labels))
-
-        fig.update_layout(
-            title=title,
-            template="plotly_white",
-            font=dict(color=COLOR_TEXT, size=FIGURE_FONT_SIZE, family=FONT_FAMILY),
-            title_font=dict(
-                color=COLOR_TEXT,
-                size=FIGURE_TITLE_FONT_SIZE,
-                family=FONT_FAMILY,
-            ),
-            hoverlabel=dict(
-                bgcolor=COLOR_SURFACE,
-                bordercolor=COLOR_BORDER,
-                font=dict(
-                    color=COLOR_TEXT,
-                    size=FIGURE_FONT_SIZE,
-                    family=FONT_FAMILY,
-                ),
-            ),
-            margin=dict(l=8, r=8, t=48, b=8),
-            width=max(900, table_width + 16),
-            height=min(760, 170 + len(df_display.index) * 28),
-            autosize=False,
-            uirevision="static",
-        )
-        return fig
-
-    def _append_data_triangle_average_rows(
-        self,
-        triangle_df: pd.DataFrame,
-        weights_df: Optional[pd.DataFrame] = None,
-    ) -> pd.DataFrame:
-        if triangle_df is None or triangle_df.empty:
-            return triangle_df
-
-        df_values = triangle_df.apply(pd.to_numeric, errors="coerce")
-        simple_average = df_values.mean(axis=0, skipna=True)
-
-        if weights_df is None:
-            premium_weights = self._reserving._triangle.get_triangle("incurred")[
-                "Premium_selected"
-            ].to_frame()
-        else:
-            premium_weights = weights_df.apply(pd.to_numeric, errors="coerce")
-        aligned_values, aligned_weights = df_values.align(
-            premium_weights,
-            join="left",
-        )
-
-        weighted_average_values: dict[object, float] = {}
-        for col in aligned_values.columns:
-            values_col = pd.to_numeric(aligned_values[col], errors="coerce")
-            weights_col = pd.to_numeric(aligned_weights[col], errors="coerce")
-            valid = values_col.notna() & weights_col.notna() & (weights_col > 0)
-            if valid.any():
-                weighted_average_values[col] = float(
-                    np.average(values_col[valid], weights=weights_col[valid])
-                )
-            else:
-                weighted_average_values[col] = np.nan
-
-        weighted_average = pd.Series(weighted_average_values)
-
-        df_with_averages = df_values.copy()
-        df_with_averages.loc["Simple Avg"] = simple_average
-        df_with_averages.loc["Weighted Avg"] = weighted_average
-        return df_with_averages
-
     def _parse_drop_text(self, text: str) -> List[Tuple[str, int]]:
         if not text:
             return []
@@ -426,49 +376,6 @@ class Dashboard:
             drops.append((str(origin), dev_value))
         return drops
 
-    def _parse_dev_label(self, dev_label: object) -> Optional[int]:
-        if dev_label is None:
-            return None
-        try:
-            dev_str = str(dev_label)
-            if "-" in dev_str:
-                return int(dev_str.split("-")[0])
-            return int(dev_str)
-        except (TypeError, ValueError):
-            return None
-
-    def _normalize_tail_fit_selection(self, raw: object) -> List[int]:
-        if raw is None:
-            return []
-        if isinstance(raw, (int, float, str)):
-            raw = [raw]
-        if not isinstance(raw, (list, tuple)):
-            return []
-        normalized: List[int] = []
-        for item in raw:
-            try:
-                value = int(item)
-            except (TypeError, ValueError):
-                continue
-            if value not in normalized:
-                normalized.append(value)
-        return normalized
-
-    def _toggle_tail_fit_selection(self, existing: List[int], dev: int) -> List[int]:
-        normalized = []
-        for item in existing or []:
-            try:
-                value = int(item)
-            except (TypeError, ValueError):
-                continue
-            if value not in normalized:
-                normalized.append(value)
-        if dev in normalized:
-            normalized = [value for value in normalized if value != dev]
-        else:
-            normalized.append(dev)
-        return normalized
-
     def _get_uwy_labels(self) -> List[str]:
         triangle = self._reserving._triangle.get_triangle("incurred")["incurred"]
         labels: List[str] = []
@@ -484,664 +391,6 @@ class Dashboard:
             if label not in labels:
                 labels.append(label)
         return labels
-
-    def _build_bf_apriori_rows(self, raw: object = None) -> List[dict[str, object]]:
-        uwy_labels = self._get_uwy_labels()
-        mapping: dict[str, float] = {}
-
-        if isinstance(raw, dict):
-            for key, value in raw.items():
-                try:
-                    numeric = float(value)
-                except (TypeError, ValueError):
-                    continue
-                if pd.isna(numeric) or numeric < 0:
-                    continue
-                mapping[str(key)] = numeric
-
-        if isinstance(raw, list):
-            for row in raw:
-                if not isinstance(row, dict):
-                    continue
-                uwy = str(row.get("uwy", "")).strip()
-                if not uwy:
-                    continue
-                try:
-                    numeric = float(row.get("apriori"))
-                except (TypeError, ValueError):
-                    continue
-                if pd.isna(numeric) or numeric < 0:
-                    continue
-                mapping[uwy] = numeric
-
-        rows: List[dict[str, object]] = []
-        for uwy in uwy_labels:
-            factor = mapping.get(uwy, self._default_bf_apriori)
-            rows.append({"uwy": uwy, "apriori": float(factor)})
-        return rows
-
-    def _bf_rows_to_mapping(
-        self,
-        rows: Optional[List[dict[str, object]]],
-    ) -> dict[str, float]:
-        normalized_rows = self._build_bf_apriori_rows(rows)
-        mapping: dict[str, float] = {}
-        for row in normalized_rows:
-            uwy = str(row.get("uwy", "")).strip()
-            if not uwy:
-                continue
-            try:
-                value = float(row.get("apriori"))
-            except (TypeError, ValueError):
-                value = self._default_bf_apriori
-            if pd.isna(value) or value < 0:
-                value = self._default_bf_apriori
-            mapping[uwy] = value
-        return mapping
-
-    def _derive_tail_fit_period(
-        self, selection: Optional[List[int]]
-    ) -> Optional[Tuple[int, Optional[int]]]:
-        if not selection:
-            return None
-        normalized = self._normalize_tail_fit_selection(selection)
-        if not normalized:
-            return None
-        sorted_values = sorted(set(normalized))
-        if len(sorted_values) == 1:
-            return (sorted_values[0], None)
-        return (sorted_values[0], sorted_values[-1])
-
-    def _toggle_drop(
-        self,
-        existing: List[List[str | int]],
-        origin: str,
-        dev: int,
-    ) -> List[List[str | int]]:
-        normalized = []
-        for item in existing or []:
-            if not isinstance(item, list) or len(item) != 2:
-                continue
-            try:
-                normalized.append((str(item[0]), int(item[1])))
-            except (TypeError, ValueError):
-                continue
-
-        entry = (str(origin), int(dev))
-        if entry in normalized:
-            normalized = [item for item in normalized if item != entry]
-        else:
-            normalized.append(entry)
-
-        return [[item[0], item[1]] for item in normalized]
-
-    def _drops_to_tuples(
-        self, drops: Optional[List[List[str | int]]]
-    ) -> Optional[List[Tuple[str, int]]]:
-        if not drops:
-            return None
-        parsed: List[Tuple[str, int]] = []
-        for item in drops:
-            if not isinstance(item, list) or len(item) != 2:
-                continue
-            origin, dev = item[0], item[1]
-            try:
-                parsed.append((str(origin), int(dev)))
-            except (TypeError, ValueError):
-                continue
-        return parsed or None
-
-    def _apply_recalculation(
-        self,
-        average: str,
-        drops: Optional[List[Tuple[str, int]]],
-        tail_attachment_age: Optional[int],
-        tail_curve: str,
-        fit_period: Optional[Tuple[int, Optional[int]]],
-        bf_apriori_by_uwy: Optional[dict[str, float]],
-    ) -> None:
-        self._reserving.set_development(
-            average=average,
-            drop=drops,
-        )
-        self._reserving.set_tail(
-            curve=tail_curve,
-            projection_period=0,
-            attachment_age=tail_attachment_age,
-            fit_period=fit_period,
-        )
-        if bf_apriori_by_uwy:
-            self._reserving.set_bornhuetter_ferguson(apriori=bf_apriori_by_uwy)
-        else:
-            self._reserving.set_bornhuetter_ferguson(apriori=self._default_bf_apriori)
-        self._reserving.reserve(final_ultimate="chainladder")
-        self._extract_data()
-
-    def _build_results_payload(
-        self,
-        drop_store: Optional[List[List[str | int]]],
-        average: Optional[str],
-        tail_attachment_age: Optional[int],
-        tail_curve: Optional[str],
-        tail_fit_period_selection: Optional[List[int]],
-        bf_apriori_by_uwy: Optional[dict[str, float]],
-    ) -> dict:
-        timestamp = datetime.utcnow().isoformat() + "Z"
-        display = "None"
-        if drop_store:
-            display = ", ".join([f"{item[0]}:{item[1]}" for item in drop_store])
-        tail_display = "None"
-        if tail_attachment_age is not None:
-            tail_display = str(tail_attachment_age)
-        fit_period = self._derive_tail_fit_period(tail_fit_period_selection)
-        if fit_period is None:
-            fit_period_display = "lower=None, upper=None"
-        else:
-            fit_period_display = f"lower={fit_period[0]}, upper={fit_period[1]}"
-
-        visual_cache_key = self._build_visual_cache_key(
-            drop_store,
-            average,
-            tail_attachment_age,
-            tail_curve,
-            tail_fit_period_selection,
-        )
-        results_table_cache_key = self._build_results_cache_key(
-            drop_store,
-            average,
-            tail_attachment_age,
-            tail_curve,
-            tail_fit_period_selection,
-            bf_apriori_by_uwy=bf_apriori_by_uwy,
-        )
-
-        triangle_figure = self._get_or_build_cached_figure(
-            cache=self._triangle_figure_cache,
-            cache_key=visual_cache_key,
-            label="Triangle figure",
-            builder=lambda: self._plot_triangle_heatmap_clean(
-                self.triangle,
-                "Triangle - Link Ratios",
-                tail_attachment_age,
-                tail_fit_period_selection,
-            ).to_dict(),
-        )
-        emergence_figure = self._get_or_build_cached_figure(
-            cache=self._emergence_figure_cache,
-            cache_key=visual_cache_key,
-            label="Emergence figure",
-            builder=lambda: self._plot_emergence(
-                self.emergence_pattern,
-                "Emergence Pattern",
-            ).to_dict(),
-        )
-        results_figure = self._get_or_build_cached_figure(
-            cache=self._results_table_figure_cache,
-            cache_key=results_table_cache_key,
-            label="Results table figure",
-            builder=lambda: self._plot_reserving_results_table(
-                self.results,
-                "Reserving Results",
-            ).to_dict(),
-        )
-
-        return {
-            "triangle_figure": triangle_figure,
-            "emergence_figure": emergence_figure,
-            "results_figure": results_figure,
-            "drops_display": display,
-            "average": average,
-            "tail_curve": tail_curve,
-            "drop_store": drop_store or [],
-            "tail_attachment_age": tail_attachment_age,
-            "tail_attachment_display": tail_display,
-            "tail_fit_period_selection": tail_fit_period_selection or [],
-            "tail_fit_period_display": fit_period_display,
-            "last_updated": timestamp,
-        }
-
-    def _build_visual_cache_key(
-        self,
-        drop_store: Optional[List[List[str | int]]],
-        average: Optional[str],
-        tail_attachment_age: Optional[int],
-        tail_curve: Optional[str],
-        tail_fit_period_selection: Optional[List[int]],
-    ) -> str:
-        return self._build_results_cache_key(
-            drop_store,
-            average,
-            tail_attachment_age,
-            tail_curve,
-            tail_fit_period_selection,
-            bf_apriori_by_uwy=None,
-        )
-
-    def _cache_get(self, cache: dict[str, dict], key: str) -> Optional[dict]:
-        cached_value = cache.get(key)
-        if cached_value is None:
-            return None
-        cache.pop(key, None)
-        cache[key] = cached_value
-        return deepcopy(cached_value)
-
-    def _cache_set(self, cache: dict[str, dict], key: str, value: dict) -> None:
-        cache.pop(key, None)
-        cache[key] = deepcopy(value)
-        while len(cache) > self._cache_max_entries:
-            oldest_key = next(iter(cache))
-            cache.pop(oldest_key, None)
-
-    def _get_or_build_cached_figure(
-        self,
-        *,
-        cache: dict[str, dict],
-        cache_key: str,
-        label: str,
-        builder: Callable[[], dict],
-    ) -> dict:
-        started = time.perf_counter()
-        cached_figure = self._cache_get(cache, cache_key)
-        if cached_figure is not None:
-            elapsed_ms = (time.perf_counter() - started) * 1000
-            logging.info("%s reused in %.0f ms", label, elapsed_ms)
-            return cached_figure
-
-        figure_dict = builder()
-        elapsed_ms = (time.perf_counter() - started) * 1000
-        logging.info("%s built in %.0f ms", label, elapsed_ms)
-        self._cache_set(cache, cache_key, figure_dict)
-        return figure_dict
-
-    def _hash_dataframe(self, frame: pd.DataFrame) -> str:
-        hasher = hashlib.blake2b(digest_size=16)
-        hasher.update(str(frame.shape).encode("utf-8"))
-        for value in frame.index:
-            hasher.update(str(value).encode("utf-8"))
-            hasher.update(b"|")
-        for value in frame.columns:
-            hasher.update(str(value).encode("utf-8"))
-            hasher.update(b"|")
-        values = np.ascontiguousarray(frame.to_numpy(dtype=float, copy=False))
-        hasher.update(values.tobytes())
-        return hasher.hexdigest()
-
-    def _build_heatmap_core_cache_key(
-        self,
-        triangle_data: pd.DataFrame,
-        incurred_data: pd.DataFrame,
-        premium_data: pd.DataFrame,
-    ) -> str:
-        payload = {
-            "segment": self._get_segment_key(),
-            "triangle": self._hash_dataframe(triangle_data),
-            "incurred": self._hash_dataframe(incurred_data),
-            "premium": self._hash_dataframe(premium_data),
-        }
-        return json.dumps(payload, sort_keys=True)
-
-    def _format_millions_array(self, values: np.ndarray) -> np.ndarray:
-        formatted = np.full(values.shape, "", dtype=object)
-        valid_mask = ~np.isnan(values)
-        if not np.any(valid_mask):
-            return formatted
-
-        abs_values = np.abs(values)
-        millions_mask = valid_mask & (abs_values >= 1_000_000)
-        thousands_mask = valid_mask & (abs_values >= 1_000) & (~millions_mask)
-        units_mask = valid_mask & (~millions_mask) & (~thousands_mask)
-
-        if np.any(millions_mask):
-            formatted[millions_mask] = np.char.mod(
-                "%.2fm",
-                values[millions_mask] / 1_000_000,
-            )
-        if np.any(thousands_mask):
-            formatted[thousands_mask] = np.char.mod(
-                "%.2fk",
-                values[thousands_mask] / 1_000,
-            )
-        if np.any(units_mask):
-            formatted[units_mask] = np.char.mod("%.0f", values[units_mask])
-        return formatted
-
-    def _build_triangle_customdata(
-        self,
-        expanded_triangle: pd.DataFrame,
-        incurred_data: pd.DataFrame,
-        premium_data: pd.DataFrame,
-    ) -> np.ndarray:
-        row_keys: list[object] = []
-        year_to_incurred_index: dict[int, object] = {}
-        for idx in incurred_data.index:
-            if hasattr(idx, "year"):
-                year_to_incurred_index.setdefault(int(idx.year), idx)
-
-        for tri_idx in expanded_triangle.index:
-            if isinstance(tri_idx, str):
-                row_keys.append(None)
-                continue
-            if hasattr(tri_idx, "year"):
-                year = int(tri_idx.year)
-            else:
-                tri_text = str(tri_idx)
-                try:
-                    year = int(tri_text[:4])
-                except (TypeError, ValueError):
-                    row_keys.append(None)
-                    continue
-            row_keys.append(year_to_incurred_index.get(year))
-
-        invalid_column = "__invalid_dev_label__"
-        left_columns: list[object] = []
-        right_columns: list[object] = []
-        valid_dev_columns = np.zeros(len(expanded_triangle.columns), dtype=bool)
-        for j, col in enumerate(expanded_triangle.columns):
-            try:
-                parts = str(col).split("-")
-                left_columns.append(int(parts[0]))
-                right_columns.append(int(parts[1]))
-                valid_dev_columns[j] = True
-            except (TypeError, ValueError, IndexError):
-                left_columns.append(invalid_column)
-                right_columns.append(invalid_column)
-
-        aligned_incurred = incurred_data.reindex(index=row_keys)
-        aligned_premium = premium_data.reindex(index=row_keys)
-
-        left_values = aligned_incurred.reindex(columns=left_columns).to_numpy(
-            dtype=float
-        )
-        right_values = aligned_incurred.reindex(columns=right_columns).to_numpy(
-            dtype=float
-        )
-        premium_values = aligned_premium.reindex(columns=left_columns).to_numpy(
-            dtype=float
-        )
-
-        column_mask = np.broadcast_to(
-            valid_dev_columns.reshape(1, -1),
-            left_values.shape,
-        )
-        has_left = (~np.isnan(left_values)) & column_mask
-        has_right = (~np.isnan(right_values)) & column_mask
-        has_premium = (~np.isnan(premium_values)) & column_mask
-
-        left_display = self._format_millions_array(left_values)
-        right_display = self._format_millions_array(right_values)
-        premium_display = self._format_millions_array(premium_values)
-
-        incurred_display = np.full(left_values.shape, "", dtype=object)
-        both_mask = has_left & has_right
-        left_only_mask = has_left & (~has_right)
-        if np.any(both_mask):
-            merged = np.char.add(
-                np.char.add(left_display.astype(str), " --> "),
-                right_display.astype(str),
-            )
-            incurred_display[both_mask] = merged[both_mask]
-        if np.any(left_only_mask):
-            incurred_display[left_only_mask] = left_display[left_only_mask]
-
-        premium_strings = np.full(premium_values.shape, "", dtype=object)
-        if np.any(has_premium):
-            premium_strings[has_premium] = premium_display[has_premium]
-
-        return np.stack([incurred_display, premium_strings], axis=-1)
-
-    def _build_heatmap_core(
-        self,
-        triangle_data: pd.DataFrame,
-        incurred_data: pd.DataFrame,
-        premium_data: pd.DataFrame,
-        reserving: Reserving,
-    ) -> dict:
-        raw_link_ratios = (
-            reserving._triangle.get_triangle().link_ratio["incurred"].to_frame()
-        )
-        raw_link_ratios = raw_link_ratios.reindex(
-            index=triangle_data.index,
-            columns=triangle_data.columns,
-        )
-        dropped_mask = triangle_data.isna() & raw_link_ratios.notna()
-        for summary_row in ("LDF", "Tail"):
-            if summary_row in dropped_mask.index:
-                dropped_mask.loc[summary_row, :] = False
-        expanded_triangle = triangle_data.fillna(raw_link_ratios)
-
-        link_ratio_row_positions = list(range(max(len(expanded_triangle.index) - 2, 0)))
-        ldf_tail_rows = expanded_triangle.index[-2:]
-
-        normalized_data = expanded_triangle.copy()
-        for col_idx in range(len(expanded_triangle.columns)):
-            col_series = expanded_triangle.iloc[link_ratio_row_positions, col_idx]
-            col_data = col_series.dropna()
-            if len(col_data) == 0:
-                continue
-            col_min = col_data.min()
-            col_max = col_data.max()
-            if col_max > col_min:
-                normalized_values = (col_series - col_min) / (col_max - col_min)
-                normalized_data.iloc[link_ratio_row_positions, col_idx] = (
-                    normalized_values.to_numpy()
-                )
-            else:
-                normalized_data.iloc[link_ratio_row_positions, col_idx] = 0.5
-
-        ldf_tail_data = expanded_triangle.loc[ldf_tail_rows]
-        ldf_tail_min = ldf_tail_data.min().min()
-        ldf_tail_max = ldf_tail_data.max().max()
-
-        if ldf_tail_max > ldf_tail_min and ldf_tail_min > 0:
-            log_min = np.log(ldf_tail_min)
-            log_max = np.log(ldf_tail_max)
-            denom = log_max - log_min
-            for row in ldf_tail_rows:
-                row_values = expanded_triangle.loc[row]
-                row_mask = row_values.notna()
-                if row_mask.any():
-                    normalized_data.loc[row, row_mask] = (
-                        np.log(row_values[row_mask]) - log_min
-                    ) / denom
-        else:
-            for row in ldf_tail_rows:
-                row_values = expanded_triangle.loc[row]
-                row_mask = row_values.notna()
-                if row_mask.any():
-                    normalized_data.loc[row, row_mask] = 0.5
-
-        text_values = expanded_triangle.round(3).astype(str).to_numpy(dtype=object)
-        text_values = np.where(text_values == "nan", "", text_values)
-
-        z_data = normalized_data.to_numpy(dtype=float, copy=True)
-        expanded_values = expanded_triangle.to_numpy(dtype=float)
-        z_data = np.where(np.isnan(expanded_values), np.nan, z_data)
-
-        customdata = self._build_triangle_customdata(
-            expanded_triangle,
-            incurred_data,
-            premium_data,
-        )
-
-        return {
-            "expanded_triangle": expanded_triangle,
-            "dropped_mask": dropped_mask,
-            "z_data": z_data,
-            "text_values": text_values,
-            "customdata": customdata,
-        }
-
-    def _build_results_cache_key(
-        self,
-        drop_store: Optional[List[List[str | int]]],
-        average: Optional[str],
-        tail_attachment_age: Optional[int],
-        tail_curve: Optional[str],
-        tail_fit_period_selection: Optional[List[int]],
-        bf_apriori_by_uwy: Optional[dict[str, float]],
-    ) -> str:
-        normalized_drops: list[list[str | int]] = []
-        for item in drop_store or []:
-            if not isinstance(item, list) or len(item) != 2:
-                continue
-            try:
-                normalized_drops.append([str(item[0]), int(item[1])])
-            except (TypeError, ValueError):
-                continue
-        normalized_drops.sort(key=lambda item: (str(item[0]), int(item[1])))
-
-        normalized_fit_period = self._normalize_tail_fit_selection(
-            tail_fit_period_selection
-        )
-        normalized_fit_period.sort()
-
-        normalized_bf: dict[str, float] = {}
-        for key, value in sorted((bf_apriori_by_uwy or {}).items()):
-            try:
-                normalized_bf[str(key)] = float(value)
-            except (TypeError, ValueError):
-                continue
-
-        payload = {
-            "segment": self._get_segment_key(),
-            "average": average or self._default_average,
-            "tail_curve": tail_curve or self._default_tail_curve,
-            "tail_attachment_age": tail_attachment_age,
-            "tail_fit_period_selection": normalized_fit_period,
-            "drops": normalized_drops,
-            "bf_apriori_by_uwy": normalized_bf,
-        }
-        return json.dumps(payload, sort_keys=True)
-
-    def _build_params_state(
-        self,
-        *,
-        drop_store: Optional[List[List[str | int]]],
-        average: Optional[str],
-        tail_attachment_age: Optional[int],
-        tail_curve: Optional[str],
-        tail_fit_period_selection: Optional[List[int]],
-        bf_apriori_by_uwy: Optional[dict[str, float]],
-        request_id: int,
-        source: str,
-        force_recalc: bool,
-        sync_version: Optional[int] = None,
-    ) -> dict:
-        normalized_drop_store = self._normalize_drop_store(drop_store)
-        normalized_tail_fit = self._normalize_tail_fit_selection(
-            tail_fit_period_selection
-        )
-
-        parsed_tail = None
-        if tail_attachment_age is not None:
-            try:
-                parsed_tail = int(tail_attachment_age)
-            except (TypeError, ValueError):
-                parsed_tail = None
-
-        normalized_bf = {
-            key: float(value)
-            for key, value in self._bf_rows_to_mapping(
-                self._build_bf_apriori_rows(bf_apriori_by_uwy)
-            ).items()
-        }
-
-        return {
-            "request_id": int(request_id),
-            "source": source,
-            "force_recalc": bool(force_recalc),
-            "drop_store": normalized_drop_store,
-            "tail_attachment_age": parsed_tail,
-            "tail_fit_period_selection": normalized_tail_fit,
-            "average": average or self._default_average,
-            "tail_curve": tail_curve or self._default_tail_curve,
-            "bf_apriori_by_uwy": normalized_bf,
-            "sync_version": sync_version,
-        }
-
-    def _load_session_params_state(self, request_id: int, force_recalc: bool) -> dict:
-        if self._config is None:
-            return self._build_params_state(
-                drop_store=self._default_drop_store,
-                average=self._default_average,
-                tail_attachment_age=self._default_tail_attachment_age,
-                tail_curve=self._default_tail_curve,
-                tail_fit_period_selection=self._default_tail_fit_period_selection,
-                bf_apriori_by_uwy=self._bf_rows_to_mapping(
-                    self._default_bf_apriori_rows
-                ),
-                request_id=request_id,
-                source="load",
-                force_recalc=force_recalc,
-                sync_version=None,
-            )
-
-        session = self._config.load_session()
-        return self._build_params_state(
-            drop_store=session.get("drops"),
-            average=session.get("average", self._default_average),
-            tail_attachment_age=session.get("tail_attachment_age"),
-            tail_curve=session.get("tail_curve", self._default_tail_curve),
-            tail_fit_period_selection=session.get("tail_fit_period"),
-            bf_apriori_by_uwy=session.get("bf_apriori_by_uwy"),
-            request_id=request_id,
-            source="load",
-            force_recalc=force_recalc,
-            sync_version=self._config.get_sync_version(),
-        )
-
-    def _get_or_build_results_payload(
-        self,
-        drop_store: Optional[List[List[str | int]]],
-        average: Optional[str],
-        tail_attachment_age: Optional[int],
-        tail_curve: Optional[str],
-        tail_fit_period_selection: Optional[List[int]],
-        bf_apriori_by_uwy: Optional[dict[str, float]],
-        force_recalc: bool = False,
-    ) -> dict:
-        cache_key = self._build_results_cache_key(
-            drop_store,
-            average,
-            tail_attachment_age,
-            tail_curve,
-            tail_fit_period_selection,
-            bf_apriori_by_uwy,
-        )
-        cached_payload = (
-            None if force_recalc else self._cache_get(self._payload_cache, cache_key)
-        )
-        if cached_payload is not None:
-            logging.info("Using cached reserving payload for current parameters")
-            return cached_payload
-
-        fit_period = self._derive_tail_fit_period(tail_fit_period_selection)
-        started = time.perf_counter()
-        self._apply_recalculation(
-            average or self._default_average,
-            self._drops_to_tuples(drop_store),
-            tail_attachment_age,
-            tail_curve or self._default_tail_curve,
-            fit_period,
-            bf_apriori_by_uwy,
-        )
-        recalc_elapsed_ms = (time.perf_counter() - started) * 1000
-        logging.info("Recalculation completed in %.0f ms", recalc_elapsed_ms)
-
-        payload_started = time.perf_counter()
-        payload = self._build_results_payload(
-            drop_store=drop_store,
-            average=average,
-            tail_attachment_age=tail_attachment_age,
-            tail_curve=tail_curve,
-            tail_fit_period_selection=tail_fit_period_selection,
-            bf_apriori_by_uwy=bf_apriori_by_uwy,
-        )
-        payload_elapsed_ms = (time.perf_counter() - payload_started) * 1000
-        logging.info("Payload build completed in %.0f ms", payload_elapsed_ms)
-        payload["cache_key"] = cache_key
-        self._cache_set(self._payload_cache, cache_key, payload)
-        return payload
 
     def _register_callbacks(self) -> None:
         clientside_callback(
@@ -1600,9 +849,18 @@ class Dashboard:
             results_figure = no_update
             if active_tab == "results":
                 if not isinstance(results_payload, dict):
-                    figure_dict: dict = self._plot_reserving_results_table(
-                        self.results,
-                        "Reserving Results",
+                    figure_dict: dict = plot_reserving_results_table(
+                        results_df=self.results,
+                        title="Reserving Results",
+                        font_family=FONT_FAMILY,
+                        figure_font_size=FIGURE_FONT_SIZE,
+                        figure_title_font_size=FIGURE_TITLE_FONT_SIZE,
+                        table_header_font_size=TABLE_HEADER_FONT_SIZE,
+                        table_cell_font_size=TABLE_CELL_FONT_SIZE,
+                        alert_annotation_font_size=ALERT_ANNOTATION_FONT_SIZE,
+                        color_text=COLOR_TEXT,
+                        color_surface=COLOR_SURFACE,
+                        color_border=COLOR_BORDER,
                     ).to_dict()
                 else:
                     figure_dict = deepcopy(results_payload.get("results_figure") or {})
@@ -1656,9 +914,15 @@ class Dashboard:
                     current_request_id = 0
 
             if trigger == "page-location" or not isinstance(current_params, dict):
-                next_params = self._load_session_params_state(
+                next_params = self._params_service.load_session_params_state(
                     request_id=current_request_id + 1,
                     force_recalc=True,
+                    default_drop_store=self._default_drop_store,
+                    default_average=self._default_average,
+                    default_tail_attachment_age=self._default_tail_attachment_age,
+                    default_tail_curve=self._default_tail_curve,
+                    default_tail_fit_period_selection=self._default_tail_fit_period_selection,
+                    default_bf_apriori_rows=self._default_bf_apriori_rows,
                 )
                 logging.info(
                     "[params-reducer] load request=%s force_recalc=%s",
@@ -1667,7 +931,7 @@ class Dashboard:
                 )
                 return next_params
 
-            working_params = self._build_params_state(
+            working_params = self._params_service.build_params_state(
                 drop_store=current_params.get("drop_store"),
                 average=current_params.get("average"),
                 tail_attachment_age=current_params.get("tail_attachment_age"),
@@ -1689,7 +953,7 @@ class Dashboard:
                 point = click["points"][0]
                 origin = point.get("y")
                 dev_label = point.get("x")
-                dev = self._parse_dev_label(dev_label)
+                dev = self._params_service.parse_dev_label(dev_label)
                 if dev is None:
                     return no_update
                 if origin == "Tail":
@@ -1700,7 +964,7 @@ class Dashboard:
                         working_params["tail_attachment_age"] = next_tail
                         changed = True
                 elif origin == "LDF":
-                    updated_fit = self._toggle_tail_fit_selection(
+                    updated_fit = self._params_service.toggle_tail_fit_selection(
                         working_params["tail_fit_period_selection"],
                         dev,
                     )
@@ -1708,7 +972,7 @@ class Dashboard:
                         working_params["tail_fit_period_selection"] = updated_fit
                         changed = True
                 elif dev_label is not None:
-                    updated_drops = self._toggle_drop(
+                    updated_drops = self._params_service.toggle_drop(
                         working_params["drop_store"],
                         str(origin),
                         dev,
@@ -1730,7 +994,7 @@ class Dashboard:
                     changed = True
 
             elif trigger == "bf-apriori-table":
-                next_bf = self._bf_rows_to_mapping(bf_apriori_rows)
+                next_bf = self._params_service.bf_rows_to_mapping(bf_apriori_rows)
                 if next_bf != working_params["bf_apriori_by_uwy"]:
                     working_params["bf_apriori_by_uwy"] = next_bf
                     changed = True
@@ -1763,7 +1027,7 @@ class Dashboard:
                     return no_update
 
                 session = self._config.load_session()
-                synced_params = self._build_params_state(
+                synced_params = self._params_service.build_params_state(
                     drop_store=session.get("drops"),
                     average=session.get("average", self._default_average),
                     tail_attachment_age=session.get("tail_attachment_age"),
@@ -1825,13 +1089,16 @@ class Dashboard:
             bf_apriori_by_uwy = params.get("bf_apriori_by_uwy") or {}
             force_recalc = bool(params.get("force_recalc"))
 
-            cache_key = self._build_results_cache_key(
-                drop_store,
-                average,
-                tail_attachment_age,
-                tail_curve,
-                tail_fit_period_selection,
-                bf_apriori_by_uwy,
+            cache_key = self._cache_service.build_results_cache_key(
+                segment=self._get_segment_key(),
+                default_average=self._default_average,
+                default_tail_curve=self._default_tail_curve,
+                drop_store=drop_store,
+                average=average,
+                tail_attachment_age=tail_attachment_age,
+                tail_curve=tail_curve,
+                tail_fit_period_selection=tail_fit_period_selection,
+                bf_apriori_by_uwy=bf_apriori_by_uwy,
             )
 
             if (
@@ -1855,7 +1122,7 @@ class Dashboard:
                 force_recalc,
             )
             try:
-                results_payload = self._get_or_build_results_payload(
+                results_payload = self._reserving_service.get_or_build_results_payload(
                     drop_store=drop_store,
                     average=average,
                     tail_attachment_age=tail_attachment_age,
@@ -1875,14 +1142,13 @@ class Dashboard:
 
             source = params.get("source")
             if source == "sync":
-                incoming_sync = params.get("sync_version")
-                try:
-                    sync_version = int(incoming_sync)
-                except (TypeError, ValueError):
-                    sync_version = 0
-                results_payload["sync_version"] = sync_version
-                segment_key = self._get_segment_key()
-                _LIVE_RESULTS_BY_SEGMENT[segment_key] = results_payload
+                results_payload, _ = (
+                    self._session_sync_service.apply_sync_source_payload(
+                        results_payload=results_payload,
+                        params=params,
+                    )
+                )
+                sync_version = int(results_payload.get("sync_version", 0))
                 logging.info(
                     "[recalc] finish request=%s sync_version=%s",
                     request_id,
@@ -1892,42 +1158,25 @@ class Dashboard:
                 logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
                 return results_payload, no_update
 
-            sync_version = 0
-            if self._config is not None:
-                sync_version = self._config.save_session_with_version(
-                    {
-                        "average": average,
-                        "tail_curve": tail_curve,
-                        "drops": drop_store,
-                        "tail_attachment_age": tail_attachment_age,
-                        "tail_fit_period": tail_fit_period_selection,
-                        "bf_apriori_by_uwy": bf_apriori_by_uwy,
-                    }
-                )
-            elif isinstance(current_payload, dict):
-                try:
-                    sync_version = int(current_payload.get("sync_version", 0)) + 1
-                except (TypeError, ValueError):
-                    sync_version = 1
-            else:
-                sync_version = 1
-
-            results_payload["sync_version"] = sync_version
-            segment_key = self._get_segment_key()
-            _LIVE_RESULTS_BY_SEGMENT[segment_key] = results_payload
-
-            previous_sync_version = 0
-            if isinstance(current_payload, dict):
-                try:
-                    previous_sync_version = int(current_payload.get("sync_version", 0))
-                except (TypeError, ValueError):
-                    previous_sync_version = 0
-
             if not bool(sync_ready):
                 logging.warning(
                     "Tab sync bridge unavailable; update applied only in current tab"
                 )
-            if sync_version <= previous_sync_version:
+
+            results_payload, publish_message = (
+                self._session_sync_service.apply_local_source_payload(
+                    results_payload=results_payload,
+                    params=params,
+                    current_payload=current_payload
+                    if isinstance(current_payload, dict)
+                    else None,
+                    sync_ready=bool(sync_ready),
+                )
+            )
+            sync_version = int(results_payload.get("sync_version", 0))
+            segment_key = self._get_segment_key()
+
+            if publish_message is None:
                 logging.info(
                     "Session unchanged; skipping sync publish for segment '%s'",
                     segment_key,
@@ -1941,10 +1190,6 @@ class Dashboard:
                 logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
                 return results_payload, no_update
 
-            publish_message = {
-                "sync_version": sync_version,
-                "updated_at": results_payload.get("last_updated"),
-            }
             logging.info(
                 "Publishing sync update for segment '%s' at version %s",
                 segment_key,
@@ -1970,9 +1215,13 @@ class Dashboard:
                 return (
                     self._default_average,
                     self._default_tail_curve,
-                    self._build_bf_apriori_rows(self._default_bf_apriori_rows),
+                    self._params_service.build_bf_apriori_rows(
+                        self._default_bf_apriori_rows
+                    ),
                 )
-            bf_rows = self._build_bf_apriori_rows(params.get("bf_apriori_by_uwy"))
+            bf_rows = self._params_service.build_bf_apriori_rows(
+                params.get("bf_apriori_by_uwy")
+            )
             return (
                 params.get("average", self._default_average),
                 params.get("tail_curve", self._default_tail_curve),
@@ -1988,17 +1237,24 @@ class Dashboard:
             if not results_payload:
                 return (
                     {
-                        "figure": self._plot_triangle_heatmap_clean(
+                        "figure": self._build_triangle_figure_dict(
                             self.triangle,
                             "Triangle - Link Ratios",
                             self._default_tail_attachment_age,
                             self._default_tail_fit_period_selection,
-                        ).to_dict(),
+                        ),
                         "figure_version": 0,
                     },
-                    self._plot_emergence(
-                        self.emergence_pattern,
-                        "Emergence Pattern",
+                    plot_emergence(
+                        emergence_pattern=self.emergence_pattern,
+                        title="Emergence Pattern",
+                        font_family=FONT_FAMILY,
+                        figure_font_size=FIGURE_FONT_SIZE,
+                        figure_title_font_size=FIGURE_TITLE_FONT_SIZE,
+                        alert_annotation_font_size=ALERT_ANNOTATION_FONT_SIZE,
+                        color_text=COLOR_TEXT,
+                        color_surface=COLOR_SURFACE,
+                        color_border=COLOR_BORDER,
                     ),
                 )
 
@@ -2087,831 +1343,21 @@ class Dashboard:
                 base_title = (
                     f"{base_title} / {divisor_map.get(divisor_value, 'Unknown')}"
                 )
-            return self._plot_data_triangle_table(
-                triangle_df,
-                f"{base_title} ({view_label})",
+            return plot_data_triangle_table(
+                triangle_df=triangle_df,
+                title=f"{base_title} ({view_label})",
                 weights_df=weights_df,
                 ratio_mode=ratio_mode,
+                font_family=FONT_FAMILY,
+                figure_font_size=FIGURE_FONT_SIZE,
+                figure_title_font_size=FIGURE_TITLE_FONT_SIZE,
+                table_header_font_size=TABLE_HEADER_FONT_SIZE,
+                table_cell_font_size=TABLE_CELL_FONT_SIZE,
+                alert_annotation_font_size=ALERT_ANNOTATION_FONT_SIZE,
+                color_text=COLOR_TEXT,
+                color_surface=COLOR_SURFACE,
+                color_border=COLOR_BORDER,
             )
-
-    def _plot_emergence(self, emergence_pattern, title):
-        """
-        Plot emergence pattern with UWY lines and expected line.
-
-        Args:
-            emergence_pattern: DataFrame with multi-level columns ('Actual', 'Expected')
-            title: Title for the plot
-
-        Returns:
-            Plotly Figure object
-        """
-        if emergence_pattern is None:
-            return go.Figure(
-                layout=go.Layout(
-                    title=f"{title} - No data available",
-                    annotations=[
-                        dict(
-                            text="Data not available. Call reserve() first.",
-                            x=0.5,
-                            y=0.5,
-                            xref="paper",
-                            yref="paper",
-                            showarrow=False,
-                            font=dict(
-                                color="red",
-                                size=ALERT_ANNOTATION_FONT_SIZE,
-                                family=FONT_FAMILY,
-                            ),
-                        )
-                    ],
-                )
-            )
-
-        fig = go.Figure()
-
-        # Plot each UWY line from 'Actual' data
-        actual_data = emergence_pattern["Actual"]
-        for idx in actual_data.index:
-            # Extract year from index (handles both datetime and string formats)
-            year = str(idx)[:4] if hasattr(idx, "year") else str(idx).split("-")[0]
-            fig.add_trace(
-                go.Scatter(
-                    x=actual_data.columns,
-                    y=actual_data.loc[idx],
-                    mode="lines+markers",
-                    name=year,
-                    showlegend=True,
-                )
-            )
-
-        # Plot expected line (same for all UWYs, so just take first row)
-        expected_data = emergence_pattern["Expected"]
-        fig.add_trace(
-            go.Scatter(
-                x=expected_data.columns,
-                y=expected_data.iloc[0],
-                mode="lines",
-                name="Expected",
-                line=dict(color="black", width=3, dash="dash"),
-                showlegend=True,
-            )
-        )
-
-        fig.update_layout(
-            title=title,
-            xaxis_title="Development (Months)",
-            yaxis_title="% of Ultimate",
-            template="plotly_white",
-            font=dict(color=COLOR_TEXT, size=FIGURE_FONT_SIZE, family=FONT_FAMILY),
-            title_font=dict(
-                color=COLOR_TEXT,
-                size=FIGURE_TITLE_FONT_SIZE,
-                family=FONT_FAMILY,
-            ),
-            hoverlabel=dict(
-                bgcolor=COLOR_SURFACE,
-                bordercolor=COLOR_BORDER,
-                font=dict(
-                    color=COLOR_TEXT,
-                    size=FIGURE_FONT_SIZE,
-                    family=FONT_FAMILY,
-                ),
-            ),
-            legend=dict(x=1.02, y=1, xanchor="left", yanchor="top"),
-            height=600,
-            autosize=True,
-            uirevision="static",
-        )
-
-        return fig
-
-    def _plot_reserving_results_table(self, results_df, title):
-        """
-        Plot reserving results as an interactive table.
-
-        Args:
-            results_df: DataFrame with columns [cl_ultimate, cl_loss_ratio, bf_ultimate, bf_loss_ratio, incurred, Premium, ultimate]
-            title: Title for the table
-
-        Returns:
-            Plotly Figure object with table
-        """
-        if results_df is None or len(results_df) == 0:
-            return go.Figure(
-                layout=go.Layout(
-                    title=f"{title} - No data available",
-                    annotations=[
-                        dict(
-                            text="Reserving results not available. Call reserve() first.",
-                            x=0.5,
-                            y=0.5,
-                            xref="paper",
-                            yref="paper",
-                            showarrow=False,
-                            font=dict(
-                                color="red",
-                                size=ALERT_ANNOTATION_FONT_SIZE,
-                                family=FONT_FAMILY,
-                            ),
-                        )
-                    ],
-                )
-            )
-
-        # Prepare data: extract year from index and format numbers
-        df_display = results_df.copy()
-
-        # Extract year from index (handles datetime or string formats)
-        uwy_years = []
-        for idx in df_display.index:
-            if hasattr(idx, "year"):
-                uwy_years.append(str(idx.year))
-            else:
-                # Handle string format like '2020-01-01'
-                uwy_years.append(str(idx)[:4])
-
-        # Compute incurred loss ratio
-        incurred_loss_ratios = []
-        for inc, prem in zip(df_display["incurred"], df_display["Premium"]):
-            if pd.isna(prem) or prem == 0 or pd.isna(inc):
-                incurred_loss_ratios.append("N/A")
-            else:
-                incurred_loss_ratios.append(f"{(inc / prem):.2%}")
-
-        # Compute IBNR = selected ultimate - incurred
-        ibnr_values = df_display["ultimate"] - df_display["incurred"]
-
-        # Create enhanced table data with formatted values showing both CL and BF methods
-        header_values = [
-            "UWY",
-            "Incurred (€)",
-            "Premium (€)",
-            "Incurred Loss Ratio",
-            "CL Ultimate (€)",
-            "CL Loss Ratio",
-            "BF Ultimate (€)",
-            "BF Loss Ratio",
-            "Selected Ultimate (€)",
-            "IBNR (€)",
-        ]
-
-        cell_values = [
-            uwy_years,
-            [f"{val:,.0f}" for val in df_display["incurred"]],
-            [f"{val:,.0f}" for val in df_display["Premium"]],
-            incurred_loss_ratios,
-            [f"{val:,.0f}" for val in df_display["cl_ultimate"]],
-            [f"{val:.2%}" for val in df_display["cl_loss_ratio"]],
-            [f"{val:,.0f}" for val in df_display["bf_ultimate"]],
-            [f"{val:.2%}" for val in df_display["bf_loss_ratio"]],
-            [f"{val:,.0f}" for val in df_display["ultimate"]],
-            [f"{val:,.0f}" for val in ibnr_values],
-        ]
-
-        # Color coding: neutral for basic data, blue for CL, orange for BF, green for selected
-        header_colors = [
-            "#2c3e50",
-            "#34495e",
-            "#34495e",
-            "#34495e",
-            "#3498db",
-            "#3498db",
-            "#e67e22",
-            "#e67e22",
-            "#27ae60",
-            "#16a085",
-        ]
-
-        fig = go.Figure(
-            data=[
-                go.Table(
-                    header=dict(
-                        values=header_values,
-                        fill_color=header_colors,
-                        align="center",
-                        font=dict(
-                            color="white",
-                            size=TABLE_HEADER_FONT_SIZE,
-                            family=FONT_FAMILY,
-                        ),
-                        height=35,
-                    ),
-                    cells=dict(
-                        values=cell_values,
-                        fill_color=[
-                            [
-                                "#f8f9fa" if i % 2 == 0 else "white"
-                                for i in range(len(uwy_years))
-                            ]
-                        ],
-                        align=[
-                            "center",
-                            "right",
-                            "right",
-                            "center",
-                            "right",
-                            "center",
-                            "right",
-                            "center",
-                            "right",
-                            "right",
-                        ],
-                        font=dict(
-                            color="black",
-                            size=TABLE_CELL_FONT_SIZE,
-                            family=FONT_FAMILY,
-                        ),
-                        height=28,
-                    ),
-                )
-            ]
-        )
-
-        fig.update_layout(
-            title=title,
-            template="plotly_white",
-            font=dict(color=COLOR_TEXT, size=FIGURE_FONT_SIZE, family=FONT_FAMILY),
-            title_font=dict(
-                color=COLOR_TEXT,
-                size=FIGURE_TITLE_FONT_SIZE,
-                family=FONT_FAMILY,
-            ),
-            hoverlabel=dict(
-                bgcolor=COLOR_SURFACE,
-                bordercolor=COLOR_BORDER,
-                font=dict(
-                    color=COLOR_TEXT,
-                    size=FIGURE_FONT_SIZE,
-                    family=FONT_FAMILY,
-                ),
-            ),
-            height=min(
-                650, 200 + len(df_display) * 28
-            ),  # Dynamic height based on rows, increased for wider table
-            margin=dict(l=20, r=20, t=80, b=20),
-        )
-
-        return fig
-
-    def _create_triangle_heatmap(
-        self,
-        triangle_data,
-        incurred_data,
-        premium_data,
-        title,
-        reserving: Reserving,
-        tail_attachment_age: Optional[int],
-        tail_fit_period_selection: Optional[List[int]],
-    ):
-        """
-        Plot triangle heatmap with link ratios, LDF, and Tail rows.
-        Uses column-wise normalization for better contrast.
-        Hover tooltip shows link ratios, cumulative incurred, and premium.
-
-        Args:
-            triangle_data: DataFrame with link ratios (rows = UWYs, columns = dev periods)
-            incurred_data: DataFrame with cumulative incurred values
-            premium_data: DataFrame with premium values
-            title: Title for the plot
-            reserving: Reserving object to access raw triangle data
-
-        Returns:
-            Plotly Figure object
-        """
-        figure_started = time.perf_counter()
-        if triangle_data is None:
-            return go.Figure(
-                layout=go.Layout(
-                    title=f"{title} - No data available",
-                    annotations=[
-                        dict(
-                            text="Data not available. Call reserve() first.",
-                            x=0.5,
-                            y=0.5,
-                            xref="paper",
-                            yref="paper",
-                            showarrow=False,
-                            font=dict(
-                                color="red",
-                                size=ALERT_ANNOTATION_FONT_SIZE,
-                                family=FONT_FAMILY,
-                            ),
-                        )
-                    ],
-                )
-            )
-
-        core_started = time.perf_counter()
-        core_cache_key = self._build_heatmap_core_cache_key(
-            triangle_data,
-            incurred_data,
-            premium_data,
-        )
-        core_payload = self._cache_get(self._heatmap_core_cache, core_cache_key)
-        if core_payload is None:
-            core_payload = self._build_heatmap_core(
-                triangle_data,
-                incurred_data,
-                premium_data,
-                reserving,
-            )
-            self._cache_set(self._heatmap_core_cache, core_cache_key, core_payload)
-            core_elapsed_ms = (time.perf_counter() - core_started) * 1000
-            logging.info("Triangle heatmap core built in %.0f ms", core_elapsed_ms)
-        else:
-            core_elapsed_ms = (time.perf_counter() - core_started) * 1000
-            logging.info("Triangle heatmap core reused in %.0f ms", core_elapsed_ms)
-
-        expanded_triangle = core_payload["expanded_triangle"]
-        z_data = core_payload["z_data"]
-        text_values = core_payload["text_values"]
-        customdata = core_payload["customdata"]
-
-        # Calculate figure dimensions based on cell size
-        n_cols = len(expanded_triangle.columns)
-        n_rows = len(expanded_triangle.index)
-        cell_width = 42  # pixels per cell (scaled to match 70% browser zoom appearance)
-        cell_height = (
-            28  # pixels per cell (scaled to match 70% browser zoom appearance)
-        )
-
-        fig_width = n_cols * cell_width
-        fig_height = n_rows * cell_height + 120  # Extra space for title and axes
-
-        # Create heatmap with normalized colors but original values as text
-        fig = go.Figure(
-            data=go.Heatmap(
-                z=z_data,
-                x=expanded_triangle.columns,
-                y=[
-                    str(idx)[:4] if idx not in ["LDF", "Tail"] else idx
-                    for idx in expanded_triangle.index
-                ],
-                text=text_values,
-                texttemplate="%{text}",
-                textfont={
-                    "size": HEATMAP_TEXT_FONT_SIZE,
-                    "family": FONT_FAMILY,
-                    "color": COLOR_TEXT,
-                },
-                colorscale="RdBu_r",
-                showscale=False,
-                zmin=0,
-                zmax=1,
-                customdata=customdata,
-                hovertemplate="UWY: %{y}<br>Dev Period: %{x}<br>Link Ratio: %{text}<br>Incurred: %{customdata[0]}<br>Premium: %{customdata[1]}<extra></extra>",
-            )
-        )
-
-        # Initially show approximately 143 columns (100/0.7 to match 70% zoom viewing area)
-        initial_cols = min(143, n_cols)
-
-        fig.update_layout(
-            title=title,
-            xaxis_title="Development Period",
-            yaxis_title="Underwriting Year",
-            template="plotly_white",
-            font=dict(color=COLOR_TEXT, size=FIGURE_FONT_SIZE, family=FONT_FAMILY),
-            title_font=dict(
-                color=COLOR_TEXT,
-                size=FIGURE_TITLE_FONT_SIZE,
-                family=FONT_FAMILY,
-            ),
-            hoverlabel=dict(
-                bgcolor=COLOR_SURFACE,
-                bordercolor=COLOR_BORDER,
-                font=dict(
-                    color=COLOR_TEXT,
-                    size=FIGURE_FONT_SIZE,
-                    family=FONT_FAMILY,
-                ),
-            ),
-            width=fig_width,
-            height=fig_height,
-            yaxis=dict(autorange="reversed"),  # Reverse y-axis so oldest year at top
-            xaxis=dict(
-                range=[-0.5, initial_cols - 0.5]
-            ),  # Show first 100 columns initially
-            margin=dict(l=80, r=20, t=80, b=60),  # Reduce margins
-            uirevision="static",
-        )
-
-        # Add black crosses through dropped cells
-        for row_label, col_label in dropped_mask.stack()[dropped_mask.stack()].index:
-            row_pos = expanded_triangle.index.get_loc(row_label)
-            col_pos = expanded_triangle.columns.get_loc(col_label)
-            # Diagonal line 1
-            fig.add_shape(
-                type="line",
-                x0=col_pos - 0.5,
-                y0=row_pos - 0.5,
-                x1=col_pos + 0.5,
-                y1=row_pos + 0.5,
-                line=dict(color="black", width=2),
-                xref="x",
-                yref="y",
-            )
-            # Diagonal line 2
-            fig.add_shape(
-                type="line",
-                x0=col_pos - 0.5,
-                y0=row_pos + 0.5,
-                x1=col_pos + 0.5,
-                y1=row_pos - 0.5,
-                line=dict(color="black", width=2),
-                xref="x",
-                yref="y",
-            )
-
-        if tail_attachment_age is not None:
-            try:
-                tail_row_pos = expanded_triangle.index.get_loc("Tail")
-            except KeyError:
-                tail_row_pos = None
-
-            if tail_row_pos is not None:
-                selected_col = None
-                for col in expanded_triangle.columns:
-                    col_age = self._parse_dev_label(col)
-                    if col_age == tail_attachment_age:
-                        selected_col = col
-                        break
-
-                if selected_col is not None:
-                    col_pos = expanded_triangle.columns.get_loc(selected_col)
-                    fig.add_shape(
-                        type="rect",
-                        x0=col_pos - 0.5,
-                        y0=tail_row_pos - 0.5,
-                        x1=col_pos + 0.5,
-                        y1=tail_row_pos + 0.5,
-                        line=dict(color="black", width=2),
-                        fillcolor="rgba(0,0,0,0)",
-                        xref="x",
-                        yref="y",
-                    )
-
-        fit_period = self._derive_tail_fit_period(tail_fit_period_selection)
-        if fit_period is not None:
-            try:
-                ldf_row_pos = expanded_triangle.index.get_loc("LDF")
-            except KeyError:
-                ldf_row_pos = None
-
-            if ldf_row_pos is not None:
-                lower_value, upper_value = fit_period
-                lower_col = None
-                upper_col = None
-                for col in expanded_triangle.columns:
-                    col_age = self._parse_dev_label(col)
-                    if col_age == lower_value:
-                        lower_col = col
-                    if upper_value is not None and col_age == upper_value:
-                        upper_col = col
-
-                if lower_col is not None:
-                    lower_pos = expanded_triangle.columns.get_loc(lower_col)
-                    if upper_value is None or upper_col is None:
-                        fig.add_shape(
-                            type="rect",
-                            x0=lower_pos - 0.5,
-                            y0=ldf_row_pos - 0.5,
-                            x1=lower_pos + 0.5,
-                            y1=ldf_row_pos + 0.5,
-                            line=dict(color="black", width=2),
-                            fillcolor="rgba(0,0,0,0)",
-                            xref="x",
-                            yref="y",
-                        )
-                    else:
-                        upper_pos = expanded_triangle.columns.get_loc(upper_col)
-                        start_pos = min(lower_pos, upper_pos)
-                        end_pos = max(lower_pos, upper_pos)
-                        fig.add_shape(
-                            type="rect",
-                            x0=start_pos - 0.5,
-                            y0=ldf_row_pos - 0.5,
-                            x1=end_pos + 0.5,
-                            y1=ldf_row_pos + 0.5,
-                            line=dict(color="black", width=2),
-                            fillcolor="rgba(0,0,0,0)",
-                            xref="x",
-                            yref="y",
-                        )
-                        fig.add_shape(
-                            type="rect",
-                            x0=lower_pos - 0.5,
-                            y0=ldf_row_pos - 0.5,
-                            x1=lower_pos + 0.5,
-                            y1=ldf_row_pos + 0.5,
-                            line=dict(color="black", width=3),
-                            fillcolor="rgba(0,0,0,0)",
-                            xref="x",
-                            yref="y",
-                        )
-                        fig.add_shape(
-                            type="rect",
-                            x0=upper_pos - 0.5,
-                            y0=ldf_row_pos - 0.5,
-                            x1=upper_pos + 0.5,
-                            y1=ldf_row_pos + 0.5,
-                            line=dict(color="black", width=3),
-                            fillcolor="rgba(0,0,0,0)",
-                            xref="x",
-                            yref="y",
-                        )
-
-        total_elapsed_ms = (time.perf_counter() - figure_started) * 1000
-        logging.info("Triangle heatmap total built in %.0f ms", total_elapsed_ms)
-        return fig
-
-    def _plot_triangle_heatmap(
-        self,
-        triangle_data,
-        title,
-        tail_attachment_age: Optional[int],
-        tail_fit_period_selection: Optional[List[int]],
-    ):
-        """
-        Plot triangle heatmap with incurred/premium hover values.
-        """
-        return self._create_triangle_heatmap(
-            triangle_data,
-            self.incurred,
-            self.premium,
-            title,
-            self._reserving,
-            tail_attachment_age,
-            tail_fit_period_selection,
-        )
-
-    def _plot_triangle_heatmap_clean(
-        self,
-        triangle_data,
-        title,
-        tail_attachment_age: Optional[int],
-        tail_fit_period_selection: Optional[List[int]],
-    ):
-        """
-        Plot chainladder heatmap with cleaner, table-like styling.
-        """
-        render_started = time.perf_counter()
-        core_cache_key = self._build_heatmap_core_cache_key(
-            triangle_data,
-            self.incurred,
-            self.premium,
-        )
-        core_payload = self._cache_get(self._heatmap_core_cache, core_cache_key)
-        if core_payload is None:
-            core_payload = self._build_heatmap_core(
-                triangle_data,
-                self.incurred,
-                self.premium,
-                self._reserving,
-            )
-            self._cache_set(self._heatmap_core_cache, core_cache_key, core_payload)
-            core_elapsed_ms = (time.perf_counter() - render_started) * 1000
-            logging.info(
-                "Triangle heatmap core built for clean view in %.0f ms",
-                core_elapsed_ms,
-            )
-        else:
-            core_elapsed_ms = (time.perf_counter() - render_started) * 1000
-            logging.info(
-                "Triangle heatmap core reused for clean view in %.0f ms",
-                core_elapsed_ms,
-            )
-
-        expanded_triangle = core_payload["expanded_triangle"]
-        dropped_mask = core_payload["dropped_mask"]
-        z_data = core_payload["z_data"]
-        text_values = core_payload["text_values"]
-        customdata = core_payload["customdata"]
-
-        x_labels = [str(value) for value in expanded_triangle.columns]
-        y_labels = [
-            str(idx)[:4] if idx not in ["LDF", "Tail"] else str(idx)
-            for idx in expanded_triangle.index
-        ]
-
-        n_cols = len(triangle_data.columns)
-        n_rows = len(triangle_data.index)
-        table_width = 130 + (62 * n_cols)
-        table_height = min(760, 170 + (n_rows * 28))
-        header_bg_value = -0.2
-
-        z_with_headers = np.full(
-            (len(y_labels) + 1, len(x_labels) + 1),
-            header_bg_value,
-            dtype=float,
-        )
-        z_with_headers[1:, 1:] = z_data
-
-        text_with_headers = np.full(
-            (len(y_labels) + 1, len(x_labels) + 1),
-            "",
-            dtype=object,
-        )
-        text_with_headers[0, 0] = "<b>UWY</b>"
-        text_with_headers[0, 1:] = [f"<b>{label}</b>" for label in x_labels]
-        text_with_headers[1:, 0] = [f"<b>{label}</b>" for label in y_labels]
-        text_with_headers[1:, 1:] = text_values
-
-        custom_with_headers = np.empty(
-            (len(y_labels) + 1, len(x_labels) + 1, 2),
-            dtype=object,
-        )
-        custom_with_headers[:] = ""
-        custom_with_headers[1:, 1:] = customdata
-
-        fig = go.Figure(
-            data=go.Heatmap(
-                z=z_with_headers,
-                x=["UWY"] + x_labels,
-                y=["Dev"] + y_labels,
-                text=text_with_headers,
-                texttemplate="%{text}",
-                customdata=custom_with_headers,
-                hovertemplate="UWY: %{y}<br>Dev Period: %{x}<br>Link Ratio: %{text}<br>Incurred: %{customdata[0]}<br>Premium: %{customdata[1]}<extra></extra>",
-                showscale=False,
-                zmin=header_bg_value,
-                zmax=1,
-                hoverongaps=False,
-                colorscale=[
-                    [0.0, "#f2f5f9"],
-                    [0.1666, "#f2f5f9"],
-                    [0.1667, "#f5f8fc"],
-                    [0.375, "#e7eff9"],
-                    [0.5833, "#d7e5f5"],
-                    [0.7916, "#bdd2ec"],
-                    [1.0, "#9bbbe0"],
-                ],
-                textfont={
-                    "size": HEATMAP_TEXT_FONT_SIZE,
-                    "family": FONT_FAMILY,
-                    "color": COLOR_TEXT,
-                },
-                xgap=1,
-                ygap=1,
-            )
-        )
-
-        shape_defs: list[dict[str, object]] = []
-
-        if tail_attachment_age is not None:
-            try:
-                tail_row_pos = expanded_triangle.index.get_loc("Tail") + 1
-            except KeyError:
-                tail_row_pos = None
-
-            if tail_row_pos is not None:
-                selected_col = None
-                for col in expanded_triangle.columns:
-                    col_age = self._parse_dev_label(col)
-                    if col_age == tail_attachment_age:
-                        selected_col = col
-                        break
-
-                if selected_col is not None:
-                    col_pos = expanded_triangle.columns.get_loc(selected_col) + 1
-                    shape_defs.append(
-                        {
-                            "type": "rect",
-                            "x0": col_pos - 0.5,
-                            "y0": tail_row_pos - 0.5,
-                            "x1": col_pos + 0.5,
-                            "y1": tail_row_pos + 0.5,
-                            "line": {"color": "black", "width": 2},
-                            "fillcolor": "rgba(0,0,0,0)",
-                            "xref": "x",
-                            "yref": "y",
-                        }
-                    )
-
-        fit_period = self._derive_tail_fit_period(tail_fit_period_selection)
-        if fit_period is not None:
-            try:
-                ldf_row_pos = expanded_triangle.index.get_loc("LDF") + 1
-            except KeyError:
-                ldf_row_pos = None
-
-            if ldf_row_pos is not None:
-                lower_value, upper_value = fit_period
-                lower_col = None
-                upper_col = None
-                for col in expanded_triangle.columns:
-                    col_age = self._parse_dev_label(col)
-                    if col_age == lower_value:
-                        lower_col = col
-                    if upper_value is not None and col_age == upper_value:
-                        upper_col = col
-
-                if lower_col is not None:
-                    lower_pos = expanded_triangle.columns.get_loc(lower_col) + 1
-                    if upper_value is None or upper_col is None:
-                        shape_defs.append(
-                            {
-                                "type": "rect",
-                                "x0": lower_pos - 0.5,
-                                "y0": ldf_row_pos - 0.5,
-                                "x1": lower_pos + 0.5,
-                                "y1": ldf_row_pos + 0.5,
-                                "line": {"color": "black", "width": 2},
-                                "fillcolor": "rgba(0,0,0,0)",
-                                "xref": "x",
-                                "yref": "y",
-                            }
-                        )
-                    else:
-                        upper_pos = expanded_triangle.columns.get_loc(upper_col) + 1
-                        start_pos = min(lower_pos, upper_pos)
-                        end_pos = max(lower_pos, upper_pos)
-                        shape_defs.append(
-                            {
-                                "type": "rect",
-                                "x0": start_pos - 0.5,
-                                "y0": ldf_row_pos - 0.5,
-                                "x1": end_pos + 0.5,
-                                "y1": ldf_row_pos + 0.5,
-                                "line": {"color": "black", "width": 2},
-                                "fillcolor": "rgba(0,0,0,0)",
-                                "xref": "x",
-                                "yref": "y",
-                            }
-                        )
-                        shape_defs.append(
-                            {
-                                "type": "rect",
-                                "x0": lower_pos - 0.5,
-                                "y0": ldf_row_pos - 0.5,
-                                "x1": lower_pos + 0.5,
-                                "y1": ldf_row_pos + 0.5,
-                                "line": {"color": "black", "width": 3},
-                                "fillcolor": "rgba(0,0,0,0)",
-                                "xref": "x",
-                                "yref": "y",
-                            }
-                        )
-                        shape_defs.append(
-                            {
-                                "type": "rect",
-                                "x0": upper_pos - 0.5,
-                                "y0": ldf_row_pos - 0.5,
-                                "x1": upper_pos + 0.5,
-                                "y1": ldf_row_pos + 0.5,
-                                "line": {"color": "black", "width": 3},
-                                "fillcolor": "rgba(0,0,0,0)",
-                                "xref": "x",
-                                "yref": "y",
-                            }
-                        )
-
-        fig.update_layout(
-            paper_bgcolor=COLOR_SURFACE,
-            plot_bgcolor=COLOR_SURFACE,
-            font={
-                "family": FONT_FAMILY,
-                "color": COLOR_TEXT,
-                "size": FIGURE_FONT_SIZE,
-            },
-            title_font={
-                "family": FONT_FAMILY,
-                "color": COLOR_TEXT,
-                "size": FIGURE_TITLE_FONT_SIZE,
-            },
-            hoverlabel={
-                "bgcolor": COLOR_SURFACE,
-                "bordercolor": COLOR_BORDER,
-                "font": {
-                    "family": FONT_FAMILY,
-                    "color": COLOR_TEXT,
-                    "size": FIGURE_FONT_SIZE,
-                },
-            },
-            margin={"l": 8, "r": 8, "t": 48, "b": 8},
-            width=max(900, table_width + 16),
-            height=table_height,
-            autosize=False,
-            xaxis_title=None,
-            yaxis_title=None,
-            shapes=shape_defs,
-            uirevision="static",
-        )
-        fig.update_xaxes(
-            showgrid=False,
-            showticklabels=False,
-            side="top",
-            range=[-0.5, min(143, n_cols) + 0.5],
-        )
-        fig.update_yaxes(
-            showgrid=False,
-            showticklabels=False,
-            autorange="reversed",
-        )
-
-        total_elapsed_ms = (time.perf_counter() - render_started) * 1000
-        logging.info("Triangle heatmap clean built in %.0f ms", total_elapsed_ms)
-        return fig
 
     def _create_layout(self):
         """
@@ -2923,13 +1369,15 @@ class Dashboard:
             Dash html.Div component
         """
         self._load_session_defaults()
-        results_payload = self._build_results_payload(
+        results_payload = self._reserving_service.build_results_payload(
             drop_store=self._default_drop_store,
             average=self._default_average,
             tail_attachment_age=self._default_tail_attachment_age,
             tail_curve=self._default_tail_curve,
             tail_fit_period_selection=self._default_tail_fit_period_selection,
-            bf_apriori_by_uwy=self._bf_rows_to_mapping(self._default_bf_apriori_rows),
+            bf_apriori_by_uwy=self._params_service.bf_rows_to_mapping(
+                self._default_bf_apriori_rows
+            ),
         )
         results_payload["figure_version"] = 0
         initial_sync_version = 0
@@ -2948,7 +1396,7 @@ class Dashboard:
                 "none",
             )
         )
-        initial_bf_apriori_rows = self._build_bf_apriori_rows(
+        initial_bf_apriori_rows = self._params_service.build_bf_apriori_rows(
             self._default_bf_apriori_rows
         )
         return html.Div(
@@ -3195,11 +1643,20 @@ class Dashboard:
                                                     [
                                                         dcc.Graph(
                                                             id="data-triangle-view",
-                                                            figure=self._plot_data_triangle_table(
-                                                                initial_data_triangle,
-                                                                "Data Triangle - Incurred (Cumulative)",
+                                                            figure=plot_data_triangle_table(
+                                                                triangle_df=initial_data_triangle,
+                                                                title="Data Triangle - Incurred (Cumulative)",
                                                                 weights_df=initial_data_weights,
                                                                 ratio_mode=initial_ratio_mode,
+                                                                font_family=FONT_FAMILY,
+                                                                figure_font_size=FIGURE_FONT_SIZE,
+                                                                figure_title_font_size=FIGURE_TITLE_FONT_SIZE,
+                                                                table_header_font_size=TABLE_HEADER_FONT_SIZE,
+                                                                table_cell_font_size=TABLE_CELL_FONT_SIZE,
+                                                                alert_annotation_font_size=ALERT_ANNOTATION_FONT_SIZE,
+                                                                color_text=COLOR_TEXT,
+                                                                color_surface=COLOR_SURFACE,
+                                                                color_border=COLOR_BORDER,
                                                             ),
                                                             config={
                                                                 "displayModeBar": False,

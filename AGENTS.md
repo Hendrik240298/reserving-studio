@@ -57,9 +57,13 @@
 - Dashboard E2E suite (Playwright):
 - `uv run python -m playwright install chromium`
 - `uv run pytest tests/e2e -m e2e -q`
+- Local unit suite (source-level fast checks):
+- `uv run pytest tests/unit -q`
 - Detailed testing guidance and workflow: `TESTING.md`
 
 ### AI testing workflow
+- After implementing a new feature, or iterating on an in-progress feature, run relevant tests before reporting back.
+- After changing `source/presentation/*.py` or other source-level helpers, run impacted unit test(s) in `tests/unit` (or full `uv run pytest tests/unit -q` if uncertain).
 - After changing `source/app.py`, `source/dashboard.py`, `source/reserving.py`, or `source/triangle.py`, run impacted E2E test(s) in `tests/e2e`.
 - If impact is unclear, run full `uv run pytest tests/e2e -m e2e -q`.
 - On E2E failure, report artifact paths from `tests/artifacts/e2e/` (`.png` screenshot and `.zip` trace) and summarize failing interaction.
