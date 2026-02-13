@@ -83,10 +83,10 @@ selected_ultimate_by_uwy:
   '2000': bornhuetter_ferguson
   '2001': bornhuetter_ferguson
   '2002': bornhuetter_ferguson
-  '2003': bornhuetter_ferguson
+  '2003': chainladder
   '2004': bornhuetter_ferguson
-  '2005': chainladder
+  '2005': bornhuetter_ferguson
   '2006': bornhuetter_ferguson
-sync_version: 436
+sync_version: 438
 segment: quarterly
-updated_at: '2026-02-13T17:25:58.137020Z'
+updated_at: '2026-02-13T17:28:14.655603Z'

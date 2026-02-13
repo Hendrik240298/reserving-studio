@@ -923,7 +923,7 @@ class Dashboard:
                 "padding": "0" if is_collapsed else "20px 16px",
                 "display": "flex",
                 "flexDirection": "column",
-                "justifyContent": "center",
+                "justifyContent": "flex-start",
                 "borderRight": "none" if is_collapsed else f"1px solid {COLOR_BORDER}",
                 "position": "relative",
                 "minHeight": "100vh",
@@ -934,12 +934,13 @@ class Dashboard:
             }
             title_style = {
                 "display": "none" if is_collapsed else "block",
-                "textAlign": "center",
-                "marginBottom": "18px",
+                "textAlign": "left",
+                "marginBottom": "20px",
                 "color": COLOR_TEXT,
-                "letterSpacing": "0.2px",
-                "fontSize": "15px",
-                "fontWeight": 600,
+                "letterSpacing": "0.3px",
+                "fontSize": "18px",
+                "fontWeight": 700,
+                "fontFamily": '"JetBrainsMono Nerd Font", "FiraCode Nerd Font", "Hack Nerd Font", monospace',
             }
             nav_stack_style = {
                 "display": "none" if is_collapsed else "flex",
@@ -1804,15 +1805,16 @@ class Dashboard:
                         html.Div(
                             [
                                 html.Div(
-                                    "Reserving",
+                                    "reserving-studio",
                                     id="sidebar-title",
                                     style={
-                                        "fontWeight": 600,
-                                        "fontSize": "15px",
-                                        "marginBottom": "18px",
-                                        "textAlign": "center",
+                                        "fontWeight": 700,
+                                        "fontSize": "18px",
+                                        "marginBottom": "20px",
+                                        "textAlign": "left",
                                         "color": COLOR_TEXT,
-                                        "letterSpacing": "0.2px",
+                                        "letterSpacing": "0.3px",
+                                        "fontFamily": '"JetBrainsMono Nerd Font", "FiraCode Nerd Font", "Hack Nerd Font", monospace',
                                     },
                                 ),
                                 html.Div(
@@ -1833,38 +1835,10 @@ class Dashboard:
                         ),
                         html.Div(
                             [
-                                html.H1(
-                                    "Reserving Dashboard",
-                                    style={
-                                        "textAlign": "left",
-                                        "marginBottom": "16px",
-                                        "fontFamily": FONT_FAMILY,
-                                        "color": COLOR_TEXT,
-                                        "fontSize": "24px",
-                                        "fontWeight": 600,
-                                    },
-                                ),
                                 html.Div(
                                     [
                                         html.Div(
                                             [
-                                                html.H3(
-                                                    "Data",
-                                                    style={
-                                                        "marginTop": "0",
-                                                        "fontFamily": FONT_FAMILY,
-                                                        "color": COLOR_TEXT,
-                                                        "fontWeight": 600,
-                                                        "fontSize": "18px",
-                                                    },
-                                                ),
-                                                html.P(
-                                                    "Select a data view and inspect the triangle in chainladder-style tabular form.",
-                                                    style={
-                                                        "marginTop": "6px",
-                                                        "color": COLOR_MUTED,
-                                                    },
-                                                ),
                                                 html.Div(
                                                     [
                                                         html.Div(
