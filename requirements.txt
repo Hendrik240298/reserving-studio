@@ -13,3 +13,5 @@ plotly
 seaborn
 openpyxl
 chainladder
+pytest
+playwright

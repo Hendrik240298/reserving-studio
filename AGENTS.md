@@ -54,6 +54,15 @@
 - `uv run pytest chainladder -k "predict"`
 - Exclude R-marked tests (marked `r`):
 - `uv run pytest chainladder -m "not r"`
+- Dashboard E2E suite (Playwright):
+- `uv run python -m playwright install chromium`
+- `uv run pytest tests/e2e -m e2e -q`
+- Detailed testing guidance and workflow: `TESTING.md`
+
+### AI testing workflow
+- After changing `source/app.py`, `source/dashboard.py`, `source/reserving.py`, or `source/triangle.py`, run impacted E2E test(s) in `tests/e2e`.
+- If impact is unclear, run full `uv run pytest tests/e2e -m e2e -q`.
+- On E2E failure, report artifact paths from `tests/artifacts/e2e/` (`.png` screenshot and `.zip` trace) and summarize failing interaction.
 
 ### Lint / format
 - No lint/format configuration found in this repo.

@@ -40,6 +40,15 @@ python -m source.app
 
 Open http://127.0.0.1:8050
 
+## Run dashboard E2E tests
+
+The E2E suite uses Playwright to open the Dash app in a real Chromium browser and verify key user flows deterministically (drop selection recalculation and BF apriori-driven results updates).
+
+```bash
+uv run python -m playwright install chromium
+uv run pytest tests/e2e -m e2e -q
+```
+
 ## Optional: custom config path
 
 ```bash
