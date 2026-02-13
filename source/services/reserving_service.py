@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Callable
 
 import pandas as pd
@@ -31,11 +32,9 @@ class ReservingService:
             [pd.DataFrame | None, str, int | None, list[int] | None], dict
         ],
         build_emergence_figure: Callable[[pd.DataFrame | None, str], dict],
-        build_results_table_figure: Callable[[pd.DataFrame | None, str], dict],
         payload_cache: dict[str, dict],
         triangle_cache: dict[str, dict],
         emergence_cache: dict[str, dict],
-        results_table_cache: dict[str, dict],
     ) -> None:
         self._reserving = reserving
         self._params_service = params_service
@@ -50,11 +49,9 @@ class ReservingService:
         self._get_results = get_results
         self._build_triangle_figure = build_triangle_figure
         self._build_emergence_figure = build_emergence_figure
-        self._build_results_table_figure = build_results_table_figure
         self._payload_cache = payload_cache
         self._triangle_cache = triangle_cache
         self._emergence_cache = emergence_cache
-        self._results_table_cache = results_table_cache
 
     @staticmethod
     def _build_results_table_rows(
@@ -129,6 +126,27 @@ class ReservingService:
             selected_ultimate_by_uwy=selected_ultimate_by_uwy,
         )
 
+    def _build_model_cache_key(
+        self,
+        drop_store: list[list[str | int]] | None,
+        average: str | None,
+        tail_attachment_age: int | None,
+        tail_curve: str | None,
+        tail_fit_period_selection: list[int] | None,
+        bf_apriori_by_uwy: dict[str, float] | None,
+    ) -> str:
+        return self._cache_service.build_model_cache_key(
+            segment=self._segment_key_provider(),
+            default_average=self._default_average,
+            default_tail_curve=self._default_tail_curve,
+            drop_store=drop_store,
+            average=average,
+            tail_attachment_age=tail_attachment_age,
+            tail_curve=tail_curve,
+            tail_fit_period_selection=tail_fit_period_selection,
+            bf_apriori_by_uwy=bf_apriori_by_uwy,
+        )
+
     def _build_visual_cache_key(
         self,
         drop_store: list[list[str | int]] | None,
@@ -178,6 +196,61 @@ class ReservingService:
         )
         self._extract_data()
 
+    @staticmethod
+    def _apply_selected_ultimate_to_results(
+        results_df: pd.DataFrame | None,
+        selected_ultimate_by_uwy: dict[str, str] | None,
+    ) -> pd.DataFrame | None:
+        if results_df is None or len(results_df) == 0:
+            return results_df
+
+        selected_mapping: dict[str, str] = {}
+        for key, value in (selected_ultimate_by_uwy or {}).items():
+            method = str(value).strip().lower()
+            if method in {"chainladder", "bornhuetter_ferguson"}:
+                selected_mapping[str(key)] = method
+
+        next_results = results_df.copy()
+        selected_methods: list[str] = []
+        selected_ultimate_values: list[float] = []
+        for idx, row in next_results.iterrows():
+            uwy_text = str(idx)
+            uwy = uwy_text[:4] if len(uwy_text) >= 4 else uwy_text
+
+            method = selected_mapping.get(uwy, "chainladder")
+            if method == "bornhuetter_ferguson":
+                selected_ultimate_values.append(float(row.get("bf_ultimate", 0.0)))
+            else:
+                method = "chainladder"
+                selected_ultimate_values.append(float(row.get("cl_ultimate", 0.0)))
+            selected_methods.append(method)
+
+        next_results["ultimate"] = selected_ultimate_values
+        next_results["selected_method"] = selected_methods
+        return next_results
+
+    def _build_selection_only_payload(
+        self,
+        *,
+        base_payload: dict,
+        selected_ultimate_by_uwy: dict[str, str] | None,
+        results_cache_key: str,
+    ) -> dict:
+        payload = deepcopy(base_payload)
+        selected_results_df = self._apply_selected_ultimate_to_results(
+            self._get_results(),
+            selected_ultimate_by_uwy,
+        )
+        payload["selected_ultimate_by_uwy"] = selected_ultimate_by_uwy or {}
+        payload["results_table_rows"] = self._build_results_table_rows(
+            selected_results_df
+        )
+        payload["cache_key"] = results_cache_key
+        payload["last_updated"] = (
+            datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+        return payload
+
     def build_results_payload(
         self,
         drop_store: list[list[str | int]] | None,
@@ -188,7 +261,7 @@ class ReservingService:
         bf_apriori_by_uwy: dict[str, float] | None,
         selected_ultimate_by_uwy: dict[str, str] | None,
     ) -> dict:
-        timestamp = datetime.utcnow().isoformat() + "Z"
+        timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         display = "None"
         if drop_store:
             display = ", ".join([f"{item[0]}:{item[1]}" for item in drop_store])
@@ -211,17 +284,20 @@ class ReservingService:
             tail_curve,
             tail_fit_period_selection,
         )
-        results_table_cache_key = self._build_results_cache_key(
+        model_cache_key = self._build_model_cache_key(
             drop_store,
             average,
             tail_attachment_age,
             tail_curve,
             tail_fit_period_selection,
             bf_apriori_by_uwy=bf_apriori_by_uwy,
-            selected_ultimate_by_uwy=selected_ultimate_by_uwy,
         )
 
         results_df = self._get_results()
+        selected_results_df = self._apply_selected_ultimate_to_results(
+            results_df,
+            selected_ultimate_by_uwy,
+        )
 
         triangle_figure = self._cache_service.get_or_build(
             cache=self._triangle_cache,
@@ -243,20 +319,9 @@ class ReservingService:
                 "Emergence Pattern",
             ),
         )
-        results_figure = self._cache_service.get_or_build(
-            cache=self._results_table_cache,
-            cache_key=results_table_cache_key,
-            label="Results table figure",
-            builder=lambda: self._build_results_table_figure(
-                results_df,
-                "Reserving Results",
-            ),
-        )
-
         return {
             "triangle_figure": triangle_figure,
             "emergence_figure": emergence_figure,
-            "results_figure": results_figure,
             "drops_display": display,
             "average": average,
             "tail_curve": tail_curve,
@@ -266,7 +331,8 @@ class ReservingService:
             "tail_fit_period_selection": tail_fit_period_selection or [],
             "tail_fit_period_display": fit_period_display,
             "selected_ultimate_by_uwy": selected_ultimate_by_uwy or {},
-            "results_table_rows": self._build_results_table_rows(results_df),
+            "results_table_rows": self._build_results_table_rows(selected_results_df),
+            "model_cache_key": model_cache_key,
             "last_updated": timestamp,
         }
 
@@ -282,7 +348,15 @@ class ReservingService:
         selected_ultimate_by_uwy: dict[str, str] | None,
         force_recalc: bool = False,
     ) -> dict:
-        cache_key = self._build_results_cache_key(
+        model_cache_key = self._build_model_cache_key(
+            drop_store,
+            average,
+            tail_attachment_age,
+            tail_curve,
+            tail_fit_period_selection,
+            bf_apriori_by_uwy,
+        )
+        results_cache_key = self._build_results_cache_key(
             drop_store,
             average,
             tail_attachment_age,
@@ -294,11 +368,15 @@ class ReservingService:
         cached_payload = (
             None
             if force_recalc
-            else self._cache_service.get(self._payload_cache, cache_key)
+            else self._cache_service.get(self._payload_cache, model_cache_key)
         )
         if cached_payload is not None:
-            logging.info("Using cached reserving payload for current parameters")
-            return cached_payload
+            logging.info("Using cached reserving model payload for current parameters")
+            return self._build_selection_only_payload(
+                base_payload=cached_payload,
+                selected_ultimate_by_uwy=selected_ultimate_by_uwy,
+                results_cache_key=results_cache_key,
+            )
 
         fit_period = self._params_service.derive_tail_fit_period(
             tail_fit_period_selection
@@ -311,7 +389,7 @@ class ReservingService:
             tail_curve or self._default_tail_curve,
             fit_period,
             bf_apriori_by_uwy,
-            selected_ultimate_by_uwy,
+            None,
         )
         recalc_elapsed_ms = (time.perf_counter() - started) * 1000
         logging.info("Recalculation completed in %.0f ms", recalc_elapsed_ms)
@@ -328,6 +406,7 @@ class ReservingService:
         )
         payload_elapsed_ms = (time.perf_counter() - payload_started) * 1000
         logging.info("Payload build completed in %.0f ms", payload_elapsed_ms)
-        payload["cache_key"] = cache_key
-        self._cache_service.set(self._payload_cache, cache_key, payload)
+        payload["cache_key"] = results_cache_key
+        payload["model_cache_key"] = model_cache_key
+        self._cache_service.set(self._payload_cache, model_cache_key, payload)
         return payload

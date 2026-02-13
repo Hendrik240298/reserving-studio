@@ -47,6 +47,86 @@ class CacheService:
         self.set(cache, cache_key, figure_dict)
         return figure_dict
 
+    @staticmethod
+    def _normalize_drops(
+        drop_store: list[list[str | int]] | None,
+    ) -> list[list[str | int]]:
+        normalized_drops: list[list[str | int]] = []
+        for item in drop_store or []:
+            if not isinstance(item, list) or len(item) != 2:
+                continue
+            try:
+                normalized_drops.append([str(item[0]), int(item[1])])
+            except (TypeError, ValueError):
+                continue
+        normalized_drops.sort(key=lambda item: (str(item[0]), int(item[1])))
+        return normalized_drops
+
+    @staticmethod
+    def _normalize_fit_period(
+        tail_fit_period_selection: list[int] | None,
+    ) -> list[int]:
+        normalized_fit_period: list[int] = []
+        for item in tail_fit_period_selection or []:
+            try:
+                value = int(item)
+            except (TypeError, ValueError):
+                continue
+            if value not in normalized_fit_period:
+                normalized_fit_period.append(value)
+        normalized_fit_period.sort()
+        return normalized_fit_period
+
+    @staticmethod
+    def _normalize_bf(
+        bf_apriori_by_uwy: dict[str, float] | None,
+    ) -> dict[str, float]:
+        normalized_bf: dict[str, float] = {}
+        for key, value in sorted((bf_apriori_by_uwy or {}).items()):
+            try:
+                normalized_bf[str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+        return normalized_bf
+
+    @staticmethod
+    def _normalize_selected_method(
+        selected_ultimate_by_uwy: dict[str, str] | None,
+    ) -> dict[str, str]:
+        normalized_selected_method: dict[str, str] = {}
+        for key, value in sorted((selected_ultimate_by_uwy or {}).items()):
+            method = str(value).strip().lower()
+            if method not in {"chainladder", "bornhuetter_ferguson"}:
+                continue
+            normalized_selected_method[str(key)] = method
+        return normalized_selected_method
+
+    def build_model_cache_key(
+        self,
+        *,
+        segment: str,
+        default_average: str,
+        default_tail_curve: str,
+        drop_store: list[list[str | int]] | None,
+        average: str | None,
+        tail_attachment_age: int | None,
+        tail_curve: str | None,
+        tail_fit_period_selection: list[int] | None,
+        bf_apriori_by_uwy: dict[str, float] | None,
+    ) -> str:
+        payload = {
+            "segment": segment,
+            "average": average or default_average,
+            "tail_curve": tail_curve or default_tail_curve,
+            "tail_attachment_age": tail_attachment_age,
+            "tail_fit_period_selection": self._normalize_fit_period(
+                tail_fit_period_selection
+            ),
+            "drops": self._normalize_drops(drop_store),
+            "bf_apriori_by_uwy": self._normalize_bf(bf_apriori_by_uwy),
+        }
+        return json.dumps(payload, sort_keys=True)
+
     def build_results_cache_key(
         self,
         *,
@@ -61,50 +141,22 @@ class CacheService:
         bf_apriori_by_uwy: dict[str, float] | None,
         selected_ultimate_by_uwy: dict[str, str] | None,
     ) -> str:
-        normalized_drops: list[list[str | int]] = []
-        for item in drop_store or []:
-            if not isinstance(item, list) or len(item) != 2:
-                continue
-            try:
-                normalized_drops.append([str(item[0]), int(item[1])])
-            except (TypeError, ValueError):
-                continue
-        normalized_drops.sort(key=lambda item: (str(item[0]), int(item[1])))
-
-        normalized_fit_period: list[int] = []
-        for item in tail_fit_period_selection or []:
-            try:
-                value = int(item)
-            except (TypeError, ValueError):
-                continue
-            if value not in normalized_fit_period:
-                normalized_fit_period.append(value)
-        normalized_fit_period.sort()
-
-        normalized_bf: dict[str, float] = {}
-        for key, value in sorted((bf_apriori_by_uwy or {}).items()):
-            try:
-                normalized_bf[str(key)] = float(value)
-            except (TypeError, ValueError):
-                continue
-
-        normalized_selected_method: dict[str, str] = {}
-        for key, value in sorted((selected_ultimate_by_uwy or {}).items()):
-            method = str(value).strip().lower()
-            if method not in {"chainladder", "bornhuetter_ferguson"}:
-                continue
-            normalized_selected_method[str(key)] = method
-
-        payload = {
-            "segment": segment,
-            "average": average or default_average,
-            "tail_curve": tail_curve or default_tail_curve,
-            "tail_attachment_age": tail_attachment_age,
-            "tail_fit_period_selection": normalized_fit_period,
-            "drops": normalized_drops,
-            "bf_apriori_by_uwy": normalized_bf,
-            "selected_ultimate_by_uwy": normalized_selected_method,
-        }
+        payload = json.loads(
+            self.build_model_cache_key(
+                segment=segment,
+                default_average=default_average,
+                default_tail_curve=default_tail_curve,
+                drop_store=drop_store,
+                average=average,
+                tail_attachment_age=tail_attachment_age,
+                tail_curve=tail_curve,
+                tail_fit_period_selection=tail_fit_period_selection,
+                bf_apriori_by_uwy=bf_apriori_by_uwy,
+            )
+        )
+        payload["selected_ultimate_by_uwy"] = self._normalize_selected_method(
+            selected_ultimate_by_uwy
+        )
         return json.dumps(payload, sort_keys=True)
 
     def build_visual_cache_key(
@@ -119,7 +171,7 @@ class CacheService:
         tail_curve: str | None,
         tail_fit_period_selection: list[int] | None,
     ) -> str:
-        return self.build_results_cache_key(
+        return self.build_model_cache_key(
             segment=segment,
             default_average=default_average,
             default_tail_curve=default_tail_curve,
@@ -129,5 +181,4 @@ class CacheService:
             tail_curve=tail_curve,
             tail_fit_period_selection=tail_fit_period_selection,
             bf_apriori_by_uwy=None,
-            selected_ultimate_by_uwy=None,
         )

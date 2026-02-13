@@ -38,6 +38,34 @@ def test_selected_ultimate_setter_updates_single_uwy() -> None:
     assert updated["2003"] == "chainladder"
 
 
+def test_model_cache_key_ignores_selected_ultimate_mapping() -> None:
+    cache_service = CacheService()
+    key_chainladder = cache_service.build_model_cache_key(
+        segment="quarterly",
+        default_average="volume",
+        default_tail_curve="weibull",
+        drop_store=[],
+        average="volume",
+        tail_attachment_age=None,
+        tail_curve="weibull",
+        tail_fit_period_selection=[],
+        bf_apriori_by_uwy={"2001": 0.6, "2002": 0.6, "2003": 0.6},
+    )
+    key_mixed = cache_service.build_model_cache_key(
+        segment="quarterly",
+        default_average="volume",
+        default_tail_curve="weibull",
+        drop_store=[],
+        average="volume",
+        tail_attachment_age=None,
+        tail_curve="weibull",
+        tail_fit_period_selection=[],
+        bf_apriori_by_uwy={"2001": 0.6, "2002": 0.6, "2003": 0.6},
+    )
+
+    assert key_chainladder == key_mixed
+
+
 def test_results_cache_key_changes_with_selected_ultimate() -> None:
     cache_service = CacheService()
     key_chainladder = cache_service.build_results_cache_key(

@@ -11,7 +11,6 @@ from source.presentation import (
     build_heatmap_core_cache_key,
     plot_data_triangle_table,
     plot_emergence,
-    plot_reserving_results_table,
     plot_triangle_heatmap_clean,
 )
 from source.reserving import Reserving
@@ -94,7 +93,6 @@ class Dashboard:
         self._payload_cache: dict[str, dict] = {}
         self._triangle_figure_cache: dict[str, dict] = {}
         self._emergence_figure_cache: dict[str, dict] = {}
-        self._results_table_figure_cache: dict[str, dict] = {}
         self._heatmap_core_cache: dict[str, dict] = {}
         self._cache_max_entries = 32
         self._recalc_request_seq = 0
@@ -149,24 +147,9 @@ class Dashboard:
                 color_surface=COLOR_SURFACE,
                 color_border=COLOR_BORDER,
             ).to_dict(),
-            build_results_table_figure=lambda results_df,
-            title: plot_reserving_results_table(
-                results_df=results_df,
-                title=title,
-                font_family=FONT_FAMILY,
-                figure_font_size=FIGURE_FONT_SIZE,
-                figure_title_font_size=FIGURE_TITLE_FONT_SIZE,
-                table_header_font_size=TABLE_HEADER_FONT_SIZE,
-                table_cell_font_size=TABLE_CELL_FONT_SIZE,
-                alert_annotation_font_size=ALERT_ANNOTATION_FONT_SIZE,
-                color_text=COLOR_TEXT,
-                color_surface=COLOR_SURFACE,
-                color_border=COLOR_BORDER,
-            ).to_dict(),
             payload_cache=self._payload_cache,
             triangle_cache=self._triangle_figure_cache,
             emergence_cache=self._emergence_figure_cache,
-            results_table_cache=self._results_table_figure_cache,
         )
         self._session_sync_service = SessionSyncService(
             config=self._config,
@@ -1265,7 +1248,7 @@ class Dashboard:
                 )
                 if next_selected != working_params["selected_ultimate_by_uwy"]:
                     working_params["selected_ultimate_by_uwy"] = next_selected
-                changed = True
+                    changed = True
 
             elif trigger == "sync-inbox":
                 message = self._parse_sync_payload(sync_inbox)
@@ -1363,7 +1346,7 @@ class Dashboard:
             )
             force_recalc = bool(params.get("force_recalc"))
 
-            cache_key = self._cache_service.build_results_cache_key(
+            model_cache_key = self._cache_service.build_model_cache_key(
                 segment=self._get_segment_key(),
                 default_average=self._default_average,
                 default_tail_curve=self._default_tail_curve,
@@ -1373,18 +1356,21 @@ class Dashboard:
                 tail_curve=tail_curve,
                 tail_fit_period_selection=tail_fit_period_selection,
                 bf_apriori_by_uwy=bf_apriori_by_uwy,
-                selected_ultimate_by_uwy=selected_ultimate_by_uwy,
             )
 
             if (
                 not force_recalc
                 and isinstance(current_payload, dict)
-                and current_payload.get("cache_key") == cache_key
+                and current_payload.get("model_cache_key") == model_cache_key
+                and self._params_service.build_selected_ultimate_by_uwy(
+                    current_payload.get("selected_ultimate_by_uwy")
+                )
+                == selected_ultimate_by_uwy
             ):
                 logging.info(
-                    "[recalc] skip unchanged request=%s cache_key=%s",
+                    "[recalc] skip unchanged request=%s model_cache_key=%s",
                     request_id,
-                    cache_key,
+                    model_cache_key,
                 )
                 total_elapsed_ms = (time.perf_counter() - callback_started) * 1000
                 logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
@@ -1685,9 +1671,8 @@ class Dashboard:
             Input("data-metric-selector", "value"),
             Input("data-divisor-selector", "value"),
             Input("data-view-store", "data"),
-            Input("results-store", "data"),
         )
-        def _update_data_triangle(metric, divisor, triangle_view, _results_payload):
+        def _update_data_triangle(metric, divisor, triangle_view):
             metric_value = metric or "incurred"
             divisor_value = divisor or "none"
             view_value = triangle_view or "cumulative"

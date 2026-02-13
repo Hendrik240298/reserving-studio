@@ -37,14 +37,8 @@ drops:
   - 18
 - - '2003'
   - 3
-- - '2001'
-  - 30
 - - '1997'
   - 21
-- - '2002'
-  - 33
-- - '2000'
-  - 54
 - - '1996'
   - 48
 - - '1998'
@@ -57,6 +51,12 @@ drops:
   - 72
 - - '1999'
   - 39
+- - '2000'
+  - 54
+- - '2002'
+  - 33
+- - '2001'
+  - 30
 tail_attachment_age: 69
 tail_fit_period:
 - 3
@@ -73,7 +73,7 @@ bf_apriori_by_uwy:
   '2003': 0.6
   '2004': 0.6
   '2005': 0.6
-  '2006': 0.5
+  '2006': 0.7
 selected_ultimate_by_uwy:
   '1995': bornhuetter_ferguson
   '1996': bornhuetter_ferguson
@@ -87,6 +87,6 @@ selected_ultimate_by_uwy:
   '2004': bornhuetter_ferguson
   '2005': bornhuetter_ferguson
   '2006': bornhuetter_ferguson
-sync_version: 438
+sync_version: 460
 segment: quarterly
-updated_at: '2026-02-13T17:28:14.655603Z'
+updated_at: '2026-02-13T18:19:04.336769Z'
