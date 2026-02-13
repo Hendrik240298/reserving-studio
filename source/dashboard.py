@@ -1525,9 +1525,11 @@ class Dashboard:
             Output("tab-chainladder", "style"),
             Output("tab-bf", "style"),
             Output("tab-results", "style"),
+            Output("results-table", "figure"),
             Input("active-tab", "data"),
+            Input("results-store", "data"),
         )
-        def _toggle_tab_visibility(active_tab):
+        def _toggle_tab_visibility(active_tab, results_payload):
             data_style = {
                 "display": "block",
                 "background": COLOR_SURFACE,
@@ -1591,6 +1593,25 @@ class Dashboard:
                 **results_style,
                 "display": "none",
             }
+
+            # Plotly tables can render without header text when first drawn inside a
+            # hidden container (display: none). Only (re)draw when the Results tab
+            # is visible, and bump datarevision to force a redraw.
+            results_figure = no_update
+            if active_tab == "results":
+                if not isinstance(results_payload, dict):
+                    figure_dict: dict = self._plot_reserving_results_table(
+                        self.results,
+                        "Reserving Results",
+                    ).to_dict()
+                else:
+                    figure_dict = deepcopy(results_payload.get("results_figure") or {})
+
+                layout = dict(figure_dict.get("layout") or {})
+                layout.setdefault("autosize", True)
+                layout["datarevision"] = int(time.time() * 1000)
+                figure_dict["layout"] = layout
+                results_figure = figure_dict
             return (
                 data_style if active_tab == "data" else data_hidden,
                 chainladder_style
@@ -1598,6 +1619,7 @@ class Dashboard:
                 else chainladder_hidden,
                 bf_style if active_tab == "bornhuetter_ferguson" else bf_hidden,
                 results_style if active_tab == "results" else results_hidden,
+                results_figure,
             )
 
         @self.app.callback(
@@ -1960,7 +1982,6 @@ class Dashboard:
         @self.app.callback(
             Output("triangle-base-figure", "data"),
             Output("emergence-plot", "figure"),
-            Output("results-table", "figure"),
             Input("results-store", "data"),
         )
         def _hydrate_tabs(results_payload):
@@ -1979,10 +2000,6 @@ class Dashboard:
                         self.emergence_pattern,
                         "Emergence Pattern",
                     ),
-                    self._plot_reserving_results_table(
-                        self.results,
-                        "Reserving Results",
-                    ),
                 )
 
             return (
@@ -1991,7 +2008,6 @@ class Dashboard:
                     "figure_version": results_payload.get("figure_version", 0),
                 },
                 results_payload.get("emergence_figure"),
-                results_payload.get("results_figure"),
             )
 
         @self.app.callback(
@@ -3473,13 +3489,15 @@ class Dashboard:
                                             [
                                                 dcc.Graph(
                                                     id="results-table",
-                                                    figure=results_payload.get(
-                                                        "results_figure"
-                                                    ),
+                                                    # Defer rendering until the Results tab is visible.
+                                                    # This avoids Plotly table header text occasionally
+                                                    # disappearing when a figure is first rendered in a
+                                                    # hidden container.
+                                                    figure={},
                                                     config={
                                                         "editable": False,
                                                         "displayModeBar": True,
-                                                        "responsive": False,
+                                                        "responsive": True,
                                                     },
                                                     style={"width": "100%"},
                                                 )
