@@ -13,6 +13,7 @@ class ParamsState(TypedDict):
     average: str
     tail_curve: str
     bf_apriori_by_uwy: dict[str, float]
+    selected_ultimate_by_uwy: dict[str, str]
     sync_version: int | None
 
 
@@ -28,6 +29,7 @@ class ResultsPayload(TypedDict, total=False):
     tail_attachment_display: str
     tail_fit_period_selection: list[int]
     tail_fit_period_display: str
+    selected_ultimate_by_uwy: dict[str, str]
     last_updated: str
     cache_key: str
     figure_version: int

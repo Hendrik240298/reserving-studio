@@ -65,7 +65,7 @@ drops:
   - 9
 - - '2002'
   - 6
-tail_attachment_age: null
+tail_attachment_age: 69
 tail_fit_period:
 - 3
 - 93
@@ -81,7 +81,20 @@ bf_apriori_by_uwy:
   '2003': 0.6
   '2004': 0.6
   '2005': 0.6
-  '2006': 0.65
-sync_version: 255
+  '2006': 0.5
+selected_ultimate_by_uwy:
+  '1995': chainladder
+  '1996': bornhuetter_ferguson
+  '1997': chainladder
+  '1998': chainladder
+  '1999': chainladder
+  '2000': bornhuetter_ferguson
+  '2001': chainladder
+  '2002': bornhuetter_ferguson
+  '2003': chainladder
+  '2004': chainladder
+  '2005': bornhuetter_ferguson
+  '2006': chainladder
+sync_version: 401
 segment: quarterly
-updated_at: '2026-02-13T13:43:11.143746Z'
+updated_at: '2026-02-13T17:04:47.059375Z'

@@ -46,6 +46,7 @@ class SessionSyncService:
         tail_attachment_age = params.get("tail_attachment_age")
         tail_fit_period_selection = params.get("tail_fit_period_selection")
         bf_apriori_by_uwy = params.get("bf_apriori_by_uwy")
+        selected_ultimate_by_uwy = params.get("selected_ultimate_by_uwy")
 
         sync_version = 0
         if self._config is not None:
@@ -57,6 +58,7 @@ class SessionSyncService:
                     "tail_attachment_age": tail_attachment_age,
                     "tail_fit_period": tail_fit_period_selection,
                     "bf_apriori_by_uwy": bf_apriori_by_uwy,
+                    "selected_ultimate_by_uwy": selected_ultimate_by_uwy,
                 }
             )
         elif isinstance(current_payload, dict):

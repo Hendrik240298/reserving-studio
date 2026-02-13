@@ -1,7 +1,6 @@
 import json
 import logging
 import time
-from copy import deepcopy
 from pathlib import Path
 from typing import Optional, List, Tuple
 
@@ -91,6 +90,7 @@ class Dashboard:
         self._default_tail_fit_period_selection: List[int] = []
         self._default_bf_apriori = 0.6
         self._default_bf_apriori_rows: List[dict[str, object]] = []
+        self._default_selected_ultimate_by_uwy: dict[str, str] = {}
         self._payload_cache: dict[str, dict] = {}
         self._triangle_figure_cache: dict[str, dict] = {}
         self._emergence_figure_cache: dict[str, dict] = {}
@@ -228,6 +228,9 @@ class Dashboard:
     def _load_session_defaults(self) -> None:
         if self._config is None:
             self._default_bf_apriori_rows = self._params_service.build_bf_apriori_rows()
+            self._default_selected_ultimate_by_uwy = (
+                self._params_service.build_selected_ultimate_by_uwy()
+            )
             return
         session = self._config.load_session()
         self._default_average = session.get("average", self._default_average)
@@ -252,6 +255,100 @@ class Dashboard:
         self._default_bf_apriori_rows = self._params_service.build_bf_apriori_rows(
             session.get("bf_apriori_by_uwy")
         )
+        self._default_selected_ultimate_by_uwy = (
+            self._params_service.build_selected_ultimate_by_uwy(
+                session.get("selected_ultimate_by_uwy")
+            )
+        )
+
+    def _build_results_table_rows(
+        self, results_df: Optional[pd.DataFrame]
+    ) -> List[dict]:
+        if results_df is None or len(results_df) == 0:
+            return []
+
+        rows: List[dict] = []
+        for idx, row in results_df.iterrows():
+            if hasattr(idx, "year"):
+                uwy = str(idx.year)
+            else:
+                uwy_text = str(idx)
+                uwy = uwy_text[:4] if len(uwy_text) >= 4 else uwy_text
+
+            incurred = float(row.get("incurred", 0.0))
+            premium = float(row.get("Premium", 0.0))
+            cl_ultimate = float(row.get("cl_ultimate", 0.0))
+            bf_ultimate = float(row.get("bf_ultimate", 0.0))
+            selected_ultimate = float(row.get("ultimate", 0.0))
+            ibnr = selected_ultimate - incurred
+
+            if premium > 0:
+                incurred_lr_display = f"{(incurred / premium):.2%}"
+            else:
+                incurred_lr_display = "N/A"
+
+            cl_lr_display = "N/A" if premium <= 0 else f"{(cl_ultimate / premium):.2%}"
+            bf_lr_display = "N/A" if premium <= 0 else f"{(bf_ultimate / premium):.2%}"
+
+            rows.append(
+                {
+                    "uwy": uwy,
+                    "incurred_display": f"{incurred:,.0f}",
+                    "premium_display": f"{premium:,.0f}",
+                    "incurred_loss_ratio_display": incurred_lr_display,
+                    "cl_ultimate_display": f"{cl_ultimate:,.2f}",
+                    "cl_loss_ratio_display": cl_lr_display,
+                    "bf_ultimate_display": f"{bf_ultimate:,.2f}",
+                    "bf_loss_ratio_display": bf_lr_display,
+                    "ultimate_display": f"{selected_ultimate:,.2f}",
+                    "ibnr_display": f"{ibnr:,.2f}",
+                }
+            )
+        return rows
+
+    def _build_results_selection_styles(
+        self,
+        selected_ultimate_by_uwy: dict[str, str],
+    ) -> List[dict]:
+        styles: List[dict] = []
+        for uwy, method in selected_ultimate_by_uwy.items():
+            if method == "chainladder":
+                left_column = "cl_ultimate_display"
+                right_column = "cl_loss_ratio_display"
+            elif method == "bornhuetter_ferguson":
+                left_column = "bf_ultimate_display"
+                right_column = "bf_loss_ratio_display"
+            else:
+                continue
+
+            safe_uwy = str(uwy).replace("'", "\\'")
+            styles.append(
+                {
+                    "if": {
+                        "filter_query": "{uwy} = '" + safe_uwy + "'",
+                        "column_id": left_column,
+                    },
+                    "borderTop": "0px",
+                    "borderRight": f"1px solid {COLOR_SURFACE}",
+                    "borderBottom": "0px",
+                    "borderLeft": "2px solid black",
+                    "boxShadow": "inset 0 2px 0 0 black, inset 0 -2px 0 0 black",
+                }
+            )
+            styles.append(
+                {
+                    "if": {
+                        "filter_query": "{uwy} = '" + safe_uwy + "'",
+                        "column_id": right_column,
+                    },
+                    "borderTop": "0px",
+                    "borderRight": "2px solid black",
+                    "borderBottom": "0px",
+                    "borderLeft": f"1px solid {COLOR_SURFACE}",
+                    "boxShadow": "inset 0 2px 0 0 black, inset 0 -2px 0 0 black",
+                }
+            )
+        return styles
 
     def _get_segment_key(self) -> str:
         if self._config is None:
@@ -774,11 +871,9 @@ class Dashboard:
             Output("tab-chainladder", "style"),
             Output("tab-bf", "style"),
             Output("tab-results", "style"),
-            Output("results-table", "figure"),
             Input("active-tab", "data"),
-            Input("results-store", "data"),
         )
-        def _toggle_tab_visibility(active_tab, results_payload):
+        def _toggle_tab_visibility(active_tab):
             data_style = {
                 "display": "block",
                 "background": COLOR_SURFACE,
@@ -843,33 +938,6 @@ class Dashboard:
                 "display": "none",
             }
 
-            # Plotly tables can render without header text when first drawn inside a
-            # hidden container (display: none). Only (re)draw when the Results tab
-            # is visible, and bump datarevision to force a redraw.
-            results_figure = no_update
-            if active_tab == "results":
-                if not isinstance(results_payload, dict):
-                    figure_dict: dict = plot_reserving_results_table(
-                        results_df=self.results,
-                        title="Reserving Results",
-                        font_family=FONT_FAMILY,
-                        figure_font_size=FIGURE_FONT_SIZE,
-                        figure_title_font_size=FIGURE_TITLE_FONT_SIZE,
-                        table_header_font_size=TABLE_HEADER_FONT_SIZE,
-                        table_cell_font_size=TABLE_CELL_FONT_SIZE,
-                        alert_annotation_font_size=ALERT_ANNOTATION_FONT_SIZE,
-                        color_text=COLOR_TEXT,
-                        color_surface=COLOR_SURFACE,
-                        color_border=COLOR_BORDER,
-                    ).to_dict()
-                else:
-                    figure_dict = deepcopy(results_payload.get("results_figure") or {})
-
-                layout = dict(figure_dict.get("layout") or {})
-                layout.setdefault("autosize", True)
-                layout["datarevision"] = int(time.time() * 1000)
-                figure_dict["layout"] = layout
-                results_figure = figure_dict
             return (
                 data_style if active_tab == "data" else data_hidden,
                 chainladder_style
@@ -877,7 +945,6 @@ class Dashboard:
                 else chainladder_hidden,
                 bf_style if active_tab == "bornhuetter_ferguson" else bf_hidden,
                 results_style if active_tab == "results" else results_hidden,
-                results_figure,
             )
 
         @self.app.callback(
@@ -886,20 +953,24 @@ class Dashboard:
             Input("average-method", "value"),
             Input("tail-method", "value"),
             Input("bf-apriori-table", "data"),
+            Input("results-table", "active_cell"),
             Input("sync-inbox", "value"),
             Input("page-location", "pathname"),
             State("params-store", "data"),
             State("results-store", "data"),
+            State("results-table", "data"),
         )
         def _reduce_params(
             click,
             average,
             tail_curve,
             bf_apriori_rows,
+            results_active_cell,
             sync_inbox,
             _pathname,
             current_params,
             current_results,
+            results_rows,
         ):
             ctx = callback_context
             trigger = "page-location"
@@ -940,6 +1011,7 @@ class Dashboard:
                     "tail_fit_period_selection"
                 ),
                 bf_apriori_by_uwy=current_params.get("bf_apriori_by_uwy"),
+                selected_ultimate_by_uwy=current_params.get("selected_ultimate_by_uwy"),
                 request_id=current_request_id,
                 source="local",
                 force_recalc=False,
@@ -999,6 +1071,39 @@ class Dashboard:
                     working_params["bf_apriori_by_uwy"] = next_bf
                     changed = True
 
+            elif trigger == "results-table":
+                if not isinstance(results_active_cell, dict):
+                    return no_update
+                column_id = results_active_cell.get("column_id")
+                row_index = results_active_cell.get("row")
+                if not isinstance(row_index, int):
+                    return no_update
+                if not isinstance(results_rows, list) or row_index >= len(results_rows):
+                    return no_update
+                row_payload = results_rows[row_index]
+                if not isinstance(row_payload, dict):
+                    return no_update
+                uwy = str(row_payload.get("uwy", "")).strip()
+                if not uwy:
+                    return no_update
+
+                selected_method = None
+                if column_id in {"cl_ultimate_display", "cl_loss_ratio_display"}:
+                    selected_method = "chainladder"
+                elif column_id in {"bf_ultimate_display", "bf_loss_ratio_display"}:
+                    selected_method = "bornhuetter_ferguson"
+                if selected_method is None:
+                    return no_update
+
+                next_selected = self._params_service.set_selected_ultimate_method(
+                    working_params.get("selected_ultimate_by_uwy"),
+                    uwy,
+                    selected_method,
+                )
+                if next_selected != working_params["selected_ultimate_by_uwy"]:
+                    working_params["selected_ultimate_by_uwy"] = next_selected
+                changed = True
+
             elif trigger == "sync-inbox":
                 message = self._parse_sync_payload(sync_inbox)
                 if not message:
@@ -1034,6 +1139,7 @@ class Dashboard:
                     tail_curve=session.get("tail_curve", self._default_tail_curve),
                     tail_fit_period_selection=session.get("tail_fit_period"),
                     bf_apriori_by_uwy=session.get("bf_apriori_by_uwy"),
+                    selected_ultimate_by_uwy=session.get("selected_ultimate_by_uwy"),
                     request_id=current_request_id + 1,
                     source="sync",
                     force_recalc=False,
@@ -1087,6 +1193,11 @@ class Dashboard:
             tail_curve = params.get("tail_curve") or self._default_tail_curve
             tail_fit_period_selection = params.get("tail_fit_period_selection") or []
             bf_apriori_by_uwy = params.get("bf_apriori_by_uwy") or {}
+            selected_ultimate_by_uwy = (
+                self._params_service.build_selected_ultimate_by_uwy(
+                    params.get("selected_ultimate_by_uwy")
+                )
+            )
             force_recalc = bool(params.get("force_recalc"))
 
             cache_key = self._cache_service.build_results_cache_key(
@@ -1099,6 +1210,7 @@ class Dashboard:
                 tail_curve=tail_curve,
                 tail_fit_period_selection=tail_fit_period_selection,
                 bf_apriori_by_uwy=bf_apriori_by_uwy,
+                selected_ultimate_by_uwy=selected_ultimate_by_uwy,
             )
 
             if (
@@ -1129,6 +1241,7 @@ class Dashboard:
                     tail_curve=tail_curve,
                     tail_fit_period_selection=tail_fit_period_selection,
                     bf_apriori_by_uwy=bf_apriori_by_uwy,
+                    selected_ultimate_by_uwy=selected_ultimate_by_uwy,
                     force_recalc=force_recalc,
                 )
             except Exception as exc:
@@ -1227,6 +1340,51 @@ class Dashboard:
                 params.get("tail_curve", self._default_tail_curve),
                 bf_rows,
             )
+
+        @self.app.callback(
+            Output("results-table", "data"),
+            Output("results-table", "style_data_conditional"),
+            Input("results-store", "data"),
+        )
+        def _hydrate_results_table(results_payload):
+            rows = []
+            if isinstance(results_payload, dict):
+                payload_rows = results_payload.get("results_table_rows")
+                if isinstance(payload_rows, list):
+                    rows = payload_rows
+            if not rows:
+                rows = self._build_results_table_rows(self.results)
+            base_styles = [
+                {
+                    "if": {"state": "active"},
+                    "backgroundColor": "#ffffff",
+                    "color": COLOR_TEXT,
+                    "boxShadow": "none",
+                    "outline": "none",
+                },
+                {
+                    "if": {"state": "selected"},
+                    "backgroundColor": "#ffffff",
+                    "color": COLOR_TEXT,
+                    "boxShadow": "none",
+                    "outline": "none",
+                },
+            ]
+            selected_mapping = self._default_selected_ultimate_by_uwy
+            if isinstance(results_payload, dict):
+                selected_mapping = self._params_service.build_selected_ultimate_by_uwy(
+                    results_payload.get("selected_ultimate_by_uwy")
+                )
+            selection_styles = self._build_results_selection_styles(selected_mapping)
+            return rows, base_styles + selection_styles
+
+        @self.app.callback(
+            Output("results-table", "active_cell"),
+            Input("params-store", "data"),
+            prevent_initial_call=True,
+        )
+        def _clear_results_active_cell(_params):
+            return None
 
         @self.app.callback(
             Output("triangle-base-figure", "data"),
@@ -1378,6 +1536,7 @@ class Dashboard:
             bf_apriori_by_uwy=self._params_service.bf_rows_to_mapping(
                 self._default_bf_apriori_rows
             ),
+            selected_ultimate_by_uwy=self._default_selected_ultimate_by_uwy,
         )
         results_payload["figure_version"] = 0
         initial_sync_version = 0
@@ -1944,19 +2103,115 @@ class Dashboard:
                                         ),
                                         html.Div(
                                             [
-                                                dcc.Graph(
+                                                dash_table.DataTable(
                                                     id="results-table",
-                                                    # Defer rendering until the Results tab is visible.
-                                                    # This avoids Plotly table header text occasionally
-                                                    # disappearing when a figure is first rendered in a
-                                                    # hidden container.
-                                                    figure={},
-                                                    config={
-                                                        "editable": False,
-                                                        "displayModeBar": True,
-                                                        "responsive": True,
+                                                    columns=[
+                                                        {
+                                                            "name": "UWY",
+                                                            "id": "uwy",
+                                                        },
+                                                        {
+                                                            "name": "Incurred (EUR)",
+                                                            "id": "incurred_display",
+                                                        },
+                                                        {
+                                                            "name": "Premium (EUR)",
+                                                            "id": "premium_display",
+                                                        },
+                                                        {
+                                                            "name": "Incurred Loss Ratio",
+                                                            "id": "incurred_loss_ratio_display",
+                                                        },
+                                                        {
+                                                            "name": "CL Ultimate (EUR)",
+                                                            "id": "cl_ultimate_display",
+                                                        },
+                                                        {
+                                                            "name": "CL Loss Ratio",
+                                                            "id": "cl_loss_ratio_display",
+                                                        },
+                                                        {
+                                                            "name": "BF Ultimate (EUR)",
+                                                            "id": "bf_ultimate_display",
+                                                        },
+                                                        {
+                                                            "name": "BF Loss Ratio",
+                                                            "id": "bf_loss_ratio_display",
+                                                        },
+                                                        {
+                                                            "name": "Selected Ultimate (EUR)",
+                                                            "id": "ultimate_display",
+                                                        },
+                                                        {
+                                                            "name": "IBNR (EUR)",
+                                                            "id": "ibnr_display",
+                                                        },
+                                                    ],
+                                                    data=results_payload.get(
+                                                        "results_table_rows", []
+                                                    ),
+                                                    sort_action="native",
+                                                    css=[
+                                                        {
+                                                            "selector": ".dash-spreadsheet-container table",
+                                                            "rule": "border-collapse: collapse; border-spacing: 0;",
+                                                        },
+                                                        {
+                                                            "selector": ".dash-spreadsheet td.dash-cell.cell--selected, .dash-spreadsheet td.dash-cell.focused",
+                                                            "rule": "background-color: #ffffff !important; color: inherit !important; box-shadow: none !important; outline: none !important;",
+                                                        },
+                                                        {
+                                                            "selector": ".dash-spreadsheet td.dash-cell:focus, .dash-spreadsheet td.dash-cell.cell--selected.focused",
+                                                            "rule": "box-shadow: none !important; outline: none !important;",
+                                                        },
+                                                    ],
+                                                    style_as_list_view=False,
+                                                    style_table={"overflowX": "auto"},
+                                                    style_header={
+                                                        "fontWeight": 600,
+                                                        "backgroundColor": "#f2f5f9",
+                                                        "border": f"1px solid {COLOR_BORDER}",
+                                                        "fontFamily": FONT_FAMILY,
+                                                        "fontSize": f"{TABLE_HEADER_FONT_SIZE}px",
+                                                        "textAlign": "center",
                                                     },
-                                                    style={"width": "100%"},
+                                                    style_cell={
+                                                        "padding": "8px",
+                                                        "fontFamily": FONT_FAMILY,
+                                                        "fontSize": f"{TABLE_CELL_FONT_SIZE}px",
+                                                        "border": f"1px solid {COLOR_BORDER}",
+                                                        "textAlign": "right",
+                                                        "minWidth": "110px",
+                                                        "whiteSpace": "nowrap",
+                                                    },
+                                                    style_data={
+                                                        "backgroundColor": COLOR_SURFACE,
+                                                    },
+                                                    style_cell_conditional=[
+                                                        {
+                                                            "if": {"column_id": "uwy"},
+                                                            "textAlign": "center",
+                                                            "minWidth": "70px",
+                                                        },
+                                                        {
+                                                            "if": {
+                                                                "column_id": "incurred_loss_ratio_display"
+                                                            },
+                                                            "textAlign": "center",
+                                                        },
+                                                        {
+                                                            "if": {
+                                                                "column_id": "cl_loss_ratio_display"
+                                                            },
+                                                            "textAlign": "center",
+                                                        },
+                                                        {
+                                                            "if": {
+                                                                "column_id": "bf_loss_ratio_display"
+                                                            },
+                                                            "textAlign": "center",
+                                                        },
+                                                    ],
                                                 )
                                             ],
                                             id="tab-results",

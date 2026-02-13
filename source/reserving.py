@@ -16,6 +16,23 @@ class Reserving:
         self.tail = None
         self.bf = None
         self._bf_apriori_by_uwy: Optional[dict[str, float]] = None
+        self._selected_ultimate_by_uwy: dict[str, str] = {}
+
+    @staticmethod
+    def _origin_to_uwy_label(origin: object) -> str:
+        if hasattr(origin, "year"):
+            return str(origin.year)
+        origin_text = str(origin)
+        if len(origin_text) >= 4 and origin_text[:4].isdigit():
+            return origin_text[:4]
+        return origin_text
+
+    @staticmethod
+    def _normalize_selected_method(method: object) -> str | None:
+        value = str(method).strip().lower()
+        if value in {"chainladder", "bornhuetter_ferguson"}:
+            return value
+        return None
 
     def set_development(
         self,
@@ -139,6 +156,7 @@ class Reserving:
     def reserve(
         self,
         final_ultimate: Literal["chainladder", "bornhuetter_ferguson"] = "chainladder",
+        selected_ultimate_by_uwy: Optional[dict[str, str]] = None,
     ):
         if self.development is None:
             raise ValueError(
@@ -188,17 +206,41 @@ class Reserving:
         incurred.columns = ["incurred"]
         premium.columns = ["Premium"]
 
-        # hard coded way of selecting the final method
-        if final_ultimate == "chainladder":
-            ultimate = cl_ultimate.copy()
-            ultimate.columns = ["ultimate"]
-            self.result = chainladder
-        elif final_ultimate == "bornhuetter_ferguson":
-            ultimate = bf_ultimate.copy()
-            ultimate.columns = ["ultimate"]
+        selected_mapping_input: dict[str, str] = {}
+        if selected_ultimate_by_uwy:
+            for key, value in selected_ultimate_by_uwy.items():
+                method = self._normalize_selected_method(value)
+                if method is None:
+                    continue
+                selected_mapping_input[str(key)] = method
+
+        per_uwy_selection: dict[str, str] = {}
+        ultimate_values = []
+        for origin in cl_ultimate.index:
+            uwy_label = self._origin_to_uwy_label(origin)
+            selected_method = selected_mapping_input.get(uwy_label)
+            if selected_method is None:
+                selected_method = final_ultimate
+            if selected_method not in {"chainladder", "bornhuetter_ferguson"}:
+                raise ValueError(f"Unknown final_ultimate method: {selected_method}")
+
+            per_uwy_selection[uwy_label] = selected_method
+            if selected_method == "bornhuetter_ferguson":
+                ultimate_values.append(bf_ultimate.loc[origin, "bf_ultimate"])
+            else:
+                ultimate_values.append(cl_ultimate.loc[origin, "cl_ultimate"])
+
+        ultimate = pd.DataFrame(
+            {"ultimate": ultimate_values},
+            index=cl_ultimate.index,
+        )
+        self._selected_ultimate_by_uwy = per_uwy_selection
+
+        selected_methods = set(per_uwy_selection.values())
+        if selected_methods == {"bornhuetter_ferguson"}:
             self.result = bornhuetter
         else:
-            raise ValueError(f"Unknown final_ultimate method: {final_ultimate}")
+            self.result = chainladder
 
         self.correct_tail()
 
@@ -220,6 +262,10 @@ class Reserving:
         self.df_results = self.df_results.merge(
             ultimate, right_index=True, left_index=True
         )
+        self.df_results["selected_method"] = [
+            per_uwy_selection[self._origin_to_uwy_label(idx)]
+            for idx in self.df_results.index
+        ]
         # logging.info(
         #     f"ldfs: {self.result.named_steps.tail.ldf_['incurred'].to_frame().iloc[0]}"
         # )

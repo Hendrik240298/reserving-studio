@@ -33,6 +33,14 @@ def wait_for_graph_ready(page: Page, graph_id: str, timeout_ms: int = 20_000) ->
     )
 
 
+def wait_for_results_table_ready(page: Page, timeout_ms: int = 20_000) -> None:
+    page.wait_for_selector(
+        '#results-table td[data-dash-column="uwy"]',
+        state="visible",
+        timeout=timeout_ms,
+    )
+
+
 def get_graph_data(page: Page, graph_id: str) -> list[dict]:
     payload = page.evaluate(
         """
@@ -137,43 +145,29 @@ def read_results_row_values(page: Page, headers: list[str]) -> dict[str, str]:
     values = page.evaluate(
         """
         (requestedHeaders) => {
-            function stripHtml(input) {
-                if (typeof input !== "string") {
-                    return String(input ?? "");
-                }
-                const element = document.createElement("div");
-                element.innerHTML = input;
-                return element.textContent || element.innerText || "";
-            }
+            const headerToColumn = {
+                "UWY": "uwy",
+                "Incurred (EUR)": "incurred_display",
+                "Premium (EUR)": "premium_display",
+                "Incurred Loss Ratio": "incurred_loss_ratio_display",
+                "CL Ultimate (EUR)": "cl_ultimate_display",
+                "CL Loss Ratio": "cl_loss_ratio_display",
+                "BF Ultimate (EUR)": "bf_ultimate_display",
+                "BF Loss Ratio": "bf_loss_ratio_display",
+                "Selected Ultimate (EUR)": "ultimate_display",
+                "IBNR (EUR)": "ibnr_display",
+            };
 
-            const root = document.getElementById("results-table");
-            if (!root) {
-                return null;
-            }
-            const gd = root.classList.contains("js-plotly-plot")
-                ? root
-                : root.querySelector(".js-plotly-plot");
-            if (!gd || !Array.isArray(gd.data)) {
-                return null;
-            }
-            const tableTrace = gd.data.find((trace) => trace && trace.type === "table");
-            if (!tableTrace || !tableTrace.header || !tableTrace.cells) {
-                return null;
-            }
-
-            const headerValues = (tableTrace.header.values || []).map(stripHtml);
-            const cellValues = tableTrace.cells.values || [];
             const output = {};
-
             for (const header of requestedHeaders) {
-                const index = headerValues.findIndex((value) => value === header);
-                if (index < 0 || !Array.isArray(cellValues[index]) || cellValues[index].length === 0) {
+                const column = headerToColumn[header];
+                if (!column) {
                     output[header] = "";
                     continue;
                 }
-                output[header] = String(cellValues[index][0]);
+                const cell = document.querySelector(`#results-table td[data-dash-row="0"][data-dash-column="${column}"]`);
+                output[header] = cell ? String(cell.textContent || "").trim() : "";
             }
-
             return output;
         }
         """,
@@ -188,41 +182,28 @@ def read_results_column_values(page: Page, headers: list[str]) -> dict[str, list
     values = page.evaluate(
         """
         (requestedHeaders) => {
-            function stripHtml(input) {
-                if (typeof input !== "string") {
-                    return String(input ?? "");
-                }
-                const element = document.createElement("div");
-                element.innerHTML = input;
-                return element.textContent || element.innerText || "";
-            }
-
-            const root = document.getElementById("results-table");
-            if (!root) {
-                return null;
-            }
-            const gd = root.classList.contains("js-plotly-plot")
-                ? root
-                : root.querySelector(".js-plotly-plot");
-            if (!gd || !Array.isArray(gd.data)) {
-                return null;
-            }
-            const tableTrace = gd.data.find((trace) => trace && trace.type === "table");
-            if (!tableTrace || !tableTrace.header || !tableTrace.cells) {
-                return null;
-            }
-
-            const headerValues = (tableTrace.header.values || []).map(stripHtml);
-            const cellValues = tableTrace.cells.values || [];
+            const headerToColumn = {
+                "UWY": "uwy",
+                "Incurred (EUR)": "incurred_display",
+                "Premium (EUR)": "premium_display",
+                "Incurred Loss Ratio": "incurred_loss_ratio_display",
+                "CL Ultimate (EUR)": "cl_ultimate_display",
+                "CL Loss Ratio": "cl_loss_ratio_display",
+                "BF Ultimate (EUR)": "bf_ultimate_display",
+                "BF Loss Ratio": "bf_loss_ratio_display",
+                "Selected Ultimate (EUR)": "ultimate_display",
+                "IBNR (EUR)": "ibnr_display",
+            };
             const output = {};
 
             for (const header of requestedHeaders) {
-                const index = headerValues.findIndex((value) => value === header);
-                if (index < 0 || !Array.isArray(cellValues[index])) {
+                const column = headerToColumn[header];
+                if (!column) {
                     output[header] = [];
                     continue;
                 }
-                output[header] = cellValues[index].map((item) => String(item));
+                const cells = Array.from(document.querySelectorAll(`#results-table td[data-dash-column="${column}"]`));
+                output[header] = cells.map((cell) => String(cell.textContent || "").trim());
             }
             return output;
         }
@@ -288,3 +269,86 @@ def edit_first_bf_apriori_value(page: Page, new_value: str) -> None:
     input_box.fill(new_value)
     input_box.press("Enter")
     page.keyboard.press("Tab")
+
+
+def click_results_method_cell(page: Page, uwy: str, method: str) -> None:
+    normalized = method.strip().lower()
+    if normalized == "chainladder":
+        column = "cl_ultimate_display"
+    elif normalized == "bornhuetter_ferguson":
+        column = "bf_ultimate_display"
+    else:
+        raise AssertionError(f"Unknown method: {method}")
+
+    row_index = page.evaluate(
+        """
+        (targetUwy) => {
+            const cells = Array.from(document.querySelectorAll('#results-table td[data-dash-column="uwy"]'));
+            for (const cell of cells) {
+                const text = String(cell.textContent || '').trim();
+                if (text === targetUwy) {
+                    const row = cell.getAttribute('data-dash-row');
+                    return row === null ? -1 : parseInt(row, 10);
+                }
+            }
+            return -1;
+        }
+        """,
+        uwy,
+    )
+    if not isinstance(row_index, int) or row_index < 0:
+        raise AssertionError(f"Could not find UWY row {uwy}")
+
+    target_cell = page.locator(
+        f'#results-table td[data-dash-row="{row_index}"][data-dash-column="{column}"]'
+    )
+    target_cell.wait_for(state="visible", timeout=10_000)
+    target_cell.click()
+
+
+def read_results_cell_style(page: Page, uwy: str, column: str) -> dict[str, str]:
+    style_payload = page.evaluate(
+        """
+        ({ targetUwy, targetColumn }) => {
+            const uwyCells = Array.from(document.querySelectorAll('#results-table td[data-dash-column="uwy"]'));
+            let rowIndex = -1;
+            for (const cell of uwyCells) {
+                const text = String(cell.textContent || '').trim();
+                if (text === targetUwy) {
+                    const row = cell.getAttribute('data-dash-row');
+                    rowIndex = row === null ? -1 : parseInt(row, 10);
+                    break;
+                }
+            }
+            if (rowIndex < 0) {
+                return null;
+            }
+
+            const selector = `#results-table td[data-dash-row="${rowIndex}"][data-dash-column="${targetColumn}"]`;
+            const targetCell = document.querySelector(selector);
+            if (!targetCell) {
+                return null;
+            }
+            const style = window.getComputedStyle(targetCell);
+            return {
+                background_color: style.backgroundColor || '',
+                border_top_color: style.borderTopColor || '',
+                border_right_color: style.borderRightColor || '',
+                border_bottom_color: style.borderBottomColor || '',
+                border_left_color: style.borderLeftColor || '',
+                border_top_width: style.borderTopWidth || '',
+                border_right_width: style.borderRightWidth || '',
+                border_bottom_width: style.borderBottomWidth || '',
+                border_left_width: style.borderLeftWidth || '',
+                outline_color: style.outlineColor || '',
+                outline_style: style.outlineStyle || '',
+                outline_width: style.outlineWidth || '',
+                box_shadow: style.boxShadow || '',
+            };
+        }
+        """,
+        {"targetUwy": uwy, "targetColumn": column},
+    )
+    if not isinstance(style_payload, dict):
+        raise AssertionError(f"Could not read style for UWY {uwy}, column {column}")
+    return {str(key): str(value) for key, value in style_payload.items()}

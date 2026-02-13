@@ -25,6 +25,37 @@ class ParamsService:
         self._load_session = load_session
         self._get_sync_version = get_sync_version
 
+    def normalize_selected_ultimate_by_uwy(self, raw: object) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        if not isinstance(raw, dict):
+            return normalized
+        for key, value in raw.items():
+            method = str(value).strip().lower()
+            if method not in {"chainladder", "bornhuetter_ferguson"}:
+                continue
+            normalized[str(key)] = method
+        return normalized
+
+    def build_selected_ultimate_by_uwy(self, raw: object = None) -> dict[str, str]:
+        mapping = self.normalize_selected_ultimate_by_uwy(raw)
+        built: dict[str, str] = {}
+        for uwy in self._get_uwy_labels():
+            built[uwy] = mapping.get(uwy, "chainladder")
+        return built
+
+    def set_selected_ultimate_method(
+        self,
+        existing: dict[str, str] | None,
+        uwy: str,
+        method: str,
+    ) -> dict[str, str]:
+        normalized_method = str(method).strip().lower()
+        if normalized_method not in {"chainladder", "bornhuetter_ferguson"}:
+            return self.build_selected_ultimate_by_uwy(existing)
+        current = self.build_selected_ultimate_by_uwy(existing)
+        current[str(uwy)] = normalized_method
+        return self.build_selected_ultimate_by_uwy(current)
+
     def normalize_drop_store(self, raw: object) -> list[list[str | int]]:
         normalized: list[list[str | int]] = []
         if not isinstance(raw, list):
@@ -198,6 +229,7 @@ class ParamsService:
         tail_curve: str | None,
         tail_fit_period_selection: list[int] | None,
         bf_apriori_by_uwy: dict[str, float] | None,
+        selected_ultimate_by_uwy: dict[str, str] | None,
         request_id: int,
         source: str,
         force_recalc: bool,
@@ -232,6 +264,9 @@ class ParamsService:
             "average": average or self._default_average,
             "tail_curve": tail_curve or self._default_tail_curve,
             "bf_apriori_by_uwy": normalized_bf,
+            "selected_ultimate_by_uwy": self.build_selected_ultimate_by_uwy(
+                selected_ultimate_by_uwy
+            ),
             "sync_version": sync_version,
         }
 
@@ -255,6 +290,7 @@ class ParamsService:
                 tail_curve=default_tail_curve,
                 tail_fit_period_selection=default_tail_fit_period_selection,
                 bf_apriori_by_uwy=self.bf_rows_to_mapping(default_bf_apriori_rows),
+                selected_ultimate_by_uwy=None,
                 request_id=request_id,
                 source="load",
                 force_recalc=force_recalc,
@@ -270,6 +306,7 @@ class ParamsService:
             tail_curve=session.get("tail_curve", default_tail_curve),
             tail_fit_period_selection=session.get("tail_fit_period"),
             bf_apriori_by_uwy=session.get("bf_apriori_by_uwy"),
+            selected_ultimate_by_uwy=session.get("selected_ultimate_by_uwy"),
             request_id=request_id,
             source="load",
             force_recalc=force_recalc,

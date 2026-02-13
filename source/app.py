@@ -188,6 +188,7 @@ def build_reserving(
     tail_curve = "weibull"
     tail_fit_period_selection: list[int] = []
     bf_apriori_by_uwy: dict[str, float] | None = None
+    selected_ultimate_by_uwy: dict[str, str] | None = None
     if config is not None:
         session = config.load_session()
         average = session.get("average", average)
@@ -199,6 +200,9 @@ def build_reserving(
         )
         bf_apriori_by_uwy = _normalize_bf_apriori_by_uwy(
             session.get("bf_apriori_by_uwy")
+        )
+        selected_ultimate_by_uwy = _normalize_selected_ultimate_by_uwy(
+            session.get("selected_ultimate_by_uwy")
         )
         if tail_attachment_age is not None:
             try:
@@ -218,7 +222,10 @@ def build_reserving(
         reserving.set_bornhuetter_ferguson(apriori=bf_apriori_by_uwy)
     else:
         reserving.set_bornhuetter_ferguson(apriori=0.6)
-    reserving.reserve(final_ultimate="chainladder")
+    reserving.reserve(
+        final_ultimate="chainladder",
+        selected_ultimate_by_uwy=selected_ultimate_by_uwy,
+    )
     return reserving
 
 
@@ -288,6 +295,19 @@ def _normalize_bf_apriori_by_uwy(raw: object) -> dict[str, float] | None:
             continue
         normalized[str(key)] = factor
 
+    return normalized or None
+
+
+def _normalize_selected_ultimate_by_uwy(raw: object) -> dict[str, str] | None:
+    if not raw or not isinstance(raw, dict):
+        return None
+
+    normalized: dict[str, str] = {}
+    for key, value in raw.items():
+        method = str(value).strip().lower()
+        if method not in {"chainladder", "bornhuetter_ferguson"}:
+            continue
+        normalized[str(key)] = method
     return normalized or None
 
 

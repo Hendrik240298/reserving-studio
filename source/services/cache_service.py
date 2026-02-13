@@ -59,6 +59,7 @@ class CacheService:
         tail_curve: str | None,
         tail_fit_period_selection: list[int] | None,
         bf_apriori_by_uwy: dict[str, float] | None,
+        selected_ultimate_by_uwy: dict[str, str] | None,
     ) -> str:
         normalized_drops: list[list[str | int]] = []
         for item in drop_store or []:
@@ -87,6 +88,13 @@ class CacheService:
             except (TypeError, ValueError):
                 continue
 
+        normalized_selected_method: dict[str, str] = {}
+        for key, value in sorted((selected_ultimate_by_uwy or {}).items()):
+            method = str(value).strip().lower()
+            if method not in {"chainladder", "bornhuetter_ferguson"}:
+                continue
+            normalized_selected_method[str(key)] = method
+
         payload = {
             "segment": segment,
             "average": average or default_average,
@@ -95,6 +103,7 @@ class CacheService:
             "tail_fit_period_selection": normalized_fit_period,
             "drops": normalized_drops,
             "bf_apriori_by_uwy": normalized_bf,
+            "selected_ultimate_by_uwy": normalized_selected_method,
         }
         return json.dumps(payload, sort_keys=True)
 
@@ -120,4 +129,5 @@ class CacheService:
             tail_curve=tail_curve,
             tail_fit_period_selection=tail_fit_period_selection,
             bf_apriori_by_uwy=None,
+            selected_ultimate_by_uwy=None,
         )
