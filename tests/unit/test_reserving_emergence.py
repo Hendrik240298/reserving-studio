@@ -68,7 +68,7 @@ def test_emergence_expected_uses_chainladder_tail_cdf() -> None:
         .to_frame()
         .iloc[0]
     )
-    cl_expected = (1 / cl_cdf).iloc[:-4]
+    cl_expected = 1 / cl_cdf
     expected_aligned = cl_expected.reindex(expected_row.index)
     if expected_aligned.isna().all():
         expected_aligned = pd.Series(
@@ -78,3 +78,13 @@ def test_emergence_expected_uses_chainladder_tail_cdf() -> None:
     expected_aligned = expected_aligned.reindex(expected_row.index)
 
     pd.testing.assert_series_equal(expected_row, expected_aligned, check_names=False)
+
+
+def test_emergence_expected_has_values_for_all_development_columns() -> None:
+    reserving = _build_reserving()
+    reserving.reserve(final_ultimate="chainladder")
+
+    emergence = reserving.get_emergence_pattern()
+    expected = emergence["Expected"]
+
+    assert not expected.isna().all(axis=0).any()

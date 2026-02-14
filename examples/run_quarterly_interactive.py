@@ -18,6 +18,17 @@ from source.app import (
 )
 
 
+def _to_incremental_by_uw_year(
+    dataframe: pd.DataFrame,
+    *,
+    value_column: str,
+) -> pd.Series:
+    ordered = dataframe.sort_values(["uw_year", "period"]).copy()
+    diffs = ordered.groupby("uw_year")[value_column].diff()
+    incremental = diffs.fillna(ordered[value_column])
+    return pd.Series(incremental.reindex(dataframe.index), index=dataframe.index)
+
+
 def _load_quarterly_claims_df() -> pd.DataFrame:
     if cl.__file__ is None:
         raise ValueError("chainladder package path not available")
@@ -43,8 +54,14 @@ def _load_quarterly_claims_df() -> pd.DataFrame:
         freq="Q",
     ).to_timestamp("Q")
 
-    paid = pd.Series(pd.to_numeric(dataframe["incurred"], errors="coerce"))
-    dataframe["paid"] = paid.fillna(0.0)
+    dataframe["incurred"] = pd.Series(
+        pd.to_numeric(dataframe["incurred"], errors="coerce"),
+        index=dataframe.index,
+    ).fillna(0.0)
+    dataframe["paid"] = _to_incremental_by_uw_year(
+        dataframe,
+        value_column="incurred",
+    )
     dataframe["outstanding"] = 0.0
     dataframe["id"] = [f"quarterly_{i}" for i in range(len(dataframe))]
 

@@ -82,7 +82,10 @@ class PremiumRepository:
     ) -> pd.DataFrame:
         df_premium = dataframe.copy()
         df_premium["uw_year"] = self._coerce_uw_year(df_premium["origin"])
-        df_premium["period"] = self._coerce_quarter_period(df_premium["development"])
+        df_premium["period"] = self._coerce_period(
+            df_premium["development"],
+            uw_year=df_premium["uw_year"],
+        )
         df_premium["Premium_selected"] = self._coerce_numeric(
             df_premium["Premium_selected"],
             "Premium_selected",
@@ -106,7 +109,10 @@ class PremiumRepository:
     def _normalize_canonical_premium(self, dataframe: pd.DataFrame) -> pd.DataFrame:
         df_premium = dataframe[["uw_year", "period", "Premium_selected"]].copy()
         df_premium["uw_year"] = self._coerce_uw_year(df_premium["uw_year"])
-        df_premium["period"] = self._coerce_quarter_period(df_premium["period"])
+        df_premium["period"] = self._coerce_period(
+            df_premium["period"],
+            uw_year=df_premium["uw_year"],
+        )
         df_premium["Premium_selected"] = self._coerce_numeric(
             df_premium["Premium_selected"],
             "Premium_selected",
@@ -136,9 +142,9 @@ class PremiumRepository:
         series = pd.Series(values)
 
         if isinstance(series.dtype, pd.PeriodDtype):
-            coerced = series.dt.to_timestamp("Y")
+            coerced = series.dt.to_timestamp(how="start")
         elif pd.api.types.is_datetime64_any_dtype(series):
-            coerced = series.dt.to_period("Y").dt.to_timestamp("Y")
+            coerced = series.dt.to_period("Y").dt.to_timestamp(how="start")
         else:
             string_values = series.astype(str)
             parsed = pd.to_datetime(string_values.str[:4], format="%Y", errors="coerce")
@@ -148,26 +154,77 @@ class PremiumRepository:
             raise ValueError("Premium dataframe contains invalid 'uw_year' values.")
         return coerced
 
-    def _coerce_quarter_period(self, values: object) -> pd.Series:
+    def _coerce_period(
+        self, values: object, uw_year: object | None = None
+    ) -> pd.Series:
         series = pd.Series(values)
 
         if isinstance(series.dtype, pd.PeriodDtype):
-            coerced = series.dt.to_timestamp("Q")
+            coerced = series.dt.to_timestamp(how="end").dt.normalize()
         elif pd.api.types.is_datetime64_any_dtype(series):
-            coerced = series.dt.to_period("Q").dt.to_timestamp("Q")
+            coerced = pd.to_datetime(series, errors="coerce")
         else:
             string_values = series.astype(str)
-            try:
-                quarter_index = pd.PeriodIndex(string_values, freq="Q")
-            except Exception as exc:
-                raise ValueError(
-                    "Premium dataframe contains invalid quarterly 'period' or 'development' values."
-                ) from exc
-            coerced = pd.Series(quarter_index.to_timestamp("Q"), index=series.index)
+
+            numeric = pd.to_numeric(string_values, errors="coerce")
+            numeric_series = pd.Series(numeric, index=series.index)
+            if numeric_series.notna().all():
+                coerced = self._coerce_months_since_origin(
+                    numeric_series,
+                    uw_year=uw_year,
+                )
+            else:
+                try:
+                    quarter_index = pd.PeriodIndex(string_values, freq="Q")
+                except Exception as exc:
+                    raise ValueError(
+                        "Premium dataframe contains invalid 'period' or 'development' values. "
+                        "Expected quarter labels (e.g. 1995Q1), datetimes, or month lags (e.g. 12, 24, 36)."
+                    ) from exc
+                coerced = pd.Series(
+                    quarter_index.to_timestamp("Q"),
+                    index=series.index,
+                )
 
         if coerced.isna().any():
             raise ValueError("Premium dataframe contains invalid 'period' values.")
         return coerced
+
+    def _coerce_months_since_origin(
+        self,
+        month_values: pd.Series,
+        uw_year: object | None,
+    ) -> pd.Series:
+        months = pd.to_numeric(month_values, errors="coerce")
+        months_series = pd.Series(months, index=month_values.index)
+
+        if months_series.isna().any():
+            raise ValueError(
+                "Premium dataframe contains invalid numeric 'period' values."
+            )
+
+        rounded = months_series.round().astype("int64")
+        if (rounded <= 0).any():
+            raise ValueError(
+                "Premium dataframe contains non-positive numeric 'period' values. "
+                "Month lags must be positive integers."
+            )
+
+        if uw_year is None:
+            raise ValueError(
+                "Premium dataframe uses numeric development periods but 'uw_year' is missing."
+            )
+
+        uwy_series = pd.to_datetime(pd.Series(uw_year), errors="coerce")
+        if uwy_series.isna().any():
+            raise ValueError(
+                "Premium dataframe contains invalid 'uw_year' values for numeric development periods."
+            )
+
+        base_month = uwy_series.dt.to_period("Y").dt.asfreq("M", how="start")
+        period_month = base_month + (rounded - 1)
+        coerced = period_month.dt.to_timestamp("M")
+        return pd.Series(coerced, index=month_values.index)
 
     def _coerce_numeric(self, values: object, column: str) -> pd.Series:
         series = pd.Series(values)

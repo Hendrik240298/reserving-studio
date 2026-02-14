@@ -52,9 +52,13 @@ Open http://127.0.0.1:8050
 - Start the GUI from script with `source.app.run_interactive_session(...)`.
 - In the Results tab, click **Finalize & Continue** to hand control back to your script with finalized parameters and results payload.
 - A ready-to-run quarterly example is available at `examples/run_quarterly_interactive.py`.
+- A CLRD portfolio-level example is available at `examples/run_clrd_interactive.py`.
+- The CLRD example uses its own config file at `examples/config_clrd.yml` (session state at `sessions/clrd.yml`).
+- The CLRD example currently filters to `LOB = comauto` before building the triangle.
 
 ```bash
 uv run python examples/run_quarterly_interactive.py
+uv run python examples/run_clrd_interactive.py
 ```
 
 The script blocks until you click **Finalize & Continue** in the Results tab, then resumes with a finalized payload (`params_store`, `results_store`, and numeric `results_df`) for downstream ETL/reporting.

@@ -1,0 +1,10 @@
+paths:
+  results: results/
+  plots: plots/
+  data: data/
+  sessions: sessions/
+first date: 1988
+last date: "December 1997"
+segment: clrd
+session:
+  path: sessions/clrd.yml

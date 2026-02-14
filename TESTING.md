@@ -62,7 +62,11 @@ uv run python -m pytest tests/e2e/test_dashboard_e2e.py::test_drop_updates_emerg
 
 ```bash
 uv run python examples/run_quarterly_interactive.py
+uv run python examples/run_clrd_interactive.py
 ```
+
+- The CLRD script uses `examples/config_clrd.yml`, so it does not reuse quarterly session settings.
+- The CLRD script currently runs on `LOB = comauto` only.
 
 - In the app, open Results and click **Finalize & Continue**.
 - The script should resume and print finalized segment, selected methods by UWY, and top rows of numeric results.

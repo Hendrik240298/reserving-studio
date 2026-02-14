@@ -64,6 +64,9 @@ def _coerce_period(series: pd.Series) -> pd.Series:
 
 
 def _normalize_periods(df: pd.DataFrame) -> pd.DataFrame:
+    if pd.api.types.is_datetime64_any_dtype(df["period"]):
+        return df
+
     numeric_periods = df["period"]
     if not pd.api.types.is_numeric_dtype(numeric_periods):
         numeric_periods = pd.to_numeric(numeric_periods, errors="coerce")
@@ -86,6 +89,17 @@ def _normalize_periods(df: pd.DataFrame) -> pd.DataFrame:
 
     df["period"] = df.apply(_to_period_date, axis=1)
     return df
+
+
+def _to_incremental_by_uw_year(
+    dataframe: pd.DataFrame,
+    *,
+    value_column: str,
+) -> pd.Series:
+    ordered = dataframe.sort_values(["uw_year", "period"]).copy()
+    diffs = ordered.groupby("uw_year")[value_column].diff()
+    incremental = diffs.fillna(ordered[value_column])
+    return pd.Series(incremental.reindex(dataframe.index), index=dataframe.index)
 
 
 def _triangle_to_dataframe(triangle: cl.Triangle) -> pd.DataFrame:
@@ -171,7 +185,11 @@ def _load_quarterly_csv() -> pd.DataFrame:
     df["uw_year"] = _coerce_uw_year(df["uw_year"])
     df["period"] = _coerce_period(df["period"])
     df = _normalize_periods(df)
-    df["paid"] = df["incurred"].astype(float)
+    df["incurred"] = pd.Series(
+        pd.to_numeric(df["incurred"], errors="coerce"),
+        index=df.index,
+    ).fillna(0.0)
+    df["paid"] = _to_incremental_by_uw_year(df, value_column="incurred")
     df["outstanding"] = 0.0
     return df
 

@@ -394,8 +394,6 @@ class Reserving:
             .to_frame()
             .iloc[0]
         )
-        # Cut off the last 4 tail periods to match triangle length
-        cdf_values = cdf_values.iloc[:-4]
         expected_pattern = 1 / cdf_values
 
         # Align expected pattern with emergence columns
