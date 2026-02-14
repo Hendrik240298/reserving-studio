@@ -3,7 +3,7 @@
 ## Scope
 
 - `tests/e2e/` contains deterministic browser E2E tests for the Dash reserving UI.
-- `tests/unit/` contains fast unit tests for extracted plotting/presentation helpers (for example `tests/unit/test_plot_builders.py`).
+- `tests/unit/` contains fast unit tests for app input workflow, domain adapters, interactive session payloads, and plotting/presentation helpers.
 - The tests run against a temporary config/session setup and do not modify your normal `sessions/` files.
 
 ## Prerequisites
@@ -18,38 +18,54 @@ uv run python -m playwright install chromium
 - Full unit suite:
 
 ```bash
-uv run pytest tests/unit -q
+uv run python -m pytest tests/unit -q
 ```
 
 - Single unit test:
 
 ```bash
-uv run pytest tests/unit/test_plot_builders.py::test_plot_triangle_heatmap_clean_returns_figure_and_payload -q
+uv run python -m pytest tests/unit/test_plot_builders.py::test_plot_triangle_heatmap_clean_returns_figure_and_payload -q
 ```
 
 - Full dashboard E2E suite:
 
 ```bash
-uv run pytest tests/e2e -m e2e -q
+uv run python -m pytest tests/e2e -m e2e -q
 ```
 
 - Single test:
 
 ```bash
-uv run pytest tests/e2e/test_dashboard_e2e.py::test_drop_updates_emergence_and_results -q
+uv run python -m pytest tests/e2e/test_dashboard_e2e.py::test_drop_updates_emergence_and_results -q
 ```
 
 ## Current E2E coverage
 
 - Drop selection in chainladder heatmap updates both emergence and results plots.
 - Editing Bornhuetter-Ferguson apriori values updates results output.
+- Results method selection styling/behavior remains stable across table state changes.
 
 ## Current unit coverage
 
+- `ClaimsCollection` validation behavior, including explicit `id` requirement for claim-level methods.
+- `PremiumRepository` normalization for UWY-level premium and cumulative premium triangle input.
+- App input pipeline wiring (`build_sample_triangle`) through claims/premium repositories.
+- Interactive session payload contracts (`ParamsStoreSnapshot`, `ResultsStoreSnapshot`, controller finalize flow).
 - Heatmap core cache key determinism and change detection.
 - Numeric formatting and customdata shape generation.
 - Heatmap core payload and dropped-cell masking behavior.
 - Figure contract checks for data triangle table, emergence chart, results table, and clean heatmap rendering.
+
+## Scripted interactive workflow check
+
+- To validate the script-driven workflow (manual read -> GUI -> finalize -> script continuation):
+
+```bash
+uv run python examples/run_quarterly_interactive.py
+```
+
+- In the app, open Results and click **Finalize & Continue**.
+- The script should resume and print finalized segment, selected methods by UWY, and top rows of numeric results.
 
 ## Failure artifacts
 

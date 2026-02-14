@@ -3,13 +3,20 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from pathlib import Path
 
 import chainladder as cl
 import pandas as pd
 
+from source.claims_collection import ClaimsCollection
 from source.config_manager import ConfigManager
 from source.dashboard import Dashboard
+from source.interactive_session import (
+    FinalizePayload,
+    InteractiveSessionController,
+)
+from source.premium_repository import PremiumRepository
 from source.reserving import Reserving
 from source.triangle import Triangle
 
@@ -169,13 +176,32 @@ def _load_quarterly_csv() -> pd.DataFrame:
     return df
 
 
+def _load_sample_premium_csv() -> pd.DataFrame:
+    premium_path = (
+        Path(__file__).resolve().parent.parent / "data" / "quarterly_premium.csv"
+    )
+    if not premium_path.exists():
+        raise FileNotFoundError(f"Sample premium CSV not found at {premium_path}")
+    return pd.read_csv(premium_path)
+
+
 def build_sample_triangle() -> Triangle:
     sample = cl.load_sample("quarterly")["incurred"]
     try:
         data = _triangle_to_dataframe(sample)
     except ValueError:
         data = _load_quarterly_csv()
-    return Triangle(data)
+
+    data = data.copy()
+    data["id"] = [f"sample_{idx}" for idx in range(len(data))]
+
+    claims = ClaimsCollection(data)
+    premium_df = _load_sample_premium_csv()
+    premium = PremiumRepository.from_dataframe(
+        config_manager=None, dataframe=premium_df
+    )
+
+    return Triangle.from_claims(claims, premium)
 
 
 def build_reserving(
@@ -311,6 +337,85 @@ def _normalize_selected_ultimate_by_uwy(raw: object) -> dict[str, str] | None:
     return normalized or None
 
 
+def create_interactive_session_controller() -> InteractiveSessionController:
+    return InteractiveSessionController()
+
+
+def build_workflow_from_collections(
+    claims: ClaimsCollection,
+    premium: PremiumRepository,
+    *,
+    config: ConfigManager | None = None,
+) -> Reserving:
+    triangle = Triangle.from_claims(claims, premium)
+    return build_reserving(triangle, config=config)
+
+
+def build_workflow_from_dataframes(
+    claims_df: pd.DataFrame,
+    premium_df: pd.DataFrame,
+    *,
+    config: ConfigManager | None = None,
+) -> Reserving:
+    claims = ClaimsCollection(claims_df)
+    premium = PremiumRepository.from_dataframe(
+        config_manager=config, dataframe=premium_df
+    )
+    return build_workflow_from_collections(claims, premium, config=config)
+
+
+def launch_dashboard(
+    reserving: Reserving,
+    *,
+    config: ConfigManager | None = None,
+    controller: InteractiveSessionController | None = None,
+    debug: bool = False,
+    port: int = 8050,
+) -> Dashboard:
+    dashboard = Dashboard(reserving, config=config, controller=controller)
+    dashboard.show(debug=debug, port=port)
+    return dashboard
+
+
+def wait_for_finalize(
+    controller: InteractiveSessionController,
+    *,
+    timeout_seconds: float | None = None,
+) -> FinalizePayload:
+    finished = controller.done_event.wait(timeout=timeout_seconds)
+    if not finished:
+        raise TimeoutError("Interactive session did not finalize before timeout.")
+    if controller.error:
+        raise RuntimeError(f"Interactive session failed: {controller.error}")
+    if controller.canceled:
+        raise RuntimeError("Interactive session was canceled.")
+    if controller.finalized_payload is None:
+        raise RuntimeError("Interactive session completed without finalized payload.")
+    return controller.finalized_payload
+
+
+def run_interactive_session(
+    reserving: Reserving,
+    *,
+    config: ConfigManager | None = None,
+    controller: InteractiveSessionController | None = None,
+    port: int = 8050,
+    timeout_seconds: float | None = None,
+    debug: bool = False,
+) -> FinalizePayload:
+    active_controller = controller or create_interactive_session_controller()
+    dashboard = Dashboard(reserving, config=config, controller=active_controller)
+
+    thread = threading.Thread(
+        target=dashboard.show,
+        kwargs={"debug": debug, "port": port},
+        daemon=True,
+    )
+    thread.start()
+
+    return wait_for_finalize(active_controller, timeout_seconds=timeout_seconds)
+
+
 def load_config() -> ConfigManager | None:
     config_path = os.environ.get("RESERVING_CONFIG", "config.yml")
     path = Path(config_path)
@@ -323,8 +428,7 @@ def main() -> None:
     config = load_config()
     triangle = build_sample_triangle()
     reserving = build_reserving(triangle, config=config)
-    dashboard = Dashboard(reserving, config=config)
-    dashboard.show()
+    launch_dashboard(reserving, config=config)
 
 
 if __name__ == "__main__":

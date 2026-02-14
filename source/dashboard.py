@@ -2,7 +2,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, TYPE_CHECKING
 
 import pandas as pd
 from source.config_manager import ConfigManager
@@ -13,6 +13,12 @@ from source.presentation import (
     plot_emergence,
     plot_triangle_heatmap_clean,
 )
+from source.interactive_session import (
+    FinalizePayload,
+    ParamsStoreSnapshot,
+    ResultsStoreSnapshot,
+    utc_now,
+)
 from source.reserving import Reserving
 from source.services import (
     CacheService,
@@ -20,6 +26,9 @@ from source.services import (
     ReservingService,
     SessionSyncService,
 )
+
+if TYPE_CHECKING:
+    from source.interactive_session import InteractiveSessionController
 from dash import (
     Dash,
     dcc,
@@ -62,6 +71,7 @@ class Dashboard:
         self,
         reserving: Reserving,
         config: Optional[ConfigManager] = None,
+        controller: "InteractiveSessionController | None" = None,
     ):
         """
         Initialize Dashboard with reserving results and configuration.
@@ -72,6 +82,7 @@ class Dashboard:
         """
         self._reserving = reserving
         self._config = config
+        self._controller = controller
         assets_folder = Path(__file__).resolve().parent.parent / "assets"
         self.app = Dash(
             __name__,
@@ -127,14 +138,13 @@ class Dashboard:
             get_triangle=lambda: self.triangle,
             get_emergence=lambda: self.emergence_pattern,
             get_results=lambda: self.results,
-            build_triangle_figure=lambda triangle_data,
-            title,
-            attachment,
-            fit_selection: self._build_triangle_figure_dict(
-                triangle_data,
-                title,
-                attachment,
-                fit_selection,
+            build_triangle_figure=lambda triangle_data, title, attachment, fit_selection: (
+                self._build_triangle_figure_dict(
+                    triangle_data,
+                    title,
+                    attachment,
+                    fit_selection,
+                )
             ),
             build_emergence_figure=lambda emergence_data, title: plot_emergence(
                 emergence_pattern=emergence_data,
@@ -513,6 +523,88 @@ class Dashboard:
         if not isinstance(payload, dict):
             return None
         return payload
+
+    def _apply_selected_ultimate_to_results_df(
+        self,
+        results_df: Optional[pd.DataFrame],
+        selected_ultimate_by_uwy: dict[str, str],
+    ) -> pd.DataFrame:
+        if results_df is None or len(results_df) == 0:
+            return pd.DataFrame()
+
+        next_results = results_df.copy()
+        if (
+            "cl_ultimate" not in next_results.columns
+            or "bf_ultimate" not in next_results.columns
+        ):
+            return next_results
+
+        selected_methods: list[str] = []
+        selected_ultimate_values: list[float] = []
+        for idx, row in next_results.iterrows():
+            if hasattr(idx, "year"):
+                uwy = str(idx.year)
+            else:
+                uwy_text = str(idx)
+                uwy = uwy_text[:4] if len(uwy_text) >= 4 else uwy_text
+
+            method = selected_ultimate_by_uwy.get(uwy, "chainladder")
+            if method not in {"chainladder", "bornhuetter_ferguson"}:
+                method = "chainladder"
+
+            cl_ultimate = float(row.get("cl_ultimate", 0.0))
+            bf_ultimate = float(row.get("bf_ultimate", 0.0))
+            selected_methods.append(method)
+            if method == "bornhuetter_ferguson":
+                selected_ultimate_values.append(bf_ultimate)
+            else:
+                selected_ultimate_values.append(cl_ultimate)
+
+        next_results["ultimate"] = selected_ultimate_values
+        next_results["selected_method"] = selected_methods
+        return next_results
+
+    def _build_finalize_payload(
+        self,
+        params_store_data: object,
+        results_store_data: object,
+    ) -> FinalizePayload:
+        params_snapshot = ParamsStoreSnapshot.from_store_dict(params_store_data)
+        results_snapshot = ResultsStoreSnapshot.from_store_dict(results_store_data)
+        selected_mapping = self._params_service.build_selected_ultimate_by_uwy(
+            params_snapshot.selected_ultimate_by_uwy
+        )
+        selected_results_df = self._apply_selected_ultimate_to_results_df(
+            self.results,
+            selected_mapping,
+        )
+
+        run_metadata: dict[str, str | int | float | bool] = {
+            "cache_key": results_snapshot.cache_key or "",
+            "model_cache_key": results_snapshot.model_cache_key or "",
+            "last_updated": results_snapshot.last_updated,
+            "figure_version": results_snapshot.figure_version or 0,
+            "sync_version": results_snapshot.sync_version or 0,
+        }
+
+        return FinalizePayload(
+            finalized_at_utc=utc_now(),
+            segment=self._get_segment_key(),
+            params_store=params_snapshot,
+            results_store=results_snapshot,
+            results_df=selected_results_df.copy(),
+            emergence_df=(
+                self.emergence_pattern.copy()
+                if isinstance(self.emergence_pattern, pd.DataFrame)
+                else None
+            ),
+            triangle_df=(
+                self.triangle.copy()
+                if isinstance(self.triangle, pd.DataFrame)
+                else None
+            ),
+            run_metadata=run_metadata,
+        )
 
     def _extract_data(self):
         """Extract data from domain objects and store as instance variables."""
@@ -1397,6 +1489,19 @@ class Dashboard:
                 logging.error(f"Failed to recalculate reserving: {exc}", exc_info=True)
                 return no_update, no_update
 
+            if self._controller is not None:
+                try:
+                    self._controller.publish_latest(
+                        params_store=ParamsStoreSnapshot.from_store_dict(params),
+                        results_store=ResultsStoreSnapshot.from_store_dict(
+                            results_payload
+                        ),
+                    )
+                except Exception:
+                    logging.exception(
+                        "Failed to publish latest interactive session state"
+                    )
+
             try:
                 results_payload["figure_version"] = int(request_id)
             except (TypeError, ValueError):
@@ -1585,6 +1690,33 @@ class Dashboard:
         )
         def _clear_results_active_cell(_params):
             return None
+
+        @self.app.callback(
+            Output("finalize-status", "children"),
+            Output("finalize-continue-button", "disabled"),
+            Input("finalize-continue-button", "n_clicks"),
+            State("params-store", "data"),
+            State("results-store", "data"),
+            prevent_initial_call=True,
+        )
+        def _finalize_and_continue(n_clicks, params_store_data, results_store_data):
+            if not n_clicks:
+                return no_update, no_update
+            if self._controller is None:
+                return "No interactive session controller configured.", False
+
+            try:
+                payload = self._build_finalize_payload(
+                    params_store_data=params_store_data,
+                    results_store_data=results_store_data,
+                )
+            except Exception as exc:
+                logging.exception("Failed to finalize interactive session")
+                self._controller.fail(str(exc))
+                return f"Finalize failed: {exc}", False
+
+            self._controller.finalize(payload)
+            return "Finalized. You can continue in your Python script.", True
 
         @self.app.callback(
             Output("triangle-base-figure", "data"),
@@ -2332,6 +2464,39 @@ class Dashboard:
                                                         ),
                                                     ],
                                                     style={"marginBottom": "12px"},
+                                                ),
+                                                html.Div(
+                                                    [
+                                                        html.Button(
+                                                            "Finalize & Continue",
+                                                            id="finalize-continue-button",
+                                                            n_clicks=0,
+                                                            style={
+                                                                "padding": "8px 12px",
+                                                                "background": COLOR_ACCENT,
+                                                                "color": "#ffffff",
+                                                                "border": "none",
+                                                                "borderRadius": RADIUS_MD,
+                                                                "fontWeight": 600,
+                                                                "cursor": "pointer",
+                                                            },
+                                                        ),
+                                                        html.Span(
+                                                            "",
+                                                            id="finalize-status",
+                                                            style={
+                                                                "fontSize": "13px",
+                                                                "color": COLOR_MUTED,
+                                                            },
+                                                        ),
+                                                    ],
+                                                    style={
+                                                        "display": "flex",
+                                                        "alignItems": "center",
+                                                        "gap": "12px",
+                                                        "marginBottom": "12px",
+                                                        "flexWrap": "wrap",
+                                                    },
                                                 ),
                                                 dash_table.DataTable(
                                                     id="results-table",

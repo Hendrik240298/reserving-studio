@@ -35,10 +35,29 @@ source .venv/bin/activate
 ## Run server (Dash)
 
 ```bash
-python -m source.app
+uv run python -m source.app
 ```
 
 Open http://127.0.0.1:8050
+
+## Default input workflow
+
+- The app startup uses the chainladder quarterly sample claims data and the local premium file at `data/quarterly_premium.csv`.
+- Inputs are normalized through `source/claims_collection.py` and `source/premium_repository.py` before building the reserving triangle.
+- This keeps one consistent ingestion path for sample data now, and allows later extension to CSV/SQL adapters.
+
+## Scripted custom input workflow
+
+- For custom SQL/CSV reads, use your own Python script to prepare claims and premium dataframes, then pass them into `source.app.build_workflow_from_dataframes(...)`.
+- Start the GUI from script with `source.app.run_interactive_session(...)`.
+- In the Results tab, click **Finalize & Continue** to hand control back to your script with finalized parameters and results payload.
+- A ready-to-run quarterly example is available at `examples/run_quarterly_interactive.py`.
+
+```bash
+uv run python examples/run_quarterly_interactive.py
+```
+
+The script blocks until you click **Finalize & Continue** in the Results tab, then resumes with a finalized payload (`params_store`, `results_store`, and numeric `results_df`) for downstream ETL/reporting.
 
 ## Run dashboard E2E tests
 
@@ -46,7 +65,7 @@ The E2E suite uses Playwright to open the Dash app in a real Chromium browser an
 
 ```bash
 uv run python -m playwright install chromium
-uv run pytest tests/e2e -m e2e -q
+uv run python -m pytest tests/e2e -m e2e -q
 ```
 
 ## Optional: custom config path

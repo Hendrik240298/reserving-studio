@@ -229,7 +229,10 @@ def test_results_selection_uses_border_only_visual_indicator(
     )["background_color"]
 
     click_results_method_cell(page, target_uwy, "bornhuetter_ferguson")
-    wait_for_results_column_change(page, baseline)
+    selected_before = baseline["Selected Ultimate (EUR)"][target_idx]
+    bf_before = baseline["BF Ultimate (EUR)"][target_idx]
+    if selected_before != bf_before:
+        wait_for_results_column_change(page, baseline)
 
     bf_ultimate_style = read_results_cell_style(
         page,
