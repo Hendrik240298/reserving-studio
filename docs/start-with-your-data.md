@@ -61,6 +61,11 @@ Premium input can be supplied in one of three schemas:
 
 For new projects, schema (3) is usually easiest and clearest.
 
+Premium shape recommendations:
+
+- If possible, provide premium as one row per UWY (`Premium_selected` at the selected/latest valuation). This is the safest with the current pipeline.
+- If you provide premium by multiple development periods, keep the semantics consistent (incremental vs cumulative) and verify latest diagonal values in the Results tab.
+
 ### Date and period formatting rules
 
 For best reliability:

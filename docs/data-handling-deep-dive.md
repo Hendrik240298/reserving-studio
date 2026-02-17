@@ -28,6 +28,11 @@ Then enriched to include:
 
 by mirroring `Premium_selected`.
 
+Operational guidance:
+
+- Safest input is one premium row per UWY with `Premium_selected` at selected/latest valuation.
+- If premium is provided across multiple development periods, keep semantics consistent and cross-check latest diagonal premium values in reserving results.
+
 ## 2) Ingestion flow by component
 
 ### Claims

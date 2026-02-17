@@ -102,6 +102,11 @@ One of:
 - `origin`, `development`, `Premium_selected`
 - `uw_year`, `period`, `Premium_selected`
 
+Preferred premium shape:
+
+- If possible, use one row per UWY with `Premium_selected` at the selected/latest valuation.
+- If using multiple development periods, ensure valuation semantics are consistent and validate latest diagonal premium values in Results.
+
 ## Practical advice
 
 - Keep one segment per analytical context (line of business, portfolio, etc.).
