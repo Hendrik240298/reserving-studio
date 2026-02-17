@@ -1,0 +1,14 @@
+paths:
+  results: results/
+  plots: plots/
+  data: data/
+  sessions: sessions/
+first date: 1900
+last date: "December 2006"
+segment: quarterly
+granularity: quarterly
+workflow:
+  dataset: quarterly
+  quarterly_premium_csv: data/quarterly_premium.csv
+session:
+  path: sessions/quarterly.yml

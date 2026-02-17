@@ -1,0 +1,47 @@
+paths:
+  results: results/
+  plots: plots/
+  data: data/
+  sessions: sessions/
+first date: 2018
+last date: "December 2024"
+segment: motor_sql_template
+granularity: quarterly
+workflow:
+  input:
+    sql:
+      driver: ODBC Driver 18 for SQL Server
+      server: localhost
+      database: reserving
+      trusted_connection: true
+      encrypt: false
+      trust_server_certificate: true
+      timeout_seconds: 30
+    claims:
+      source: sql
+      query_file: examples/sql/claims_template.sql
+      params:
+        - motor
+        - 2018
+        - 2024
+      # Optional if your SQL uses different names:
+      # column_map:
+      #   claim_id: id
+      #   underwriting_year: uw_year
+      #   valuation_date: period
+      #   paid_movement: paid
+      #   reserve_movement: outstanding
+    premium:
+      source: sql
+      query_file: examples/sql/premium_template.sql
+      params:
+        - motor
+        - 2018
+        - 2024
+      # Optional if your SQL uses different names:
+      # column_map:
+      #   underwriting_year: uw_year
+      #   valuation_date: period
+      #   earned_premium: Premium_selected
+session:
+  path: sessions/motor_sql_template.yml

@@ -74,6 +74,24 @@ class ConfigManager:
                 "Segment is not specified in the config file. Please specify the segment in the config file."
             )
 
+        granularity = str(config.get("granularity", "quarterly")).strip().lower()
+        if granularity not in {"quarterly", "yearly"}:
+            raise ValueError(
+                f"Granularity '{granularity}' is invalid. Use 'quarterly' or 'yearly'."
+            )
+        self._granularity = granularity
+
+        workflow = config.get("workflow", {})
+        self._workflow_dataset = (
+            str(workflow.get("dataset", self._segment)).strip().lower()
+        )
+        self._workflow_clrd_lob = (
+            str(workflow.get("clrd_lob", "comauto")).strip().lower()
+        )
+        self._workflow_quarterly_premium_csv = str(
+            workflow.get("quarterly_premium_csv", "data/quarterly_premium.csv")
+        ).strip()
+
     def _init_sessions(self, config):
         session_config = config.get("session", {})
         session_path = session_config.get("path")
@@ -101,6 +119,25 @@ class ConfigManager:
 
     def get_latest_period(self):
         return self._last_date
+
+    def get_granularity(self) -> str:
+        return self._granularity
+
+    def get_workflow_dataset(self) -> str:
+        return self._workflow_dataset
+
+    def get_workflow_clrd_lob(self) -> str:
+        return self._workflow_clrd_lob
+
+    def get_workflow_quarterly_premium_csv(self) -> str:
+        return self._workflow_quarterly_premium_csv
+
+    def get_workflow_input(self) -> dict:
+        workflow = self._config.get("workflow", {})
+        workflow_input = workflow.get("input", {})
+        if not isinstance(workflow_input, dict):
+            return {}
+        return workflow_input
 
     def get_session_path(self) -> Path:
         return self._session_path

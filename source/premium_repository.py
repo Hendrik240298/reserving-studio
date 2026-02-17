@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import pandas as pd
 
 from source.config_manager import ConfigManager
+from source.premium_input_repository import PremiumInputRepository
 
 
 class PremiumRepository:
@@ -31,6 +33,51 @@ class PremiumRepository:
         if not isinstance(dataframe, pd.DataFrame):
             raise ValueError("Premium input must be a pandas DataFrame.")
         return cls(config_manager, dataframe)
+
+    @classmethod
+    def from_sql(
+        cls,
+        config_manager: ConfigManager,
+        *,
+        query_path: Path,
+        sql_settings: dict,
+        params: list[object] | None = None,
+        column_map: dict[str, str] | None = None,
+    ) -> "PremiumRepository":
+        input_repository = PremiumInputRepository.from_sql(
+            config_manager,
+            query_path=query_path,
+            sql_settings=sql_settings,
+            params=params,
+            column_map=column_map,
+        )
+        return cls.from_dataframe(
+            config_manager=config_manager,
+            dataframe=input_repository.get_premium_df(),
+        )
+
+    def get_premium_from_sql(
+        self,
+        *,
+        query_path: Path,
+        sql_settings: dict,
+        params: list[object] | None = None,
+        column_map: dict[str, str] | None = None,
+    ) -> pd.DataFrame:
+        if self.config_manager is None:
+            raise ValueError(
+                "PremiumRepository.get_premium_from_sql requires a config_manager."
+            )
+
+        input_repository = PremiumInputRepository.from_sql(
+            self.config_manager,
+            query_path=query_path,
+            sql_settings=sql_settings,
+            params=params,
+            column_map=column_map,
+        )
+        self._df_premium = self._normalize_dataframe(input_repository.get_premium_df())
+        return self.get_premium()
 
     def _normalize_dataframe(self, dataframe: pd.DataFrame) -> pd.DataFrame:
         df_premium = dataframe.copy()

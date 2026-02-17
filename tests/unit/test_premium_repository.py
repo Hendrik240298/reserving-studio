@@ -112,3 +112,20 @@ def test_from_dataframe_accepts_cumulative_triangle_with_annual_lags() -> None:
     assert premium_1995["Premium_selected"].tolist() == [120.0, 80.0]
     assert [text[:4] for text in premium_1995_period_text.tolist()] == ["1995", "1996"]
     assert [text[5:7] for text in premium_1995_period_text.tolist()] == ["12", "12"]
+
+
+def test_from_sql_requires_sql_driver_setting(tmp_path: Path) -> None:
+    query_path = tmp_path / "premium.sql"
+    query_path.write_text("SELECT 1 AS Premium_selected", encoding="utf-8")
+
+    try:
+        PremiumRepository.from_sql(
+            config_manager=None,  # type: ignore[arg-type]
+            query_path=query_path,
+            sql_settings={"server": "localhost", "database": "reserving"},
+            params=[],
+        )
+    except ValueError as exc:
+        assert "workflow.input.sql.driver" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError when SQL driver is missing")

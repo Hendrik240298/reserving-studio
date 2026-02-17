@@ -65,11 +65,21 @@ uv run python examples/run_quarterly_interactive.py
 uv run python examples/run_clrd_interactive.py
 ```
 
-- The CLRD script uses `examples/config_clrd.yml`, so it does not reuse quarterly session settings.
-- The CLRD script currently runs on `LOB = comauto` only.
+- The scripts use separate example configs: `examples/config_quarterly.yml` and `examples/config_clrd.yml`.
+- Use `granularity` in each config to switch between quarterly and yearly aggregation.
+- The CLRD script still defaults to `workflow.clrd_lob: comauto`.
 
 - In the app, open Results and click **Finalize & Continue**.
 - The script should resume and print finalized segment, selected methods by UWY, and top rows of numeric results.
+
+- SQL template workflow check (requires a reachable SQL Server and `pyodbc`):
+
+```bash
+uv run python examples/run_sql_interactive.py
+```
+
+- The SQL query templates are in `examples/sql/` and are referenced by `examples/config_sql_template.yml`.
+- SQL connection settings are configured in YAML (`driver`, `server`, `database`, `trusted_connection`).
 
 ## Failure artifacts
 

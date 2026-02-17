@@ -6,5 +6,9 @@ paths:
 first date: 1988
 last date: "December 1997"
 segment: clrd
+granularity: yearly
+workflow:
+  dataset: clrd
+  clrd_lob: comauto
 session:
   path: sessions/clrd.yml

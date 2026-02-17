@@ -53,12 +53,18 @@ Open http://127.0.0.1:8050
 - In the Results tab, click **Finalize & Continue** to hand control back to your script with finalized parameters and results payload.
 - A ready-to-run quarterly example is available at `examples/run_quarterly_interactive.py`.
 - A CLRD portfolio-level example is available at `examples/run_clrd_interactive.py`.
-- The CLRD example uses its own config file at `examples/config_clrd.yml` (session state at `sessions/clrd.yml`).
-- The CLRD example currently filters to `LOB = comauto` before building the triangle.
+- A SQL-template example runner is available at `examples/run_sql_interactive.py`.
+- Both examples now load their own YAML config (`examples/config_quarterly.yml` and `examples/config_clrd.yml`).
+- Use `granularity: quarterly|yearly` in the example config to control how claims and premium data are aggregated.
+- The CLRD example still filters to `LOB = comauto` by default (`workflow.clrd_lob` in config).
+- SQL templates live in `examples/sql/` and are referenced from `examples/config_sql_template.yml`.
+- SQL connection settings are defined in YAML (`driver`, `server`, `database`, `trusted_connection`).
+- You can configure source-to-canonical column mapping in YAML via `workflow.input.claims.column_map` and `workflow.input.premium.column_map`.
 
 ```bash
 uv run python examples/run_quarterly_interactive.py
 uv run python examples/run_clrd_interactive.py
+uv run python examples/run_sql_interactive.py
 ```
 
 The script blocks until you click **Finalize & Continue** in the Results tab, then resumes with a finalized payload (`params_store`, `results_store`, and numeric `results_df`) for downstream ETL/reporting.

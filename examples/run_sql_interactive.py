@@ -17,9 +17,9 @@ from source.input_loader import load_inputs_from_config
 
 
 def _load_config() -> ConfigManager:
-    config_path = REPO_ROOT / "examples" / "config_quarterly.yml"
+    config_path = REPO_ROOT / "examples" / "config_sql_template.yml"
     if not config_path.exists():
-        raise FileNotFoundError(f"Quarterly config not found at {config_path}")
+        raise FileNotFoundError(f"SQL template config not found at {config_path}")
     return ConfigManager.from_yaml(config_path)
 
 
