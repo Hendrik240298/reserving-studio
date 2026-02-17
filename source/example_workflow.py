@@ -45,12 +45,18 @@ def transform_inputs_granularity(
         )
 
     months_per_step = 3 if granularity == "quarterly" else 12
+    values_are_cumulative = bool(claims_df.attrs.get("values_are_cumulative", False))
 
     normalized_claims = _normalize_claims(claims_df)
     normalized_premium = _normalize_premium(premium_df)
 
-    claims_out = _aggregate_claims_by_step(normalized_claims, months_per_step)
+    claims_out = _aggregate_claims_by_step(
+        normalized_claims,
+        months_per_step,
+        values_are_cumulative=values_are_cumulative,
+    )
     premium_out = _aggregate_premium_by_step(normalized_premium, months_per_step)
+    claims_out.attrs["values_are_cumulative"] = values_are_cumulative
     return claims_out, premium_out
 
 
@@ -238,16 +244,36 @@ def _normalize_premium(premium_df: pd.DataFrame) -> pd.DataFrame:
 def _aggregate_claims_by_step(
     claims_df: pd.DataFrame,
     months_per_step: int,
+    *,
+    values_are_cumulative: bool,
 ) -> pd.DataFrame:
     claims = claims_df.copy()
     claims = claims.dropna(subset=["uw_year", "period"])
     claims["step"] = _step_index(claims["uw_year"], claims["period"], months_per_step)
-    grouped = (
-        claims.groupby(["uw_year", "step"], as_index=False)[["paid", "outstanding"]]
-        .sum(numeric_only=True)
-        .sort_values(["uw_year", "step"])
-        .reset_index(drop=True)
-    )
+
+    if values_are_cumulative:
+        grouped_by_period = (
+            claims.groupby(["uw_year", "period", "step"], as_index=False)[
+                ["paid", "outstanding"]
+            ]
+            .sum(numeric_only=True)
+            .sort_values(["uw_year", "step", "period"])
+            .reset_index(drop=True)
+        )
+        grouped = (
+            grouped_by_period.groupby(["uw_year", "step"], as_index=False)
+            .tail(1)
+            .sort_values(["uw_year", "step"])
+            .reset_index(drop=True)
+        )
+    else:
+        grouped = (
+            claims.groupby(["uw_year", "step"], as_index=False)[["paid", "outstanding"]]
+            .sum(numeric_only=True)
+            .sort_values(["uw_year", "step"])
+            .reset_index(drop=True)
+        )
+
     grouped["period"] = _step_to_period(
         grouped["uw_year"], grouped["step"], months_per_step
     )

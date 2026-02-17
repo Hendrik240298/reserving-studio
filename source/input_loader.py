@@ -36,11 +36,15 @@ def load_inputs_from_config(
         repo_root=repo_root,
     )
 
-    return transform_inputs_granularity(
+    transformed_claims_df, transformed_premium_df = transform_inputs_granularity(
         claims_df,
         premium_df,
         granularity=config.get_granularity(),
     )
+    transformed_claims_df.attrs["values_are_cumulative"] = bool(
+        claims_df.attrs.get("values_are_cumulative", False)
+    )
+    return transformed_claims_df, transformed_premium_df
 
 
 def _load_claims_dataset(
@@ -66,7 +70,12 @@ def _load_claims_dataset(
             csv_path=csv_path,
             column_map=column_map,
         )
-        return repository.get_claims_df()
+        claims_df = repository.get_claims_df()
+        claims_df.attrs["values_are_cumulative"] = _read_values_are_cumulative(
+            dataset_cfg,
+            dataset_name=dataset_name,
+        )
+        return claims_df
 
     if source == "sql":
         query_file = dataset_cfg.get("query_file")
@@ -89,7 +98,12 @@ def _load_claims_dataset(
             sql_settings=sql_settings,
             column_map=column_map,
         )
-        return repository.get_claims_df()
+        claims_df = repository.get_claims_df()
+        claims_df.attrs["values_are_cumulative"] = _read_values_are_cumulative(
+            dataset_cfg,
+            dataset_name=dataset_name,
+        )
+        return claims_df
 
     raise ValueError(
         f"Unsupported source '{source}' for workflow.input.{dataset_name}. "
@@ -166,3 +180,18 @@ def _resolve_path(path: Path, *, repo_root: Path) -> Path:
     if path.is_absolute():
         return path
     return repo_root / path
+
+
+def _read_values_are_cumulative(dataset_cfg: dict, *, dataset_name: str) -> bool:
+    raw_value = dataset_cfg.get("values_are_cumulative", False)
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, str):
+        normalized = raw_value.strip().lower()
+        if normalized in {"true", "yes", "1"}:
+            return True
+        if normalized in {"false", "no", "0"}:
+            return False
+    raise ValueError(
+        f"workflow.input.{dataset_name}.values_are_cumulative must be boolean"
+    )

@@ -94,3 +94,45 @@ def test_transform_inputs_granularity_rejects_unknown_value() -> None:
         assert "Unsupported granularity" in str(exc)
     else:
         raise AssertionError("Expected ValueError for unsupported granularity")
+
+
+def test_transform_inputs_granularity_yearly_keeps_cumulative_claim_levels() -> None:
+    claims_df = pd.DataFrame(
+        {
+            "id": ["c1", "c2", "c3", "c4"],
+            "uw_year": [
+                pd.Timestamp("2000-01-01"),
+                pd.Timestamp("2000-01-01"),
+                pd.Timestamp("2000-01-01"),
+                pd.Timestamp("2000-01-01"),
+            ],
+            "period": [
+                pd.Timestamp("2000-03-31"),
+                pd.Timestamp("2000-06-30"),
+                pd.Timestamp("2000-09-30"),
+                pd.Timestamp("2000-12-31"),
+            ],
+            "paid": [10.0, 20.0, 30.0, 40.0],
+            "outstanding": [100.0, 90.0, 80.0, 70.0],
+        }
+    )
+    claims_df.attrs["values_are_cumulative"] = True
+
+    premium_df = pd.DataFrame(
+        {
+            "uw_year": [pd.Timestamp("2000-01-01")],
+            "period": [pd.Timestamp("2000-12-31")],
+            "Premium_selected": [400.0],
+        }
+    )
+
+    claims_out, _ = transform_inputs_granularity(
+        claims_df,
+        premium_df,
+        granularity="yearly",
+    )
+
+    assert len(claims_out) == 1
+    assert float(claims_out.loc[0, "paid"]) == 40.0
+    assert float(claims_out.loc[0, "outstanding"]) == 70.0
+    assert claims_out.attrs.get("values_are_cumulative") is True

@@ -65,6 +65,7 @@ def test_load_inputs_from_config_csv_yearly(tmp_path: Path) -> None:
                 "    claims:",
                 "      source: csv",
                 "      path: claims.csv",
+                "      values_are_cumulative: true",
                 "    premium:",
                 "      source: csv",
                 "      path: premium.csv",
@@ -79,8 +80,9 @@ def test_load_inputs_from_config_csv_yearly(tmp_path: Path) -> None:
     claims_df, premium_df = load_inputs_from_config(config, repo_root=tmp_path)
 
     assert len(claims_df) == 1
-    assert float(claims_df.loc[0, "paid"]) == 100.0
-    assert float(claims_df.loc[0, "outstanding"]) == 10.0
+    assert float(claims_df.loc[0, "paid"]) == 40.0
+    assert float(claims_df.loc[0, "outstanding"]) == 4.0
+    assert claims_df.attrs.get("values_are_cumulative") is True
 
     assert len(premium_df) == 1
     assert float(premium_df.loc[0, "Premium_selected"]) == 400.0

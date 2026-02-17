@@ -18,6 +18,26 @@ The Chainladder tab displays link ratios, loss development factors, and fitted p
 
 # Get started
 
+## Documentation (actuary-first)
+
+- Complete own-data onboarding: `docs/start-with-your-data.md`
+- Quickstart: `docs/actuary-quickstart.md`
+- Workflow guide: `docs/actuary-workflow.md`
+- Config reference: `docs/config-practical-reference.md`
+- Practical notes: `docs/practical-notes.md`
+- Sync details: `docs/cross-tab-sync.md`
+- Documentation plan: `docs/documentation-plan.md`
+
+## Documentation (technical)
+
+- Workflow map: `docs/workflow-technical-map.md`
+- Architecture guide: `docs/technical-architecture.md`
+- Data handling deep dive: `docs/data-handling-deep-dive.md`
+- API reference: `docs/api-reference.md`
+- Troubleshooting index: `docs/troubleshooting-index.md`
+- Architecture diagrams: `docs/architecture-diagram.md`
+- Docs changelog: `docs/docs-changelog.md`
+
 ## Install (uv)
 
 ```bash

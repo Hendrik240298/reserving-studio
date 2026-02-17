@@ -375,11 +375,41 @@ def build_workflow_from_dataframes(
     *,
     config: ConfigManager | None = None,
 ) -> Reserving:
-    claims = ClaimsCollection(claims_df)
+    values_are_cumulative = _claims_values_are_cumulative(claims_df, config)
+    claims = ClaimsCollection(
+        claims_df,
+        values_are_cumulative=values_are_cumulative,
+    )
     premium = PremiumRepository.from_dataframe(
         config_manager=config, dataframe=premium_df
     )
     return build_workflow_from_collections(claims, premium, config=config)
+
+
+def _claims_values_are_cumulative(
+    claims_df: pd.DataFrame,
+    config: ConfigManager | None,
+) -> bool:
+    attrs_flag = claims_df.attrs.get("values_are_cumulative")
+    if isinstance(attrs_flag, bool):
+        return attrs_flag
+
+    if config is None:
+        return False
+
+    workflow_input = config.get_workflow_input()
+    claims_cfg = workflow_input.get("claims", {})
+    raw_flag = claims_cfg.get("values_are_cumulative", False)
+    if isinstance(raw_flag, bool):
+        return raw_flag
+    if isinstance(raw_flag, str):
+        normalized = raw_flag.strip().lower()
+        if normalized in {"true", "yes", "1"}:
+            return True
+        if normalized in {"false", "no", "0"}:
+            return False
+
+    raise ValueError("workflow.input.claims.values_are_cumulative must be boolean")
 
 
 def launch_dashboard(

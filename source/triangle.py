@@ -18,9 +18,13 @@ DEFAULT_SAMPLE_PREMIUM_PATH = (
 
 
 class Triangle:
-    def __init__(self, data: pd.DataFrame):
-        self._triangle = self._create_triangle(data)
-        self._triangle = self._triangle.incr_to_cum()
+    def __init__(self, data: pd.DataFrame, values_are_cumulative: bool = False):
+        self._triangle = self._create_triangle(
+            data,
+            values_are_cumulative=values_are_cumulative,
+        )
+        if not self._triangle.is_cumulative:
+            self._triangle = self._triangle.incr_to_cum()
         # Debug: check triangle valuation immediately after creation
 
     @classmethod
@@ -67,9 +71,14 @@ class Triangle:
         df = df[common_cols]
 
         logging.info(f"Premium in Triangle: \n{df[df['Premium_selected'] > 0]}")
-        return cls(df)
+        return cls(df, values_are_cumulative=claims.values_are_cumulative)
 
-    def _create_triangle(self, data: pd.DataFrame):
+    def _create_triangle(
+        self,
+        data: pd.DataFrame,
+        *,
+        values_are_cumulative: bool,
+    ):
         data = self._ensure_premium_column(data)
 
         # Dates are already quarter-end timestamps from ClaimsRepository
@@ -93,7 +102,7 @@ class Triangle:
             origin="uw_year",
             development="period",
             columns=["incurred", "outstanding", "paid", "Premium_selected"],
-            cumulative=False,
+            cumulative=values_are_cumulative,
         )
 
     def _ensure_premium_column(self, data: pd.DataFrame) -> pd.DataFrame:

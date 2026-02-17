@@ -8,8 +8,9 @@ class ClaimsCollection:
     Collection of all claims in long format
     """
 
-    def __init__(self, df: pd.DataFrame):
+    def __init__(self, df: pd.DataFrame, values_are_cumulative: bool = False):
         self._df = df.copy()
+        self._values_are_cumulative = bool(values_are_cumulative)
         self._validate_required_columns()
         paid = pd.Series(
             pd.to_numeric(self._df["paid"], errors="coerce"), index=self._df.index
@@ -51,3 +52,7 @@ class ClaimsCollection:
 
     def to_dataframe(self) -> pd.DataFrame:
         return self._df.copy()
+
+    @property
+    def values_are_cumulative(self) -> bool:
+        return self._values_are_cumulative
