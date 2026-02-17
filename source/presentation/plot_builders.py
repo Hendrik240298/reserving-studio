@@ -131,10 +131,18 @@ def plot_data_triangle_table(
 
     headers = ["UWY"] + col_labels
 
+    cell_text_lengths = [len(str(text)) for text in headers]
+    for column_values in table_values:
+        cell_text_lengths.extend(len(str(text)) for text in column_values)
+
+    max_text_length = max(cell_text_lengths, default=0)
+    uniform_column_width = max(72, min(220, 18 + max_text_length * 9))
+    column_widths = [uniform_column_width] * len(headers)
+
     fig = go.Figure(
         data=[
             go.Table(
-                columnwidth=[130] + [62] * len(col_labels),
+                columnwidth=column_widths,
                 header=dict(
                     values=headers,
                     fill_color="#f2f5f9",
@@ -163,7 +171,7 @@ def plot_data_triangle_table(
         ]
     )
 
-    table_width = 130 + (62 * len(col_labels))
+    table_width = uniform_column_width * len(headers)
 
     fig.update_layout(
         title=title,
