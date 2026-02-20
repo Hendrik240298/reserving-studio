@@ -8,6 +8,7 @@ def _build_params_service() -> ParamsService:
     return ParamsService(
         default_average="volume",
         default_tail_curve="weibull",
+        default_tail_projection_months=0,
         default_bf_apriori=0.6,
         get_uwy_labels=lambda: ["2001", "2002", "2003"],
         load_session=None,
@@ -47,6 +48,7 @@ def test_model_cache_key_ignores_selected_ultimate_mapping() -> None:
         drop_store=[],
         average="volume",
         tail_attachment_age=None,
+        tail_projection_months=0,
         tail_curve="weibull",
         tail_fit_period_selection=[],
         bf_apriori_by_uwy={"2001": 0.6, "2002": 0.6, "2003": 0.6},
@@ -58,6 +60,7 @@ def test_model_cache_key_ignores_selected_ultimate_mapping() -> None:
         drop_store=[],
         average="volume",
         tail_attachment_age=None,
+        tail_projection_months=0,
         tail_curve="weibull",
         tail_fit_period_selection=[],
         bf_apriori_by_uwy={"2001": 0.6, "2002": 0.6, "2003": 0.6},
@@ -75,6 +78,7 @@ def test_results_cache_key_changes_with_selected_ultimate() -> None:
         drop_store=[],
         average="volume",
         tail_attachment_age=None,
+        tail_projection_months=0,
         tail_curve="weibull",
         tail_fit_period_selection=[],
         bf_apriori_by_uwy={"2001": 0.6, "2002": 0.6, "2003": 0.6},
@@ -91,6 +95,7 @@ def test_results_cache_key_changes_with_selected_ultimate() -> None:
         drop_store=[],
         average="volume",
         tail_attachment_age=None,
+        tail_projection_months=0,
         tail_curve="weibull",
         tail_fit_period_selection=[],
         bf_apriori_by_uwy={"2001": 0.6, "2002": 0.6, "2003": 0.6},
@@ -102,3 +107,33 @@ def test_results_cache_key_changes_with_selected_ultimate() -> None:
     )
 
     assert key_chainladder != key_mixed
+
+
+def test_model_cache_key_changes_with_tail_projection_months() -> None:
+    cache_service = CacheService()
+    key_without_projection = cache_service.build_model_cache_key(
+        segment="quarterly",
+        default_average="volume",
+        default_tail_curve="weibull",
+        drop_store=[],
+        average="volume",
+        tail_attachment_age=None,
+        tail_projection_months=0,
+        tail_curve="weibull",
+        tail_fit_period_selection=[],
+        bf_apriori_by_uwy={"2001": 0.6, "2002": 0.6, "2003": 0.6},
+    )
+    key_with_projection = cache_service.build_model_cache_key(
+        segment="quarterly",
+        default_average="volume",
+        default_tail_curve="weibull",
+        drop_store=[],
+        average="volume",
+        tail_attachment_age=None,
+        tail_projection_months=12,
+        tail_curve="weibull",
+        tail_fit_period_selection=[],
+        bf_apriori_by_uwy={"2001": 0.6, "2002": 0.6, "2003": 0.6},
+    )
+
+    assert key_without_projection != key_with_projection

@@ -9,6 +9,7 @@ class ParamsState(TypedDict):
     force_recalc: bool
     drop_store: list[list[str | int]]
     tail_attachment_age: int | None
+    tail_projection_months: int
     tail_fit_period_selection: list[int]
     average: str
     tail_curve: str
@@ -26,6 +27,7 @@ class ResultsPayload(TypedDict, total=False):
     drop_store: list[list[str | int]]
     tail_attachment_age: int | None
     tail_attachment_display: str
+    tail_projection_months: int
     tail_fit_period_selection: list[int]
     tail_fit_period_display: str
     selected_ultimate_by_uwy: dict[str, str]

@@ -94,6 +94,7 @@ class Dashboard:
         )
         self._default_average = "volume"
         self._default_tail_curve = "weibull"
+        self._default_tail_projection_months = 0
         self._default_drop_text = ""
         self._default_drop_store: List[List[str | int]] = []
         self._default_tail_attachment_age: Optional[int] = None
@@ -101,6 +102,9 @@ class Dashboard:
         self._default_bf_apriori = 0.6
         self._default_bf_apriori_rows: List[dict[str, object]] = []
         self._default_selected_ultimate_by_uwy: dict[str, str] = {}
+        self._granularity = (
+            self._config.get_granularity() if self._config is not None else "quarterly"
+        )
         self._payload_cache: dict[str, dict] = {}
         self._triangle_figure_cache: dict[str, dict] = {}
         self._emergence_figure_cache: dict[str, dict] = {}
@@ -111,6 +115,7 @@ class Dashboard:
         self._params_service = ParamsService(
             default_average=self._default_average,
             default_tail_curve=self._default_tail_curve,
+            default_tail_projection_months=self._default_tail_projection_months,
             default_bf_apriori=self._default_bf_apriori,
             get_uwy_labels=self._get_uwy_labels,
             load_session=self._config.load_session
@@ -133,12 +138,16 @@ class Dashboard:
             default_average=self._default_average,
             default_tail_curve=self._default_tail_curve,
             default_bf_apriori=self._default_bf_apriori,
+            fallback_months_per_dev=self._tail_projection_step_months(),
             segment_key_provider=self._get_segment_key,
             extract_data=self._extract_data,
             get_triangle=lambda: self.triangle,
             get_emergence=lambda: self.emergence_pattern,
             get_results=lambda: self.results,
-            build_triangle_figure=lambda triangle_data, title, attachment, fit_selection: (
+            build_triangle_figure=lambda triangle_data,
+            title,
+            attachment,
+            fit_selection: (
                 self._build_triangle_figure_dict(
                     triangle_data,
                     title,
@@ -240,6 +249,13 @@ class Dashboard:
                 self._default_tail_attachment_age = int(tail_attachment_age)
             except (TypeError, ValueError):
                 self._default_tail_attachment_age = None
+        self._default_tail_projection_months = (
+            self._normalize_tail_projection_months_for_ui(
+                session.get(
+                    "tail_projection_months", self._default_tail_projection_months
+                )
+            )
+        )
         self._default_tail_fit_period_selection = (
             self._params_service.normalize_tail_fit_selection(
                 session.get("tail_fit_period")
@@ -509,6 +525,31 @@ class Dashboard:
         if self._config is None:
             return "default"
         return self._config.get_segment()
+
+    def _tail_projection_step_months(self) -> int:
+        return 12
+
+    def _normalize_tail_projection_months_for_ui(self, raw: object) -> int:
+        value = self._params_service.normalize_tail_projection_months(raw)
+        step = self._tail_projection_step_months()
+        return (value // step) * step
+
+    def _build_tail_projection_options(self) -> list[dict[str, int | str]]:
+        step = self._tail_projection_step_months()
+        max_observed_age = 0
+        if isinstance(self.triangle, pd.DataFrame):
+            for col in self.triangle.columns:
+                age = self._params_service.parse_dev_label(col)
+                if age is None:
+                    continue
+                max_observed_age = max(max_observed_age, age)
+
+        extension_buffer = step * 20
+        max_value = max(max_observed_age + extension_buffer, step * 20)
+        options: list[dict[str, int | str]] = [{"label": "0", "value": 0}]
+        for value in range(step, max_value + step, step):
+            options.append({"label": str(value), "value": value})
+        return options
 
     def _parse_sync_payload(self, raw_payload: object) -> Optional[dict[str, object]]:
         if not raw_payload:
@@ -1190,6 +1231,7 @@ class Dashboard:
             Input("triangle-heatmap", "clickData"),
             Input("average-method", "value"),
             Input("tail-method", "value"),
+            Input("tail-projection-months", "value"),
             Input("bf-apriori-table", "data"),
             Input("results-table", "active_cell"),
             Input("sync-inbox", "value"),
@@ -1202,6 +1244,7 @@ class Dashboard:
             click,
             average,
             tail_curve,
+            tail_projection_months,
             bf_apriori_rows,
             results_active_cell,
             sync_inbox,
@@ -1229,6 +1272,7 @@ class Dashboard:
                     default_drop_store=self._default_drop_store,
                     default_average=self._default_average,
                     default_tail_attachment_age=self._default_tail_attachment_age,
+                    default_tail_projection_months=self._default_tail_projection_months,
                     default_tail_curve=self._default_tail_curve,
                     default_tail_fit_period_selection=self._default_tail_fit_period_selection,
                     default_bf_apriori_rows=self._default_bf_apriori_rows,
@@ -1244,6 +1288,7 @@ class Dashboard:
                 drop_store=current_params.get("drop_store"),
                 average=current_params.get("average"),
                 tail_attachment_age=current_params.get("tail_attachment_age"),
+                tail_projection_months=current_params.get("tail_projection_months"),
                 tail_curve=current_params.get("tail_curve"),
                 tail_fit_period_selection=current_params.get(
                     "tail_fit_period_selection"
@@ -1301,6 +1346,21 @@ class Dashboard:
                 next_tail_curve = tail_curve or self._default_tail_curve
                 if next_tail_curve != working_params["tail_curve"]:
                     working_params["tail_curve"] = next_tail_curve
+                    changed = True
+
+            elif trigger == "tail-projection-months":
+                next_tail_projection_months = (
+                    self._normalize_tail_projection_months_for_ui(
+                        tail_projection_months
+                    )
+                )
+                if (
+                    next_tail_projection_months
+                    != working_params["tail_projection_months"]
+                ):
+                    working_params["tail_projection_months"] = (
+                        next_tail_projection_months
+                    )
                     changed = True
 
             elif trigger == "bf-apriori-table":
@@ -1374,6 +1434,10 @@ class Dashboard:
                     drop_store=session.get("drops"),
                     average=session.get("average", self._default_average),
                     tail_attachment_age=session.get("tail_attachment_age"),
+                    tail_projection_months=session.get(
+                        "tail_projection_months",
+                        self._default_tail_projection_months,
+                    ),
                     tail_curve=session.get("tail_curve", self._default_tail_curve),
                     tail_fit_period_selection=session.get("tail_fit_period"),
                     bf_apriori_by_uwy=session.get("bf_apriori_by_uwy"),
@@ -1428,6 +1492,11 @@ class Dashboard:
             drop_store = params.get("drop_store") or []
             average = params.get("average") or self._default_average
             tail_attachment_age = params.get("tail_attachment_age")
+            tail_projection_months = self._normalize_tail_projection_months_for_ui(
+                params.get(
+                    "tail_projection_months", self._default_tail_projection_months
+                )
+            )
             tail_curve = params.get("tail_curve") or self._default_tail_curve
             tail_fit_period_selection = params.get("tail_fit_period_selection") or []
             bf_apriori_by_uwy = params.get("bf_apriori_by_uwy") or {}
@@ -1445,6 +1514,7 @@ class Dashboard:
                 drop_store=drop_store,
                 average=average,
                 tail_attachment_age=tail_attachment_age,
+                tail_projection_months=tail_projection_months,
                 tail_curve=tail_curve,
                 tail_fit_period_selection=tail_fit_period_selection,
                 bf_apriori_by_uwy=bf_apriori_by_uwy,
@@ -1479,6 +1549,7 @@ class Dashboard:
                     drop_store=drop_store,
                     average=average,
                     tail_attachment_age=tail_attachment_age,
+                    tail_projection_months=tail_projection_months,
                     tail_curve=tail_curve,
                     tail_fit_period_selection=tail_fit_period_selection,
                     bf_apriori_by_uwy=bf_apriori_by_uwy,
@@ -1574,6 +1645,7 @@ class Dashboard:
         @self.app.callback(
             Output("average-method", "value"),
             Output("tail-method", "value"),
+            Output("tail-projection-months", "value"),
             Output("bf-apriori-table", "data"),
             Input("params-store", "data"),
         )
@@ -1582,6 +1654,7 @@ class Dashboard:
                 return (
                     self._default_average,
                     self._default_tail_curve,
+                    self._default_tail_projection_months,
                     self._params_service.build_bf_apriori_rows(
                         self._default_bf_apriori_rows
                     ),
@@ -1592,6 +1665,12 @@ class Dashboard:
             return (
                 params.get("average", self._default_average),
                 params.get("tail_curve", self._default_tail_curve),
+                self._normalize_tail_projection_months_for_ui(
+                    params.get(
+                        "tail_projection_months",
+                        self._default_tail_projection_months,
+                    )
+                ),
                 bf_rows,
             )
 
@@ -1858,10 +1937,12 @@ class Dashboard:
             Dash html.Div component
         """
         self._load_session_defaults()
+        tail_projection_options = self._build_tail_projection_options()
         results_payload = self._reserving_service.build_results_payload(
             drop_store=self._default_drop_store,
             average=self._default_average,
             tail_attachment_age=self._default_tail_attachment_age,
+            tail_projection_months=self._default_tail_projection_months,
             tail_curve=self._default_tail_curve,
             tail_fit_period_selection=self._default_tail_fit_period_selection,
             bf_apriori_by_uwy=self._params_service.bf_rows_to_mapping(
@@ -2202,6 +2283,23 @@ class Dashboard:
                                                                         },
                                                                     ],
                                                                     value=self._default_tail_curve,
+                                                                    clearable=False,
+                                                                    style={
+                                                                        "width": "100%"
+                                                                    },
+                                                                ),
+                                                            ],
+                                                            style={"minWidth": "200px"},
+                                                        ),
+                                                        html.Div(
+                                                            [
+                                                                html.Label(
+                                                                    "Tail length (months)"
+                                                                ),
+                                                                dcc.Dropdown(
+                                                                    id="tail-projection-months",
+                                                                    options=tail_projection_options,
+                                                                    value=self._default_tail_projection_months,
                                                                     clearable=False,
                                                                     style={
                                                                         "width": "100%"

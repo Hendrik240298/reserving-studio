@@ -23,6 +23,7 @@ class ReservingService:
         default_average: str,
         default_tail_curve: str,
         default_bf_apriori: float,
+        fallback_months_per_dev: int,
         segment_key_provider: Callable[[], str],
         extract_data: Callable[[], None],
         get_triangle: Callable[[], pd.DataFrame | None],
@@ -42,6 +43,7 @@ class ReservingService:
         self._default_average = default_average
         self._default_tail_curve = default_tail_curve
         self._default_bf_apriori = default_bf_apriori
+        self._fallback_months_per_dev = max(int(fallback_months_per_dev), 1)
         self._segment_key_provider = segment_key_provider
         self._extract_data = extract_data
         self._get_triangle = get_triangle
@@ -52,6 +54,37 @@ class ReservingService:
         self._payload_cache = payload_cache
         self._triangle_cache = triangle_cache
         self._emergence_cache = emergence_cache
+
+    def _infer_months_per_development_period(self, reserving: Reserving) -> int:
+        try:
+            triangle = reserving._triangle.get_triangle()["incurred"]
+            development = [int(value) for value in triangle.development.tolist()]
+        except Exception:
+            development = []
+
+        if len(development) >= 2:
+            spacing = [
+                right - left
+                for left, right in zip(development[:-1], development[1:])
+                if right - left > 0
+            ]
+            if spacing:
+                return min(spacing)
+        if len(development) == 1 and development[0] > 0:
+            return development[0]
+        return self._fallback_months_per_dev
+
+    def derive_tail_projection_settings(
+        self,
+        *,
+        reserving: Reserving,
+        tail_projection_months: int,
+    ) -> tuple[int, int, int]:
+        months_per_dev = self._infer_months_per_development_period(reserving)
+        months = max(int(tail_projection_months), 0)
+        extrap_periods = months // months_per_dev
+        projection_period = extrap_periods * months_per_dev
+        return months_per_dev, extrap_periods, projection_period
 
     @staticmethod
     def _build_results_table_rows(
@@ -108,6 +141,7 @@ class ReservingService:
         drop_store: list[list[str | int]] | None,
         average: str | None,
         tail_attachment_age: int | None,
+        tail_projection_months: int,
         tail_curve: str | None,
         tail_fit_period_selection: list[int] | None,
         bf_apriori_by_uwy: dict[str, float] | None,
@@ -120,6 +154,7 @@ class ReservingService:
             drop_store=drop_store,
             average=average,
             tail_attachment_age=tail_attachment_age,
+            tail_projection_months=tail_projection_months,
             tail_curve=tail_curve,
             tail_fit_period_selection=tail_fit_period_selection,
             bf_apriori_by_uwy=bf_apriori_by_uwy,
@@ -131,6 +166,7 @@ class ReservingService:
         drop_store: list[list[str | int]] | None,
         average: str | None,
         tail_attachment_age: int | None,
+        tail_projection_months: int,
         tail_curve: str | None,
         tail_fit_period_selection: list[int] | None,
         bf_apriori_by_uwy: dict[str, float] | None,
@@ -142,6 +178,7 @@ class ReservingService:
             drop_store=drop_store,
             average=average,
             tail_attachment_age=tail_attachment_age,
+            tail_projection_months=tail_projection_months,
             tail_curve=tail_curve,
             tail_fit_period_selection=tail_fit_period_selection,
             bf_apriori_by_uwy=bf_apriori_by_uwy,
@@ -152,6 +189,7 @@ class ReservingService:
         drop_store: list[list[str | int]] | None,
         average: str | None,
         tail_attachment_age: int | None,
+        tail_projection_months: int,
         tail_curve: str | None,
         tail_fit_period_selection: list[int] | None,
     ) -> str:
@@ -162,6 +200,7 @@ class ReservingService:
             drop_store=drop_store,
             average=average,
             tail_attachment_age=tail_attachment_age,
+            tail_projection_months=tail_projection_months,
             tail_curve=tail_curve,
             tail_fit_period_selection=tail_fit_period_selection,
         )
@@ -171,6 +210,7 @@ class ReservingService:
         average: str,
         drops: list[tuple[str, int]] | None,
         tail_attachment_age: int | None,
+        tail_projection_months: int,
         tail_curve: str,
         fit_period: tuple[int, int | None] | None,
         bf_apriori_by_uwy: dict[str, float] | None,
@@ -180,9 +220,16 @@ class ReservingService:
             average=average,
             drop=drops,
         )
+        _months_per_dev, extrap_periods, projection_period = (
+            self.derive_tail_projection_settings(
+                reserving=self._reserving,
+                tail_projection_months=tail_projection_months,
+            )
+        )
         self._reserving.set_tail(
             curve=tail_curve,
-            projection_period=0,
+            extrap_periods=extrap_periods,
+            projection_period=projection_period,
             attachment_age=tail_attachment_age,
             fit_period=fit_period,
         )
@@ -256,6 +303,7 @@ class ReservingService:
         drop_store: list[list[str | int]] | None,
         average: str | None,
         tail_attachment_age: int | None,
+        tail_projection_months: int,
         tail_curve: str | None,
         tail_fit_period_selection: list[int] | None,
         bf_apriori_by_uwy: dict[str, float] | None,
@@ -281,6 +329,7 @@ class ReservingService:
             drop_store,
             average,
             tail_attachment_age,
+            tail_projection_months,
             tail_curve,
             tail_fit_period_selection,
         )
@@ -288,6 +337,7 @@ class ReservingService:
             drop_store,
             average,
             tail_attachment_age,
+            tail_projection_months,
             tail_curve,
             tail_fit_period_selection,
             bf_apriori_by_uwy=bf_apriori_by_uwy,
@@ -328,6 +378,7 @@ class ReservingService:
             "drop_store": drop_store or [],
             "tail_attachment_age": tail_attachment_age,
             "tail_attachment_display": tail_display,
+            "tail_projection_months": int(tail_projection_months),
             "tail_fit_period_selection": tail_fit_period_selection or [],
             "tail_fit_period_display": fit_period_display,
             "selected_ultimate_by_uwy": selected_ultimate_by_uwy or {},
@@ -342,6 +393,7 @@ class ReservingService:
         drop_store: list[list[str | int]] | None,
         average: str | None,
         tail_attachment_age: int | None,
+        tail_projection_months: int,
         tail_curve: str | None,
         tail_fit_period_selection: list[int] | None,
         bf_apriori_by_uwy: dict[str, float] | None,
@@ -352,6 +404,7 @@ class ReservingService:
             drop_store,
             average,
             tail_attachment_age,
+            tail_projection_months,
             tail_curve,
             tail_fit_period_selection,
             bf_apriori_by_uwy,
@@ -360,6 +413,7 @@ class ReservingService:
             drop_store,
             average,
             tail_attachment_age,
+            tail_projection_months,
             tail_curve,
             tail_fit_period_selection,
             bf_apriori_by_uwy,
@@ -386,6 +440,7 @@ class ReservingService:
             average or self._default_average,
             self._params_service.drops_to_tuples(drop_store),
             tail_attachment_age,
+            tail_projection_months,
             tail_curve or self._default_tail_curve,
             fit_period,
             bf_apriori_by_uwy,
@@ -399,6 +454,7 @@ class ReservingService:
             drop_store=drop_store,
             average=average,
             tail_attachment_age=tail_attachment_age,
+            tail_projection_months=tail_projection_months,
             tail_curve=tail_curve,
             tail_fit_period_selection=tail_fit_period_selection,
             bf_apriori_by_uwy=bf_apriori_by_uwy,

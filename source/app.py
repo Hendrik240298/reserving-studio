@@ -229,6 +229,7 @@ def build_reserving(
     average = "volume"
     drop = None
     tail_attachment_age = None
+    tail_projection_months = 0
     tail_curve = "weibull"
     tail_fit_period_selection: list[int] = []
     bf_apriori_by_uwy: dict[str, float] | None = None
@@ -239,6 +240,9 @@ def build_reserving(
         drop = _normalize_drops(session.get("drops"))
         tail_curve = session.get("tail_curve", tail_curve)
         tail_attachment_age = session.get("tail_attachment_age")
+        tail_projection_months = _normalize_tail_projection_months(
+            session.get("tail_projection_months", tail_projection_months)
+        )
         tail_fit_period_selection = _normalize_tail_fit_period_selection(
             session.get("tail_fit_period")
         )
@@ -253,12 +257,21 @@ def build_reserving(
                 tail_attachment_age = int(tail_attachment_age)
             except (TypeError, ValueError):
                 tail_attachment_age = None
+    months_per_dev = _infer_months_per_development_period(
+        triangle,
+        granularity=config.get_granularity() if config is not None else None,
+    )
+    extrap_periods, projection_period = _derive_tail_projection_settings(
+        tail_projection_months=tail_projection_months,
+        months_per_dev=months_per_dev,
+    )
     fit_period = _derive_tail_fit_period(tail_fit_period_selection)
 
     reserving.set_development(average=average, drop=drop)
     reserving.set_tail(
         curve=tail_curve,
-        projection_period=0,
+        extrap_periods=extrap_periods,
+        projection_period=projection_period,
         attachment_age=tail_attachment_age,
         fit_period=fit_period,
     )
@@ -304,6 +317,56 @@ def _normalize_tail_fit_period_selection(raw: object) -> list[int]:
         if value not in normalized:
             normalized.append(value)
     return normalized
+
+
+def _normalize_tail_projection_months(raw: object) -> int:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    if value < 0:
+        return 0
+    return value
+
+
+def _infer_months_per_development_period(
+    triangle: Triangle,
+    *,
+    granularity: str | None,
+) -> int:
+    try:
+        incurred = triangle.get_triangle()["incurred"]
+        development = [int(value) for value in incurred.development.tolist()]
+    except Exception:
+        development = []
+
+    if len(development) >= 2:
+        deltas = [
+            right - left
+            for left, right in zip(development[:-1], development[1:])
+            if right - left > 0
+        ]
+        if deltas:
+            return min(deltas)
+    if len(development) == 1 and development[0] > 0:
+        return development[0]
+
+    normalized_granularity = str(granularity or "").strip().lower()
+    if normalized_granularity == "quarterly":
+        return 3
+    return 12
+
+
+def _derive_tail_projection_settings(
+    *,
+    tail_projection_months: int,
+    months_per_dev: int,
+) -> tuple[int, int]:
+    months = max(int(tail_projection_months), 0)
+    safe_months_per_dev = max(int(months_per_dev), 1)
+    extrap_periods = months // safe_months_per_dev
+    projection_period = extrap_periods * safe_months_per_dev
+    return extrap_periods, projection_period
 
 
 def _derive_tail_fit_period(

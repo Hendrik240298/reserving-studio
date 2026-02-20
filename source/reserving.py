@@ -40,6 +40,19 @@ class Reserving:
             return value
         return None
 
+    @staticmethod
+    def _parse_cdf_label_to_age(label: object) -> int | None:
+        try:
+            text = str(label)
+        except Exception:
+            return None
+        if "-" in text:
+            text = text.split("-")[0]
+        try:
+            return int(text)
+        except (TypeError, ValueError):
+            return None
+
     def set_development(
         self,
         average: str = "volume",
@@ -97,6 +110,7 @@ class Reserving:
         self,
         curve: str = "weibull",
         attachment_age: Optional[int] = None,
+        extrap_periods: Optional[int] = None,
         projection_period: Optional[int] = None,
         fit_period: Optional[Tuple[int, Optional[int]]] = None,
     ):
@@ -113,6 +127,8 @@ class Reserving:
             params["attachment_age"] = attachment_age
         if fit_period is not None:
             params["fit_period"] = fit_period
+        if extrap_periods is not None:
+            params["extrap_periods"] = extrap_periods
         if projection_period is not None:
             params["projection_period"] = projection_period
 
@@ -407,15 +423,25 @@ class Reserving:
             .iloc[0]
         )
         expected_pattern = 1 / cdf_values
+        expected_by_age: dict[int, float] = {}
+        for idx, value in expected_pattern.items():
+            age = self._parse_cdf_label_to_age(idx)
+            if age is None:
+                continue
+            expected_by_age[age] = float(value)
+        expected_series = pd.Series(expected_by_age).sort_index()
 
-        # Align expected pattern with emergence columns
-        expected_series = expected_pattern.reindex(emergence.columns)
-        if expected_series.isna().all():
-            expected_series = pd.Series(
-                expected_pattern.values[: len(emergence.columns)],
-                index=emergence.columns[: len(expected_pattern)],
-            )
-        expected_full = expected_series.reindex(emergence.columns)
+        emergence_ages = []
+        for col in emergence.columns:
+            age = self._parse_cdf_label_to_age(col)
+            if age is not None:
+                emergence_ages.append(age)
+        merged_ages = sorted(set(emergence_ages) | set(expected_series.index.tolist()))
+        if not merged_ages:
+            merged_ages = emergence.columns.tolist()
+
+        emergence = emergence.reindex(columns=merged_ages)
+        expected_full = expected_series.reindex(merged_ages)
 
         # Create expected dataframe with same structure as emergence
         expected = pd.DataFrame(

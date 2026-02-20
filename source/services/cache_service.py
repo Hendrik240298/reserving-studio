@@ -110,6 +110,7 @@ class CacheService:
         drop_store: list[list[str | int]] | None,
         average: str | None,
         tail_attachment_age: int | None,
+        tail_projection_months: int,
         tail_curve: str | None,
         tail_fit_period_selection: list[int] | None,
         bf_apriori_by_uwy: dict[str, float] | None,
@@ -119,6 +120,7 @@ class CacheService:
             "average": average or default_average,
             "tail_curve": tail_curve or default_tail_curve,
             "tail_attachment_age": tail_attachment_age,
+            "tail_projection_months": int(tail_projection_months),
             "tail_fit_period_selection": self._normalize_fit_period(
                 tail_fit_period_selection
             ),
@@ -136,6 +138,7 @@ class CacheService:
         drop_store: list[list[str | int]] | None,
         average: str | None,
         tail_attachment_age: int | None,
+        tail_projection_months: int,
         tail_curve: str | None,
         tail_fit_period_selection: list[int] | None,
         bf_apriori_by_uwy: dict[str, float] | None,
@@ -149,6 +152,7 @@ class CacheService:
                 drop_store=drop_store,
                 average=average,
                 tail_attachment_age=tail_attachment_age,
+                tail_projection_months=tail_projection_months,
                 tail_curve=tail_curve,
                 tail_fit_period_selection=tail_fit_period_selection,
                 bf_apriori_by_uwy=bf_apriori_by_uwy,
@@ -168,6 +172,7 @@ class CacheService:
         drop_store: list[list[str | int]] | None,
         average: str | None,
         tail_attachment_age: int | None,
+        tail_projection_months: int,
         tail_curve: str | None,
         tail_fit_period_selection: list[int] | None,
     ) -> str:
@@ -178,6 +183,7 @@ class CacheService:
             drop_store=drop_store,
             average=average,
             tail_attachment_age=tail_attachment_age,
+            tail_projection_months=tail_projection_months,
             tail_curve=tail_curve,
             tail_fit_period_selection=tail_fit_period_selection,
             bf_apriori_by_uwy=None,

@@ -44,6 +44,7 @@ class SessionSyncService:
         tail_curve = params.get("tail_curve")
         drop_store = params.get("drop_store")
         tail_attachment_age = params.get("tail_attachment_age")
+        tail_projection_months = params.get("tail_projection_months")
         tail_fit_period_selection = params.get("tail_fit_period_selection")
         bf_apriori_by_uwy = params.get("bf_apriori_by_uwy")
         selected_ultimate_by_uwy = params.get("selected_ultimate_by_uwy")
@@ -56,6 +57,7 @@ class SessionSyncService:
                     "tail_curve": tail_curve,
                     "drops": drop_store,
                     "tail_attachment_age": tail_attachment_age,
+                    "tail_projection_months": tail_projection_months,
                     "tail_fit_period": tail_fit_period_selection,
                     "bf_apriori_by_uwy": bf_apriori_by_uwy,
                     "selected_ultimate_by_uwy": selected_ultimate_by_uwy,

@@ -17,6 +17,7 @@ from source.services.reserving_service import ReservingService
 class _FakeReserving:
     def __init__(self) -> None:
         self.reserve_calls = 0
+        self.last_tail_kwargs: dict[str, object] = {}
 
     def set_development(self, average: str, drop: list[tuple[str, int]] | None) -> None:
         return None
@@ -24,10 +25,18 @@ class _FakeReserving:
     def set_tail(
         self,
         curve: str,
+        extrap_periods: int,
         projection_period: int,
         attachment_age: int | None,
         fit_period: tuple[int, int | None] | None,
     ) -> None:
+        self.last_tail_kwargs = {
+            "curve": curve,
+            "extrap_periods": extrap_periods,
+            "projection_period": projection_period,
+            "attachment_age": attachment_age,
+            "fit_period": fit_period,
+        }
         return None
 
     def set_bornhuetter_ferguson(self, apriori: float | dict[str, float]) -> None:
@@ -57,6 +66,7 @@ def test_selection_change_reuses_model_without_recalc() -> None:
     params_service = ParamsService(
         default_average="volume",
         default_tail_curve="weibull",
+        default_tail_projection_months=0,
         default_bf_apriori=0.6,
         get_uwy_labels=lambda: ["2001", "2002"],
         load_session=None,
@@ -69,6 +79,7 @@ def test_selection_change_reuses_model_without_recalc() -> None:
         default_average="volume",
         default_tail_curve="weibull",
         default_bf_apriori=0.6,
+        fallback_months_per_dev=3,
         segment_key_provider=lambda: "quarterly",
         extract_data=lambda: None,
         get_triangle=lambda: pd.DataFrame(),
@@ -85,6 +96,7 @@ def test_selection_change_reuses_model_without_recalc() -> None:
         drop_store=[],
         average="volume",
         tail_attachment_age=None,
+        tail_projection_months=0,
         tail_curve="weibull",
         tail_fit_period_selection=[],
         bf_apriori_by_uwy={"2001": 0.6, "2002": 0.6},
@@ -97,6 +109,7 @@ def test_selection_change_reuses_model_without_recalc() -> None:
         drop_store=[],
         average="volume",
         tail_attachment_age=None,
+        tail_projection_months=0,
         tail_curve="weibull",
         tail_fit_period_selection=[],
         bf_apriori_by_uwy={"2001": 0.6, "2002": 0.6},
@@ -120,3 +133,59 @@ def test_selection_change_reuses_model_without_recalc() -> None:
 
     assert payload_cl["model_cache_key"] == payload_bf["model_cache_key"]
     assert payload_cl["cache_key"] != payload_bf["cache_key"]
+
+
+def test_tail_projection_uses_fallback_dev_spacing() -> None:
+    fake_reserving = _FakeReserving()
+    params_service = ParamsService(
+        default_average="volume",
+        default_tail_curve="weibull",
+        default_tail_projection_months=0,
+        default_bf_apriori=0.6,
+        get_uwy_labels=lambda: ["2001"],
+        load_session=None,
+        get_sync_version=None,
+    )
+    service = ReservingService(
+        reserving=fake_reserving,  # type: ignore[arg-type]
+        params_service=params_service,
+        cache_service=CacheService(),
+        default_average="volume",
+        default_tail_curve="weibull",
+        default_bf_apriori=0.6,
+        fallback_months_per_dev=12,
+        segment_key_provider=lambda: "yearly",
+        extract_data=lambda: None,
+        get_triangle=lambda: pd.DataFrame(),
+        get_emergence=lambda: pd.DataFrame(),
+        get_results=lambda: pd.DataFrame(
+            {
+                "incurred": [100.0],
+                "Premium": [200.0],
+                "cl_ultimate": [150.0],
+                "bf_ultimate": [160.0],
+                "ultimate": [150.0],
+            },
+            index=["2001"],
+        ),
+        build_triangle_figure=lambda *_args: {"kind": "triangle"},
+        build_emergence_figure=lambda *_args: {"kind": "emergence"},
+        payload_cache={},
+        triangle_cache={},
+        emergence_cache={},
+    )
+
+    service.get_or_build_results_payload(
+        drop_store=[],
+        average="volume",
+        tail_attachment_age=None,
+        tail_projection_months=24,
+        tail_curve="weibull",
+        tail_fit_period_selection=[],
+        bf_apriori_by_uwy={"2001": 0.6},
+        selected_ultimate_by_uwy={"2001": "chainladder"},
+        force_recalc=True,
+    )
+
+    assert fake_reserving.last_tail_kwargs["extrap_periods"] == 2
+    assert fake_reserving.last_tail_kwargs["projection_period"] == 24

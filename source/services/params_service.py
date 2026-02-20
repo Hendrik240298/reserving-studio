@@ -13,6 +13,7 @@ class ParamsService:
         *,
         default_average: str,
         default_tail_curve: str,
+        default_tail_projection_months: int,
         default_bf_apriori: float,
         get_uwy_labels: Callable[[], list[str]],
         load_session: Callable[[], dict] | None,
@@ -20,6 +21,10 @@ class ParamsService:
     ) -> None:
         self._default_average = default_average
         self._default_tail_curve = default_tail_curve
+        self._default_tail_projection_months = max(
+            int(default_tail_projection_months),
+            0,
+        )
         self._default_bf_apriori = default_bf_apriori
         self._get_uwy_labels = get_uwy_labels
         self._load_session = load_session
@@ -97,6 +102,15 @@ class ParamsService:
             if value not in normalized:
                 normalized.append(value)
         return normalized
+
+    def normalize_tail_projection_months(self, raw: object) -> int:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return self._default_tail_projection_months
+        if value < 0:
+            return self._default_tail_projection_months
+        return value
 
     def toggle_tail_fit_selection(self, existing: list[int], dev: int) -> list[int]:
         normalized = []
@@ -226,6 +240,7 @@ class ParamsService:
         drop_store: list[list[str | int]] | None,
         average: str | None,
         tail_attachment_age: int | None,
+        tail_projection_months: int | None,
         tail_curve: str | None,
         tail_fit_period_selection: list[int] | None,
         bf_apriori_by_uwy: dict[str, float] | None,
@@ -247,6 +262,10 @@ class ParamsService:
             except (TypeError, ValueError):
                 parsed_tail = None
 
+        normalized_tail_projection_months = self.normalize_tail_projection_months(
+            tail_projection_months
+        )
+
         normalized_bf = {
             key: float(value)
             for key, value in self.bf_rows_to_mapping(
@@ -260,6 +279,7 @@ class ParamsService:
             "force_recalc": bool(force_recalc),
             "drop_store": normalized_drop_store,
             "tail_attachment_age": parsed_tail,
+            "tail_projection_months": normalized_tail_projection_months,
             "tail_fit_period_selection": normalized_tail_fit,
             "average": average or self._default_average,
             "tail_curve": tail_curve or self._default_tail_curve,
@@ -278,6 +298,7 @@ class ParamsService:
         default_drop_store: list[list[str | int]],
         default_average: str,
         default_tail_attachment_age: int | None,
+        default_tail_projection_months: int,
         default_tail_curve: str,
         default_tail_fit_period_selection: list[int],
         default_bf_apriori_rows: list[dict[str, object]],
@@ -287,6 +308,7 @@ class ParamsService:
                 drop_store=default_drop_store,
                 average=default_average,
                 tail_attachment_age=default_tail_attachment_age,
+                tail_projection_months=default_tail_projection_months,
                 tail_curve=default_tail_curve,
                 tail_fit_period_selection=default_tail_fit_period_selection,
                 bf_apriori_by_uwy=self.bf_rows_to_mapping(default_bf_apriori_rows),
@@ -303,6 +325,10 @@ class ParamsService:
             drop_store=session.get("drops"),
             average=session.get("average", default_average),
             tail_attachment_age=session.get("tail_attachment_age"),
+            tail_projection_months=session.get(
+                "tail_projection_months",
+                default_tail_projection_months,
+            ),
             tail_curve=session.get("tail_curve", default_tail_curve),
             tail_fit_period_selection=session.get("tail_fit_period"),
             bf_apriori_by_uwy=session.get("bf_apriori_by_uwy"),

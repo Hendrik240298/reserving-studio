@@ -30,6 +30,7 @@ class ParamsStoreSnapshot:
     force_recalc: bool
     drop_store: list[list[str | int]]
     tail_attachment_age: int | None
+    tail_projection_months: int
     tail_fit_period_selection: list[int]
     average: str
     tail_curve: str
@@ -61,6 +62,14 @@ class ParamsStoreSnapshot:
                 tail_attachment_age = int(tail_attachment_age)
             except (TypeError, ValueError):
                 tail_attachment_age = None
+
+        tail_projection_months_raw = payload.get("tail_projection_months", 0)
+        try:
+            tail_projection_months = int(tail_projection_months_raw)
+        except (TypeError, ValueError):
+            tail_projection_months = 0
+        if tail_projection_months < 0:
+            tail_projection_months = 0
 
         tail_fit_period_selection: list[int] = []
         raw_tail_fit = payload.get("tail_fit_period_selection", [])
@@ -99,6 +108,7 @@ class ParamsStoreSnapshot:
             force_recalc=force_recalc,
             drop_store=drop_store,
             tail_attachment_age=tail_attachment_age,
+            tail_projection_months=tail_projection_months,
             tail_fit_period_selection=tail_fit_period_selection,
             average=average,
             tail_curve=tail_curve,
@@ -120,6 +130,7 @@ class ResultsStoreSnapshot:
     drop_store: list[list[str | int]]
     tail_attachment_age: int | None
     tail_attachment_display: str
+    tail_projection_months: int
     tail_fit_period_selection: list[int]
     tail_fit_period_display: str
     selected_ultimate_by_uwy: dict[str, SelectionMethod]
@@ -151,6 +162,14 @@ class ResultsStoreSnapshot:
                 tail_attachment_age = int(tail_attachment_age)
             except (TypeError, ValueError):
                 tail_attachment_age = None
+
+        tail_projection_months_raw = payload.get("tail_projection_months", 0)
+        try:
+            tail_projection_months = int(tail_projection_months_raw)
+        except (TypeError, ValueError):
+            tail_projection_months = 0
+        if tail_projection_months < 0:
+            tail_projection_months = 0
 
         tail_fit_period_selection: list[int] = []
         raw_tail_fit = payload.get("tail_fit_period_selection", [])
@@ -204,6 +223,7 @@ class ResultsStoreSnapshot:
             drop_store=drop_store,
             tail_attachment_age=tail_attachment_age,
             tail_attachment_display=str(payload.get("tail_attachment_display", "None")),
+            tail_projection_months=tail_projection_months,
             tail_fit_period_selection=tail_fit_period_selection,
             tail_fit_period_display=str(
                 payload.get("tail_fit_period_display", "lower=None, upper=None")

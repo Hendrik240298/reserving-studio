@@ -25,6 +25,7 @@ def test_params_store_snapshot_from_dict() -> None:
         "force_recalc": True,
         "drop_store": [["2001", 12]],
         "tail_attachment_age": 60,
+        "tail_projection_months": 24,
         "tail_fit_period_selection": [12, 24],
         "average": "volume",
         "tail_curve": "weibull",
@@ -37,6 +38,7 @@ def test_params_store_snapshot_from_dict() -> None:
 
     assert snapshot.request_id == 7
     assert snapshot.drop_store == [["2001", 12]]
+    assert snapshot.tail_projection_months == 24
     assert snapshot.selected_ultimate_by_uwy["2001"] == "bornhuetter_ferguson"
 
 
@@ -50,6 +52,7 @@ def test_results_store_snapshot_from_dict() -> None:
         "drop_store": [["2001", 12]],
         "tail_attachment_age": None,
         "tail_attachment_display": "None",
+        "tail_projection_months": 12,
         "tail_fit_period_selection": [12],
         "tail_fit_period_display": "lower=12, upper=None",
         "selected_ultimate_by_uwy": {"2001": "chainladder"},
@@ -66,6 +69,7 @@ def test_results_store_snapshot_from_dict() -> None:
     assert snapshot.cache_key == "abc"
     assert snapshot.model_cache_key == "def"
     assert snapshot.figure_version == 2
+    assert snapshot.tail_projection_months == 12
     assert snapshot.results_table_rows[0]["uwy"] == "2001"
 
 
