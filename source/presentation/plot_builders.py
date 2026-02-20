@@ -131,13 +131,33 @@ def plot_data_triangle_table(
 
     headers = ["UWY"] + col_labels
 
-    cell_text_lengths = [len(str(text)) for text in headers]
+    all_column_lengths = [len(str(text)) for text in headers if str(text)]
     for column_values in table_values:
-        cell_text_lengths.extend(len(str(text)) for text in column_values)
+        all_column_lengths.extend(len(str(text)) for text in column_values if str(text))
 
-    max_text_length = max(cell_text_lengths, default=0)
-    uniform_column_width = max(72, min(220, 18 + max_text_length * 9))
-    column_widths = [uniform_column_width] * len(headers)
+    data_column_lengths = [len(str(text)) for text in headers[1:] if str(text)]
+    for column_values in table_values[1:]:
+        data_column_lengths.extend(
+            len(str(text)) for text in column_values if str(text)
+        )
+
+    max_all_text_length = max(all_column_lengths, default=0)
+    max_data_text_length = max(data_column_lengths, default=0)
+    row_label_column_width = max(72, min(220, 18 + max_all_text_length * 9))
+    standard_data_column_width = max(58, min(180, 12 + max_data_text_length * 7))
+    empty_data_column_width = max(16, standard_data_column_width // 4)
+
+    column_widths = [row_label_column_width] * len(headers)
+    if headers:
+        # Keep the first row-label column sizing behavior unchanged.
+        column_widths[0] = row_label_column_width
+
+    for column_index in range(1, len(headers)):
+        column_values = table_values[column_index]
+        has_any_data = any(bool(str(value)) for value in column_values)
+        column_widths[column_index] = (
+            standard_data_column_width if has_any_data else empty_data_column_width
+        )
 
     fig = go.Figure(
         data=[
@@ -171,7 +191,7 @@ def plot_data_triangle_table(
         ]
     )
 
-    table_width = uniform_column_width * len(headers)
+    table_width = sum(column_widths)
 
     fig.update_layout(
         title=title,

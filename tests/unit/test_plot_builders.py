@@ -209,6 +209,38 @@ def test_plot_data_triangle_table_returns_table_trace() -> None:
     assert figure.data[0].type == "table"
 
 
+def test_plot_data_triangle_table_shrinks_fully_empty_data_columns() -> None:
+    triangle_df = pd.DataFrame(
+        {
+            "3-6": [1250.0, 1875.0],
+            "6-9": [np.nan, np.nan],
+        },
+        index=["2001", "2002"],
+    )
+
+    figure = plot_data_triangle_table(
+        triangle_df=triangle_df,
+        title="Data Triangle",
+        weights_df=None,
+        ratio_mode=False,
+        font_family=STYLE["font_family"],
+        figure_font_size=STYLE["figure_font_size"],
+        figure_title_font_size=STYLE["figure_title_font_size"],
+        table_header_font_size=STYLE["table_header_font_size"],
+        table_cell_font_size=STYLE["table_cell_font_size"],
+        alert_annotation_font_size=STYLE["alert_annotation_font_size"],
+        color_text=STYLE["color_text"],
+        color_surface=STYLE["color_surface"],
+        color_border=STYLE["color_border"],
+    )
+
+    column_widths = list(figure.data[0].columnwidth)
+    standard_data_width = int(column_widths[1])
+    empty_data_width = int(column_widths[2])
+
+    assert empty_data_width == max(16, standard_data_width // 4)
+
+
 def test_plot_emergence_returns_actual_and_expected_traces() -> None:
     emergence = pd.concat(
         {
