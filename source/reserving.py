@@ -9,6 +9,9 @@ import logging
 from typing import Any, Optional, Tuple, Literal
 
 
+DEFAULT_BF_APRIORI = 0.6
+
+
 class Reserving:
     def __init__(self, triangle: Triangle):
         self._triangle = triangle
@@ -18,6 +21,7 @@ class Reserving:
         self._chainladder_result = None
         self._bornhuetter_result = None
         self._bf_apriori_by_uwy: Optional[dict[str, float]] = None
+        self._bf_fallback_apriori: float = DEFAULT_BF_APRIORI
         self._selected_ultimate_by_uwy: dict[str, str] = {}
 
     @staticmethod
@@ -117,7 +121,10 @@ class Reserving:
     def set_bornhuetter_ferguson(self, apriori: float | dict[str, float] = 0.6):
         if isinstance(apriori, dict):
             if len(apriori) == 0:
-                raise ValueError("apriori mapping must not be empty")
+                self._bf_apriori_by_uwy = None
+                self._bf_fallback_apriori = DEFAULT_BF_APRIORI
+                self.bf = cl.BornhuetterFerguson(apriori=DEFAULT_BF_APRIORI)
+                return
 
             normalized: dict[str, float] = {}
             for origin, factor in apriori.items():
@@ -139,6 +146,7 @@ class Reserving:
                 normalized[key] = factor_value
 
             self._bf_apriori_by_uwy = normalized
+            self._bf_fallback_apriori = DEFAULT_BF_APRIORI
             self.bf = cl.BornhuetterFerguson(apriori=1.0)
             return
 
@@ -153,6 +161,7 @@ class Reserving:
             raise ValueError(f"apriori must be >= 0, got {apriori_value}")
 
         self._bf_apriori_by_uwy = None
+        self._bf_fallback_apriori = apriori_value
         self.bf = cl.BornhuetterFerguson(apriori=apriori_value)
 
     def reserve(
@@ -340,6 +349,7 @@ class Reserving:
         if not self._bf_apriori_by_uwy:
             return exposure
 
+        logger = logging.getLogger(__name__)
         factors_by_origin: list[float] = []
         missing_origins: list[str] = []
         for origin in exposure.origin:
@@ -355,13 +365,15 @@ class Reserving:
 
             if factor is None:
                 missing_origins.append(str(origin))
-                continue
+                factor = self._bf_fallback_apriori
 
             factors_by_origin.append(float(factor))
 
         if missing_origins:
-            raise ValueError(
-                "Missing BF apriori factors for origins: " + ", ".join(missing_origins)
+            logger.warning(
+                "Missing BF apriori factors for origins (%s). Using default %.2f.",
+                ", ".join(missing_origins),
+                self._bf_fallback_apriori,
             )
 
         adjusted = exposure.copy()
