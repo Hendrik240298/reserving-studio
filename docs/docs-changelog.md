@@ -2,6 +2,17 @@
 
 This file tracks major documentation additions and structural changes.
 
+## 2026-03-04
+
+### Added
+
+- `docs/results-tab-change-impact-map.md`
+
+### Updated
+
+- `README.md` (technical documentation index)
+- `docs/workflow-technical-map.md` (fast navigation section)
+
 ## 2026-02-17
 
 ### Added

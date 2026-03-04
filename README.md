@@ -31,6 +31,7 @@ The Chainladder tab displays link ratios, loss development factors, and fitted p
 ## Documentation (technical)
 
 - Workflow map: `docs/workflow-technical-map.md`
+- Results-tab impact map: `docs/results-tab-change-impact-map.md`
 - Architecture guide: `docs/technical-architecture.md`
 - Data handling deep dive: `docs/data-handling-deep-dive.md`
 - API reference: `docs/api-reference.md`
