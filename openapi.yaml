@@ -1,0 +1,649 @@
+openapi: 3.1.0
+info:
+  title: Reserving API
+  version: 0.1.0
+  description: |
+    Contract-first API surface for reserving workflows, deterministic diagnostics,
+    and session persistence. This API is intended to be consumed by both the GUI
+    and any AI orchestration layer.
+servers:
+  - url: http://localhost:8000
+    description: Local development
+tags:
+  - name: Workflows
+  - name: Sessions
+  - name: Reserving
+  - name: Diagnostics
+  - name: Results
+paths:
+  /v1/workflows/from-dataframes:
+    post:
+      tags: [Workflows]
+      operationId: createWorkflowFromDataframes
+      summary: Create workflow from claims and premium rows
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowFromDataframesRequest'
+      responses:
+        '200':
+          description: Workflow initialized successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowInitializationResponse'
+        '400':
+          description: Invalid request payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/sessions/{segment}:
+    get:
+      tags: [Sessions]
+      operationId: getSessionBySegment
+      summary: Get current session state for a segment
+      parameters:
+        - name: segment
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Session state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionStateResponse'
+        '404':
+          description: Segment not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/sessions/{segment}/save:
+    post:
+      tags: [Sessions]
+      operationId: saveSessionBySegment
+      summary: Persist session state for a segment
+      parameters:
+        - name: segment
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionSaveRequest'
+      responses:
+        '200':
+          description: Session saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionSaveResponse'
+        '409':
+          description: Sync version conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/reserving/recalculate:
+    post:
+      tags: [Reserving]
+      operationId: recalculateReserving
+      summary: Recalculate reserving output for a session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecalculateRequest'
+      responses:
+        '200':
+          description: Recalculation output
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecalculateResponse'
+        '400':
+          description: Invalid assumptions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/diagnostics/run:
+    post:
+      tags: [Diagnostics]
+      operationId: runDiagnostics
+      summary: Execute deterministic diagnostics
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiagnosticsRequest'
+      responses:
+        '200':
+          description: Diagnostic findings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiagnosticsResponse'
+  /v1/diagnostics/iterate:
+    post:
+      tags: [Diagnostics]
+      operationId: iterateDiagnostics
+      summary: Run iterative scenario diagnostics for recommendations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiagnosticsIterateRequest'
+      responses:
+        '200':
+          description: Ranked scenario diagnostics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiagnosticsIterateResponse'
+  /v1/results/{session_id}:
+    get:
+      tags: [Results]
+      operationId: getResultsBySessionId
+      summary: Fetch most recent results payload by session id
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Latest results payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultsResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        request_id:
+          type: string
+
+    TailConfig:
+      type: object
+      additionalProperties: false
+      properties:
+        curve:
+          type: string
+          default: weibull
+        attachment_age:
+          type: integer
+          minimum: 0
+          nullable: true
+        projection_period:
+          type: integer
+          minimum: 0
+          default: 0
+        fit_period:
+          type: array
+          minItems: 0
+          maxItems: 2
+          items:
+            type: integer
+
+    ResultsTableRow:
+      type: object
+      additionalProperties:
+        type: string
+
+    ParamsStore:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          request_id,
+          source,
+          force_recalc,
+          drop_store,
+          tail_projection_months,
+          tail_fit_period_selection,
+          average,
+          tail_curve,
+          bf_apriori_by_uwy,
+          selected_ultimate_by_uwy
+        ]
+      properties:
+        request_id:
+          type: integer
+        source:
+          type: string
+        force_recalc:
+          type: boolean
+        drop_store:
+          type: array
+          items:
+            type: array
+            minItems: 2
+            maxItems: 2
+            items:
+              oneOf:
+                - type: string
+                - type: integer
+        tail_attachment_age:
+          type: integer
+          nullable: true
+        tail_projection_months:
+          type: integer
+          minimum: 0
+        tail_fit_period_selection:
+          type: array
+          items:
+            type: integer
+        average:
+          type: string
+        tail_curve:
+          type: string
+        bf_apriori_by_uwy:
+          type: object
+          additionalProperties:
+            type: number
+        selected_ultimate_by_uwy:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [chainladder, bornhuetter_ferguson]
+        sync_version:
+          type: integer
+          nullable: true
+
+    ResultsStoreMeta:
+      type: object
+      additionalProperties: false
+      properties:
+        cache_key:
+          type: string
+          nullable: true
+        model_cache_key:
+          type: string
+          nullable: true
+        figure_version:
+          type: integer
+          nullable: true
+        sync_version:
+          type: integer
+          nullable: true
+
+    WorkflowFromDataframesRequest:
+      type: object
+      additionalProperties: false
+      required: [segment, claims_rows, premium_rows]
+      properties:
+        segment:
+          type: string
+        granularity:
+          type: string
+          nullable: true
+        claims_rows:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        premium_rows:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        config_overrides:
+          type: object
+          additionalProperties: true
+
+    WorkflowInitializationResponse:
+      type: object
+      additionalProperties: false
+      required: [schema_version, session_id, segment, sync_version]
+      properties:
+        schema_version:
+          type: string
+        session_id:
+          type: string
+        segment:
+          type: string
+        sync_version:
+          type: integer
+        initial_params:
+          $ref: '#/components/schemas/ParamsStore'
+        initial_results_summary:
+          type: object
+          additionalProperties: true
+
+    SessionStateResponse:
+      type: object
+      additionalProperties: false
+      required: [schema_version, session_id, segment, params_store, sync_version]
+      properties:
+        schema_version:
+          type: string
+        session_id:
+          type: string
+        segment:
+          type: string
+        params_store:
+          $ref: '#/components/schemas/ParamsStore'
+        results_store_meta:
+          $ref: '#/components/schemas/ResultsStoreMeta'
+        sync_version:
+          type: integer
+
+    SessionSaveRequest:
+      type: object
+      additionalProperties: false
+      required: [params_store, expected_sync_version]
+      properties:
+        params_store:
+          $ref: '#/components/schemas/ParamsStore'
+        results_store_meta:
+          $ref: '#/components/schemas/ResultsStoreMeta'
+        expected_sync_version:
+          type: integer
+          minimum: 0
+
+    SessionSaveResponse:
+      type: object
+      additionalProperties: false
+      required: [schema_version, segment, sync_version, saved_at]
+      properties:
+        schema_version:
+          type: string
+        segment:
+          type: string
+        sync_version:
+          type: integer
+        saved_at:
+          type: string
+          format: date-time
+
+    RecalculateRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          session_id,
+          average,
+          drop,
+          drop_valuation,
+          tail,
+          bf_apriori,
+          final_ultimate,
+          selected_ultimate_by_uwy
+        ]
+      properties:
+        session_id:
+          type: string
+        average:
+          type: string
+        drop:
+          type: array
+          items:
+            type: array
+            minItems: 2
+            maxItems: 2
+            items:
+              oneOf:
+                - type: string
+                - type: integer
+        drop_valuation:
+          type: array
+          items:
+            type: array
+            minItems: 2
+            maxItems: 2
+            items:
+              oneOf:
+                - type: string
+                - type: integer
+        tail:
+          $ref: '#/components/schemas/TailConfig'
+        bf_apriori:
+          type: object
+          additionalProperties:
+            type: number
+        final_ultimate:
+          type: string
+          enum: [chainladder, bornhuetter_ferguson]
+        selected_ultimate_by_uwy:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [chainladder, bornhuetter_ferguson]
+
+    RecalculateResponse:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          schema_version,
+          session_id,
+          results_table_rows,
+          triangle_figure,
+          emergence_figure,
+          cache_key,
+          model_cache_key,
+          duration_ms
+        ]
+      properties:
+        schema_version:
+          type: string
+        session_id:
+          type: string
+        results_table_rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResultsTableRow'
+        triangle_figure:
+          type: object
+          additionalProperties: true
+        emergence_figure:
+          type: object
+          additionalProperties: true
+        heatmap_payload:
+          type: object
+          additionalProperties: true
+        cache_key:
+          type: string
+        model_cache_key:
+          type: string
+        figure_version:
+          type: integer
+          nullable: true
+        duration_ms:
+          type: integer
+
+    DiagnosticsRequest:
+      type: object
+      additionalProperties: false
+      required: [session_id]
+      properties:
+        session_id:
+          type: string
+        diagnostic_profile:
+          type: string
+          nullable: true
+        include_recommendations:
+          type: boolean
+          default: true
+
+    DiagnosticsIterateRequest:
+      type: object
+      additionalProperties: false
+      required: [session_id]
+      properties:
+        session_id:
+          type: string
+        max_scenarios:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 24
+        include_baseline:
+          type: boolean
+          default: true
+
+    DiagnosticEvidence:
+      type: object
+      additionalProperties: false
+      required: [metric_id, value]
+      properties:
+        metric_id:
+          type: string
+        value:
+          type: number
+        threshold:
+          type: number
+          nullable: true
+        basis:
+          type: string
+          nullable: true
+
+    DiagnosticFinding:
+      type: object
+      additionalProperties: false
+      required: [code, severity, message, evidence, suggested_actions]
+      properties:
+        code:
+          type: string
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        message:
+          type: string
+        evidence:
+          $ref: '#/components/schemas/DiagnosticEvidence'
+        suggested_actions:
+          type: array
+          items:
+            type: string
+
+    DiagnosticRecommendation:
+      type: object
+      additionalProperties: false
+      required: [code, priority, message, rationale, evidence, proposed_parameters]
+      properties:
+        code:
+          type: string
+        priority:
+          type: string
+          enum: [low, medium, high, critical]
+        message:
+          type: string
+        rationale:
+          type: string
+        evidence:
+          $ref: '#/components/schemas/DiagnosticEvidence'
+        proposed_parameters:
+          type: object
+          additionalProperties: true
+
+    ScenarioEvaluation:
+      type: object
+      additionalProperties: false
+      required: [scenario_id, score, summary, parameters, findings, recommendations, metrics]
+      properties:
+        scenario_id:
+          type: string
+        score:
+          type: number
+        summary:
+          type: string
+        parameters:
+          type: object
+          additionalProperties: true
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiagnosticFinding'
+        recommendations:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiagnosticRecommendation'
+        metrics:
+          type: object
+          additionalProperties: true
+
+    DiagnosticsResponse:
+      type: object
+      additionalProperties: false
+      required: [schema_version, session_id, findings, recommendations, metrics]
+      properties:
+        schema_version:
+          type: string
+        session_id:
+          type: string
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiagnosticFinding'
+        recommendations:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiagnosticRecommendation'
+        metrics:
+          type: object
+          additionalProperties: true
+
+    DiagnosticsIterateResponse:
+      type: object
+      additionalProperties: false
+      required: [schema_version, session_id, scenarios, iteration_metrics]
+      properties:
+        schema_version:
+          type: string
+        session_id:
+          type: string
+        baseline:
+          allOf:
+            - $ref: '#/components/schemas/ScenarioEvaluation'
+          nullable: true
+        scenarios:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScenarioEvaluation'
+        iteration_metrics:
+          type: object
+          additionalProperties: true
+
+    ResultsResponse:
+      type: object
+      additionalProperties: false
+      required: [schema_version, session_id, results]
+      properties:
+        schema_version:
+          type: string
+        session_id:
+          type: string
+        results:
+          type: object
+          additionalProperties: true

@@ -484,10 +484,15 @@ class Reserving:
         # Extract cumulative incurred and premium from triangle
         triangle_data = self._triangle.get_triangle()
         incurred_df = triangle_data["incurred"].to_frame()
+        try:
+            paid_df = triangle_data["paid"].to_frame()
+        except Exception:
+            paid_df = pd.DataFrame(index=incurred_df.index, columns=incurred_df.columns)
         premium_df = triangle_data["Premium_selected"].to_frame()
 
         return {
             "link_ratios": link_ratios_with_ldf,
             "incurred": incurred_df,
+            "paid": paid_df,
             "premium": premium_df,
         }

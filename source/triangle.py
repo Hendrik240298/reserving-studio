@@ -44,7 +44,8 @@ class Triangle:
         ].copy()
 
         # Filter to only uw_years present in claims
-        claims_uw_years = df["uw_year"].unique()
+        claims_uw_years = pd.to_datetime(df["uw_year"], errors="coerce")
+        premium_df["uw_year"] = pd.to_datetime(premium_df["uw_year"], errors="coerce")
         premium_df = premium_df[premium_df["uw_year"].isin(claims_uw_years)]
 
         # Infer proper dtypes first, then fill NaN (prevents downcasting warning)
@@ -70,7 +71,9 @@ class Triangle:
         ]
         df = df[common_cols]
 
-        logging.info(f"Premium in Triangle: \n{df[df['Premium_selected'] > 0]}")
+        premium_rows = int((df["Premium_selected"] > 0).sum())
+        logger = logging.getLogger(__name__)
+        logger.info("Premium rows merged into triangle: %s", premium_rows)
         return cls(df, values_are_cumulative=claims.values_are_cumulative)
 
     def _create_triangle(

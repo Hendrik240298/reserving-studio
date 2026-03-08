@@ -15,3 +15,6 @@ openpyxl
 chainladder
 pytest
 playwright
+fastapi
+uvicorn
+httpx

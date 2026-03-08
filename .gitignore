@@ -5,3 +5,5 @@ __pycache__/
 .pytest_cache/
 Plan.md
 sessions/
+.env
+.env.local
