@@ -76,6 +76,8 @@ Recently completed (2026-03-08):
 - Negative-development triage diagnostic with materiality and diagonal clustering signals.
 - Scenario severity decomposition (`data_quality`, `stability`, `backtest`, `coherence`, `tail`, `other`) and governance tiering.
 - Assistant-side deterministic narrative guardrails for coherence conflicts and causal shift language softening.
+- Assistant orchestration policy to force `tool_iterate_diagnostics` before final recommendations when diagnostics have run.
+- Assistant output sanitization to strip leaked control blocks (for example `<system-reminder>...</system-reminder>`) from user-facing commentary.
 - Unit test coverage for Sprint 1 and Sprint 2 deliverables.
 
 ## 1) Vision and non-goals
