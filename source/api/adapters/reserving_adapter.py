@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
+import math
 from pathlib import Path
 import os
 import threading
@@ -39,6 +40,7 @@ from source.api.schemas import (
 from source.config_manager import ConfigManager
 from source.reserving import Reserving
 from source.services.diagnostics_service import DiagnosticsService
+from source.services.uncertainty_service import UncertaintyService
 
 
 logger = logging.getLogger(__name__)
@@ -59,8 +61,31 @@ class SessionContext:
     last_results_payload: dict
 
 
+@dataclass(frozen=True)
+class ScenarioCandidate:
+    scenario_id: str
+    params: dict[str, Any]
+    summary: str
+    parent_scenario_id: str | None
+    transform: str
+    rationale_evidence_ids: list[str]
+
+
 class InMemoryReservingBackend:
-    SCENARIO_GENERATOR_VERSION = "v1.1"
+    SCENARIO_GENERATOR_VERSION = "v1.2"
+    _DEFAULT_BACKTEST_BIAS_THRESHOLD = 0.12
+    _DEFAULT_BACKTEST_MAE_THRESHOLD = 0.2
+    _SEGMENT_MULTIPLIER_BY_KEY = {
+        "motor": 0.9,
+        "property": 1.05,
+        "casualty": 1.2,
+        "liability": 1.2,
+    }
+    _MATURITY_MULTIPLIER_BY_REGIME = {
+        "immature": 1.25,
+        "mixed": 1.0,
+        "mature": 0.85,
+    }
 
     def __init__(self) -> None:
         self._config: ConfigManager | None = self._load_config()
@@ -71,6 +96,7 @@ class InMemoryReservingBackend:
             "RESERVING_OBSERVABILITY", "1"
         ).strip().lower() not in {"0", "false", "off"}
         self._diagnostics_service = DiagnosticsService()
+        self._uncertainty_service = UncertaintyService()
 
     def create_workflow_from_dataframes(
         self,
@@ -260,7 +286,12 @@ class InMemoryReservingBackend:
                 raise LookupError(f"Session not found: {payload.session_id}")
             results_df = context.reserving.get_results()
             heatmap_data = context.reserving.get_triangle_heatmap_data()
-            run_result = self._diagnostics_service.run(
+            diagnostics_service, calibration = self._calibrated_diagnostics_service(
+                segment=context.segment,
+                results_df=results_df,
+                heatmap_data=heatmap_data,
+            )
+            run_result = diagnostics_service.run(
                 results_df=results_df,
                 heatmap_data=heatmap_data,
             )
@@ -279,11 +310,36 @@ class InMemoryReservingBackend:
             ]
             if not payload.include_recommendations:
                 mapped_recommendations = []
+
+            severity_components = self._severity_components(mapped_findings)
+            governance = self._governance_assessment(
+                findings=mapped_findings,
+                severity_components=severity_components,
+            )
+            metrics = cast(dict[str, Any], dict(run_result.metrics))
+            metrics["severity_components"] = severity_components
+            metrics["governance_tier"] = governance["tier"]
+            metrics["governance_escalation_triggers"] = governance[
+                "escalation_triggers"
+            ]
+            metrics["governance_requires_human_review"] = governance[
+                "requires_human_review"
+            ]
+            metrics["threshold_calibration"] = calibration
+            uncertainty = self._uncertainty_service.baseline_uncertainty(
+                results_df=results_df,
+                heatmap_data=heatmap_data,
+            )
+            metrics["uncertainty"] = uncertainty
+
             response = DiagnosticsResponse(
                 session_id=context.session_id,
                 findings=mapped_findings,
                 recommendations=mapped_recommendations,
-                metrics=run_result.metrics,
+                metrics=metrics,
+                governance=governance,
+                calibration=calibration,
+                uncertainty=uncertainty,
                 run_metadata=run_metadata,
             )
             if self._observability_enabled:
@@ -321,6 +377,9 @@ class InMemoryReservingBackend:
                 scenario_id="baseline",
                 params=baseline_params,
                 summary="Current session configuration",
+                parent_scenario_id=None,
+                transform="baseline",
+                rationale_evidence_ids=[],
             )
 
             scenario_candidates = self._build_scenario_candidates(
@@ -331,14 +390,17 @@ class InMemoryReservingBackend:
             )
 
             evaluations: list[ScenarioEvaluation] = []
-            for scenario_id, params, summary in scenario_candidates:
+            for candidate in scenario_candidates:
                 scenario_started = time.perf_counter()
                 evaluations.append(
                     self._evaluate_scenario(
                         context=context,
-                        scenario_id=scenario_id,
-                        params=params,
-                        summary=summary,
+                        scenario_id=candidate.scenario_id,
+                        params=candidate.params,
+                        summary=candidate.summary,
+                        parent_scenario_id=candidate.parent_scenario_id,
+                        transform=candidate.transform,
+                        rationale_evidence_ids=candidate.rationale_evidence_ids,
                     )
                 )
                 if self._observability_enabled:
@@ -369,7 +431,34 @@ class InMemoryReservingBackend:
                 "best_scenario_score": best.score if best is not None else None,
                 "diagnostics_version": DiagnosticsService.DIAGNOSTICS_VERSION,
                 "scenario_generator_version": self.SCENARIO_GENERATOR_VERSION,
+                "best_governance_tier": (
+                    best.governance.get("tier") if best is not None else None
+                ),
             }
+
+            bootstrap_uncertainty = (
+                self._uncertainty_service.bootstrap_predictive_distribution(
+                    results_df=context.reserving.get_results(),
+                    heatmap_data=context.reserving.get_triangle_heatmap_data(),
+                )
+            )
+            tail_assessment = self._uncertainty_service.tail_model_assessment(
+                scenarios=[
+                    {
+                        "scenario_id": item.scenario_id,
+                        "score": item.score,
+                        "transform": item.lineage.get("transform", ""),
+                        "parameters": item.parameters,
+                    }
+                    for item in ordered
+                ]
+            )
+            aggregate_uncertainty = {
+                "baseline": baseline_eval.uncertainty,
+                "bootstrap": bootstrap_uncertainty,
+                "tail_model": tail_assessment,
+            }
+            metrics["uncertainty"] = aggregate_uncertainty
             if self._observability_enabled:
                 logger.info(
                     "[OBS] iterate.complete session_id=%s scenarios=%s duration_ms=%s best=%s best_score=%s",
@@ -384,6 +473,13 @@ class InMemoryReservingBackend:
                 baseline=baseline_eval if payload.include_baseline else None,
                 scenarios=ordered,
                 iteration_metrics=metrics,
+                governance=best.governance
+                if best is not None
+                else baseline_eval.governance,
+                calibration=best.calibration
+                if best is not None
+                else baseline_eval.calibration,
+                uncertainty=aggregate_uncertainty,
                 run_metadata=baseline_eval.run_metadata,
             )
 
@@ -475,8 +571,18 @@ class InMemoryReservingBackend:
                 for col in serializable.columns
             ]
         serializable = serializable.reset_index()
-        serializable = serializable.where(pd.notna(serializable), None)
-        return {"records": serializable.to_dict(orient="records")}
+        records = serializable.to_dict(orient="records")
+        normalized: list[dict[str, Any]] = []
+        for row in records:
+            if not isinstance(row, dict):
+                continue
+            normalized.append(
+                {
+                    str(key): InMemoryReservingBackend._json_safe_value(value)
+                    for key, value in row.items()
+                }
+            )
+        return {"records": normalized}
 
     def _persist_config_session(self, context: SessionContext) -> None:
         if self._config is None:
@@ -625,11 +731,19 @@ class InMemoryReservingBackend:
         scenario_id: str,
         params: dict,
         summary: str,
+        parent_scenario_id: str | None,
+        transform: str,
+        rationale_evidence_ids: list[str],
     ) -> ScenarioEvaluation:
         self._apply_params_to_reserving(context, params)
         results_df = context.reserving.get_results()
         heatmap_data = context.reserving.get_triangle_heatmap_data()
-        run_result = self._diagnostics_service.run(
+        diagnostics_service, calibration = self._calibrated_diagnostics_service(
+            segment=context.segment,
+            results_df=results_df,
+            heatmap_data=heatmap_data,
+        )
+        run_result = diagnostics_service.run(
             results_df=results_df,
             heatmap_data=heatmap_data,
         )
@@ -649,9 +763,25 @@ class InMemoryReservingBackend:
         score = self._diagnostics_service.compute_severity_score(run_result.findings)
         score += 0.2 * float(drop_count)
         severity_components = self._severity_components(findings)
+        governance = self._governance_assessment(
+            findings=findings,
+            severity_components=severity_components,
+        )
         scenario_metrics = cast(dict[str, Any], dict(run_result.metrics))
         scenario_metrics["severity_components"] = severity_components
-        scenario_metrics["governance_tier"] = self._governance_tier(findings)
+        scenario_metrics["governance_tier"] = governance["tier"]
+        scenario_metrics["governance_escalation_triggers"] = governance[
+            "escalation_triggers"
+        ]
+        scenario_metrics["governance_requires_human_review"] = governance[
+            "requires_human_review"
+        ]
+        scenario_metrics["threshold_calibration"] = calibration
+        uncertainty = self._uncertainty_service.baseline_uncertainty(
+            results_df=results_df,
+            heatmap_data=heatmap_data,
+        )
+        scenario_metrics["uncertainty"] = uncertainty
 
         return ScenarioEvaluation(
             scenario_id=scenario_id,
@@ -661,6 +791,14 @@ class InMemoryReservingBackend:
             findings=findings,
             recommendations=recommendations,
             metrics=scenario_metrics,
+            lineage={
+                "parent_scenario_id": parent_scenario_id,
+                "transform": transform,
+                "rationale_evidence_ids": rationale_evidence_ids,
+            },
+            governance=governance,
+            calibration=calibration,
+            uncertainty=uncertainty,
             run_metadata=run_metadata,
         )
 
@@ -671,8 +809,8 @@ class InMemoryReservingBackend:
         baseline: dict,
         baseline_eval: ScenarioEvaluation,
         max_scenarios: int,
-    ) -> list[tuple[str, dict, str]]:
-        scenarios: list[tuple[str, dict, str]] = []
+    ) -> list[ScenarioCandidate]:
+        scenarios: list[ScenarioCandidate] = []
         drop_recs = [
             rec
             for rec in baseline_eval.recommendations
@@ -700,7 +838,18 @@ class InMemoryReservingBackend:
             for pair in rec.proposed_parameters.get("drop", []):
                 if pair not in params["drop"]:
                     params["drop"].append(pair)
-            scenarios.append((f"drop_{index}", params, rec.message))
+            scenarios.append(
+                ScenarioCandidate(
+                    scenario_id=f"drop_{index}",
+                    params=params,
+                    summary=rec.message,
+                    parent_scenario_id="baseline",
+                    transform="apply_drop_recommendation",
+                    rationale_evidence_ids=[str(rec.evidence.evidence_id)]
+                    if rec.evidence.evidence_id
+                    else [],
+                )
+            )
 
         if len(drop_recs) >= 2:
             params = self._clone_params(baseline)
@@ -708,8 +857,20 @@ class InMemoryReservingBackend:
                 for pair in rec.proposed_parameters.get("drop", []):
                     if pair not in params["drop"]:
                         params["drop"].append(pair)
+            rationale_ids = [
+                str(rec.evidence.evidence_id)
+                for rec in drop_recs[:2]
+                if rec.evidence.evidence_id
+            ]
             scenarios.append(
-                ("drop_combo_1", params, "Combine top two drop candidates")
+                ScenarioCandidate(
+                    scenario_id="drop_combo_1",
+                    params=params,
+                    summary="Combine top two drop candidates",
+                    parent_scenario_id="baseline",
+                    transform="combine_drop_recommendations",
+                    rationale_evidence_ids=rationale_ids,
+                )
             )
 
         if tail_rec is not None:
@@ -722,10 +883,15 @@ class InMemoryReservingBackend:
                     params["tail"]["curve"] = curve
                     params["tail"]["fit_period"] = fit_period
                     scenarios.append(
-                        (
-                            f"tail_{curve}_{fit_period[0]}_{fit_period[-1]}",
-                            params,
-                            f"Tail sensitivity: curve={curve}, fit_period={fit_period}",
+                        ScenarioCandidate(
+                            scenario_id=f"tail_{curve}_{fit_period[0]}_{fit_period[-1]}",
+                            params=params,
+                            summary=f"Tail sensitivity: curve={curve}, fit_period={fit_period}",
+                            parent_scenario_id="baseline",
+                            transform="tail_curve_fit_period_grid",
+                            rationale_evidence_ids=[str(tail_rec.evidence.evidence_id)]
+                            if tail_rec.evidence.evidence_id
+                            else [],
                         )
                     )
 
@@ -735,10 +901,15 @@ class InMemoryReservingBackend:
                 bf_rec.proposed_parameters.get("bf_apriori", {})
             )
             scenarios.append(
-                (
-                    "bf_apriori_recommended",
-                    params,
-                    "Apply maturity-weighted BF apriori recommendations",
+                ScenarioCandidate(
+                    scenario_id="bf_apriori_recommended",
+                    params=params,
+                    summary="Apply maturity-weighted BF apriori recommendations",
+                    parent_scenario_id="baseline",
+                    transform="apply_bf_apriori_recommendation",
+                    rationale_evidence_ids=[str(bf_rec.evidence.evidence_id)]
+                    if bf_rec.evidence.evidence_id
+                    else [],
                 )
             )
 
@@ -751,11 +922,19 @@ class InMemoryReservingBackend:
             fit_periods = tail_params.get("fit_period_candidates", [])
             if fit_periods:
                 params["tail"]["fit_period"] = fit_periods[0]
+            rationale_ids: list[str] = []
+            if bf_rec.evidence.evidence_id:
+                rationale_ids.append(str(bf_rec.evidence.evidence_id))
+            if tail_rec.evidence.evidence_id:
+                rationale_ids.append(str(tail_rec.evidence.evidence_id))
             scenarios.append(
-                (
-                    "bf_plus_tail",
-                    params,
-                    "Combine BF apriori recommendation with tail-fit recommendation",
+                ScenarioCandidate(
+                    scenario_id="bf_plus_tail",
+                    params=params,
+                    summary="Combine BF apriori recommendation with tail-fit recommendation",
+                    parent_scenario_id="baseline",
+                    transform="combine_bf_and_tail_recommendations",
+                    rationale_evidence_ids=rationale_ids,
                 )
             )
 
@@ -961,8 +1140,48 @@ class InMemoryReservingBackend:
         for row in records:
             if not isinstance(row, dict):
                 continue
-            normalized.append({str(key): value for key, value in row.items()})
+            normalized.append(
+                {
+                    str(key): InMemoryReservingBackend._json_safe_value(value)
+                    for key, value in row.items()
+                }
+            )
         return normalized
+
+    @staticmethod
+    def _json_safe_value(value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, (list, tuple)):
+            return [InMemoryReservingBackend._json_safe_value(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                str(key): InMemoryReservingBackend._json_safe_value(item)
+                for key, item in value.items()
+            }
+        if value is pd.NA:
+            return None
+        if isinstance(value, float) and math.isnan(value):
+            return None
+        if isinstance(value, pd.Period):
+            return str(value)
+        if isinstance(value, pd.Timestamp):
+            return value.isoformat()
+        isoformat = getattr(value, "isoformat", None)
+        if callable(isoformat):
+            try:
+                return isoformat()
+            except Exception:
+                pass
+        item = getattr(value, "item", None)
+        if callable(item):
+            try:
+                return item()
+            except Exception:
+                pass
+        if isinstance(value, (str, int, float, bool)):
+            return value
+        return str(value)
 
     @staticmethod
     def _make_evidence_id(*, run_id: str, diagnostic_id: str, metric_id: str) -> str:
@@ -1093,13 +1312,180 @@ class InMemoryReservingBackend:
                 buckets["other"] += weight
         return {key: round(value, 4) for key, value in buckets.items()}
 
+    def _calibrated_diagnostics_service(
+        self,
+        *,
+        segment: str,
+        results_df: pd.DataFrame | None,
+        heatmap_data: dict | None,
+    ) -> tuple[DiagnosticsService, dict[str, Any]]:
+        calibration = self._calibrate_backtest_thresholds(
+            segment=segment,
+            results_df=results_df,
+            heatmap_data=heatmap_data,
+        )
+        diagnostics_service = DiagnosticsService(
+            backtest_bias_threshold=float(calibration["backtest_bias_threshold"]),
+            backtest_mae_threshold=float(calibration["backtest_mae_threshold"]),
+        )
+        return diagnostics_service, calibration
+
+    def _calibrate_backtest_thresholds(
+        self,
+        *,
+        segment: str,
+        results_df: pd.DataFrame | None,
+        heatmap_data: dict | None,
+    ) -> dict[str, Any]:
+        maturity_regime = self._maturity_regime(results_df)
+        residual_points = self._diagnostics_service._residual_points(heatmap_data)
+        abs_residuals = sorted(
+            abs(float(item.get("residual", 0.0) or 0.0)) for item in residual_points
+        )
+
+        segment_key = str(segment).strip().lower()
+        segment_multiplier = float(
+            self._SEGMENT_MULTIPLIER_BY_KEY.get(segment_key, 1.0)
+        )
+        maturity_multiplier = float(
+            self._MATURITY_MULTIPLIER_BY_REGIME.get(maturity_regime, 1.0)
+        )
+        floor_bias = (
+            self._DEFAULT_BACKTEST_BIAS_THRESHOLD
+            * segment_multiplier
+            * maturity_multiplier
+        )
+        floor_mae = (
+            self._DEFAULT_BACKTEST_MAE_THRESHOLD
+            * segment_multiplier
+            * maturity_multiplier
+        )
+
+        if len(abs_residuals) < 8:
+            return {
+                "segment": segment,
+                "maturity_regime": maturity_regime,
+                "residual_count": len(abs_residuals),
+                "backtest_bias_threshold": round(float(floor_bias), 4),
+                "backtest_mae_threshold": round(float(floor_mae), 4),
+                "method": "segment_maturity_floor",
+            }
+
+        empirical_bias = self._quantile(abs_residuals, 0.55)
+        empirical_mae = self._quantile(abs_residuals, 0.8)
+        calibrated_bias = min(0.45, max(floor_bias, empirical_bias))
+        calibrated_mae = min(0.65, max(floor_mae, empirical_mae))
+        return {
+            "segment": segment,
+            "maturity_regime": maturity_regime,
+            "residual_count": len(abs_residuals),
+            "backtest_bias_threshold": round(float(calibrated_bias), 4),
+            "backtest_mae_threshold": round(float(calibrated_mae), 4),
+            "method": "backtest_quantile_blend",
+        }
+
+    def _maturity_regime(self, results_df: pd.DataFrame | None) -> str:
+        maturity_map = self._diagnostics_service._build_maturity_map(results_df)
+        if not maturity_map:
+            return "mixed"
+        average_maturity = sum(maturity_map.values()) / len(maturity_map)
+        if average_maturity < 0.4:
+            return "immature"
+        if average_maturity >= 0.75:
+            return "mature"
+        return "mixed"
+
+    @staticmethod
+    def _quantile(values: list[float], q: float) -> float:
+        if not values:
+            return 0.0
+        if len(values) == 1:
+            return float(values[0])
+        clipped_q = min(max(float(q), 0.0), 1.0)
+        index = (len(values) - 1) * clipped_q
+        lower = int(index)
+        upper = min(lower + 1, len(values) - 1)
+        weight = index - lower
+        return float(values[lower] * (1.0 - weight) + values[upper] * weight)
+
+    @staticmethod
+    def _governance_assessment(
+        *,
+        findings: list[DiagnosticFinding],
+        severity_components: dict[str, float],
+    ) -> dict[str, Any]:
+        triggers: list[str] = []
+        critical_present = any(item.severity == "critical" for item in findings)
+        high_present = any(item.severity == "high" for item in findings)
+        unconfirmed_shift = any(
+            item.code.startswith("PORTFOLIO_SHIFT_SIGNAL_UNCONFIRMED")
+            for item in findings
+        )
+        severe_negative_development = any(
+            item.code == "NEGATIVE_DEVELOPMENT_TRIAGE"
+            and item.severity in {"high", "critical"}
+            for item in findings
+        )
+
+        if critical_present:
+            triggers.append("critical_finding_present")
+        if severity_components.get("data_quality", 0.0) >= 8.0:
+            triggers.append("data_quality_gate_block")
+        if (
+            severity_components.get("backtest", 0.0) >= 5.0
+            and severity_components.get("stability", 0.0) >= 5.0
+        ):
+            triggers.append("backtest_stability_joint_stress")
+        if severe_negative_development:
+            triggers.append("negative_development_escalation")
+        if unconfirmed_shift:
+            triggers.append("unconfirmed_portfolio_shift_signal")
+        if (
+            severity_components.get("tail", 0.0) >= 5.0
+            and severity_components.get("backtest", 0.0) >= 2.0
+        ):
+            triggers.append("tail_backtest_joint_stress")
+
+        if any(
+            token in triggers
+            for token in [
+                "critical_finding_present",
+                "data_quality_gate_block",
+                "backtest_stability_joint_stress",
+            ]
+        ):
+            tier = "red"
+        elif high_present or bool(triggers):
+            tier = "amber"
+        else:
+            tier = "green"
+
+        if tier == "red":
+            actions = [
+                "Mandatory actuarial lead review before sign-off",
+                "Record override rationale and approval chain",
+            ]
+        elif tier == "amber":
+            actions = ["Actuarial peer review required before parameter adoption"]
+        else:
+            actions = ["Standard reviewer sign-off"]
+
+        return {
+            "tier": tier,
+            "escalation_triggers": triggers,
+            "requires_human_review": tier in {"amber", "red"},
+            "required_actions": actions,
+        }
+
     @staticmethod
     def _governance_tier(findings: list[DiagnosticFinding]) -> str:
-        if any(item.severity == "critical" for item in findings):
-            return "red"
-        if any(item.severity == "high" for item in findings):
-            return "amber"
-        return "green"
+        severity_components = InMemoryReservingBackend._severity_components(findings)
+        return str(
+            InMemoryReservingBackend._governance_assessment(
+                findings=findings,
+                severity_components=severity_components,
+            )["tier"]
+        )
 
     @staticmethod
     def _params_from_store(context: SessionContext) -> dict:

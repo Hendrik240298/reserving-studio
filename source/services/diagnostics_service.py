@@ -44,7 +44,7 @@ class ShiftSignal:
 
 
 class DiagnosticsService:
-    DIAGNOSTICS_VERSION = "v2.1"
+    DIAGNOSTICS_VERSION = "v2.2"
 
     def __init__(
         self,

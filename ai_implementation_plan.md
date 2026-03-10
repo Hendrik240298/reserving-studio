@@ -35,17 +35,17 @@ This section supersedes earlier "immediate next actions" ordering and is the cur
    - Severity score decomposition for scenario explainability and auditability.
    - Deterministic conflict checks + narrative language gating.
 
-3. **Sprint 3 (current): Calibration and governance wiring**
+3. **Sprint 3 (completed 2026-03-09): Calibration and governance wiring**
    - Backtest-driven threshold calibration by segment/maturity regime.
    - Governance tiering (green/amber/red) and deterministic escalation triggers.
    - Scenario lineage (parent, transform, rationale evidence IDs).
 
-4. **Sprint 4: Uncertainty layer**
+4. **Sprint 4 (completed 2026-03-09): Uncertainty layer**
    - CL Mack MSEP and BF prediction error baseline service.
    - Bootstrap predictive distributions for scenario robustness.
    - Tail model averaging and instability flags.
 
-5. **Sprint 5: Decision UX and reporting**
+5. **Sprint 5 (completed 2026-03-09): Decision UX and reporting**
    - Scenario matrix, evidence trace, and conflict panel in GUI.
    - Structured override/sign-off capture and exportable decision packet.
 
@@ -79,6 +79,29 @@ Recently completed (2026-03-08):
 - Assistant orchestration policy to force `tool_iterate_diagnostics` before final recommendations when diagnostics have run.
 - Assistant output sanitization to strip leaked control blocks (for example `<system-reminder>...</system-reminder>`) from user-facing commentary.
 - Unit test coverage for Sprint 1 and Sprint 2 deliverables.
+
+Recently completed (2026-03-09):
+
+- Backtest-driven threshold calibration with deterministic segment and maturity-regime adjustments.
+- Deterministic governance escalation wiring (`green|amber|red`) with explicit escalation triggers and required review actions.
+- Scenario lineage metadata for iterative diagnostics (`parent_scenario_id`, `transform`, `rationale_evidence_ids`).
+- Unit test coverage for Sprint 3 calibration, governance, and lineage deliverables.
+
+Recently completed (2026-03-09, Sprint 4):
+
+- Added deterministic uncertainty service with baseline Mack-style MSEP and BF prediction error outputs (`mack_msep_by_uwy`, `bf_prediction_error_by_uwy`, aggregate variance/SD/CV).
+- Added bootstrap predictive distribution summaries (`p10/p50/p75/p90/p95`, mean, std, IQR, right-tail skew ratio) for scenario robustness.
+- Added tail model averaging outputs (weighted average score, curve weights, preferred curve) plus instability flags.
+- Wired uncertainty payloads into diagnostics and iterate responses (including baseline, bootstrap, and tail-model blocks) using backward-compatible optional fields.
+- Added contract and integration tests validating uncertainty blocks on `/v1/diagnostics/run` and `/v1/diagnostics/iterate`, plus uncertainty service regression fixtures.
+
+Recently completed (2026-03-09, Sprint 5):
+
+- Added a dedicated Dash AI Review workspace tab in the existing reserving-studio UI (kept separate from core reserving tabs).
+- Implemented decision UX panels in the AI tab: chat interface, scenario matrix, evidence trace, governance summary, and override/sign-off capture.
+- Wired deterministic diagnostics iteration into UI-facing AI review payloads (scenario trade-offs + evidence links + governance and uncertainty summaries).
+- Added exportable decision packet generation from UI state and persisted AI artifacts to session payload keys (`ai_findings`, `ai_commentary`, `ai_evidence_refs`, `ai_model_meta`, governance, overrides, decision packet).
+- Added unit coverage for new AI review helper behaviors and validated full unit suite stability.
 
 ## 1) Vision and non-goals
 

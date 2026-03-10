@@ -56,6 +56,7 @@ class FakeBackend:
         return DiagnosticsResponse(
             session_id=payload.session_id,
             findings=[],
+            uncertainty={"version": "v1.1", "total_process_cv": 0.22},
             run_metadata=RunMetadata(
                 run_id="run-1",
                 generated_at=datetime.now(timezone.utc),
@@ -70,6 +71,11 @@ class FakeBackend:
             session_id=payload.session_id,
             baseline=None,
             scenarios=[],
+            uncertainty={
+                "baseline": {"version": "v1.1", "total_process_cv": 0.22},
+                "bootstrap": {"sample_count": 100},
+                "tail_model": {"instability_flag": False},
+            },
             run_metadata=RunMetadata(
                 run_id="run-2",
                 generated_at=datetime.now(timezone.utc),
@@ -136,6 +142,7 @@ def test_api_scaffold_endpoints() -> None:
     assert diagnostics_response.status_code == 200
     assert diagnostics_response.json()["session_id"] == "s-1"
     assert diagnostics_response.json()["run_metadata"]["run_id"] == "run-1"
+    assert diagnostics_response.json()["uncertainty"]["version"] == "v1.1"
 
     iterate_response = client.post(
         "/v1/diagnostics/iterate",
@@ -144,6 +151,7 @@ def test_api_scaffold_endpoints() -> None:
     assert iterate_response.status_code == 200
     assert iterate_response.json()["session_id"] == "s-1"
     assert iterate_response.json()["run_metadata"]["run_id"] == "run-2"
+    assert "bootstrap" in iterate_response.json()["uncertainty"]
 
     results_response = client.get("/v1/results/s-1")
     assert results_response.status_code == 200

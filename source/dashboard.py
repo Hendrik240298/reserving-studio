@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Tuple, TYPE_CHECKING
 
@@ -980,6 +981,7 @@ class Dashboard:
             Input("nav-chainladder", "n_clicks"),
             Input("nav-bf", "n_clicks"),
             Input("nav-results", "n_clicks"),
+            Input("nav-ai", "n_clicks"),
             State("active-tab", "data"),
         )
         def _set_active_tab(
@@ -987,6 +989,7 @@ class Dashboard:
             chainladder_clicks,
             bf_clicks,
             results_clicks,
+            ai_clicks,
             current_tab,
         ):
             ctx = callback_context
@@ -998,6 +1001,7 @@ class Dashboard:
                 "nav-chainladder": "chainladder",
                 "nav-bf": "bornhuetter_ferguson",
                 "nav-results": "results",
+                "nav-ai": "ai_review",
             }
             return mapping.get(trigger, current_tab)
 
@@ -1019,10 +1023,12 @@ class Dashboard:
             Output("nav-chainladder", "style"),
             Output("nav-bf", "style"),
             Output("nav-results", "style"),
+            Output("nav-ai", "style"),
             Output("nav-data", "children"),
             Output("nav-chainladder", "children"),
             Output("nav-bf", "children"),
             Output("nav-results", "children"),
+            Output("nav-ai", "children"),
             Output("sidebar-toggle", "children"),
             Output("sidebar-toggle", "style"),
             Input("active-tab", "data"),
@@ -1096,6 +1102,7 @@ class Dashboard:
                 "chainladder": "Chainladder",
                 "bornhuetter_ferguson": "Bornhuetter-Ferguson",
                 "results": "Results",
+                "ai_review": "AI Review",
             }
             labels = labels_full if not is_collapsed else {}
             toggle_label = ">" if is_collapsed else "<"
@@ -1137,10 +1144,14 @@ class Dashboard:
                 collapsed_button_style
                 if is_collapsed
                 else (active_style if active_tab == "results" else inactive_style),
+                collapsed_button_style
+                if is_collapsed
+                else (active_style if active_tab == "ai_review" else inactive_style),
                 labels.get("data", ""),
                 labels.get("chainladder", ""),
                 labels.get("bornhuetter_ferguson", ""),
                 labels.get("results", ""),
+                labels.get("ai_review", ""),
                 toggle_label,
                 toggle_style,
             )
@@ -1150,6 +1161,7 @@ class Dashboard:
             Output("tab-chainladder", "style"),
             Output("tab-bf", "style"),
             Output("tab-results", "style"),
+            Output("tab-ai", "style"),
             Input("active-tab", "data"),
         )
         def _toggle_tab_visibility(active_tab):
@@ -1216,6 +1228,23 @@ class Dashboard:
                 **results_style,
                 "display": "none",
             }
+            ai_style = {
+                "display": "block",
+                "width": "100%",
+                "background": COLOR_SURFACE,
+                "border": f"1px solid {COLOR_BORDER}",
+                "borderRadius": RADIUS_LG,
+                "padding": "14px",
+                "boxShadow": SHADOW_SOFT,
+                "minHeight": "70vh",
+                "boxSizing": "border-box",
+                "maxWidth": "100%",
+                "overflowX": "hidden",
+            }
+            ai_hidden = {
+                **ai_style,
+                "display": "none",
+            }
 
             return (
                 data_style if active_tab == "data" else data_hidden,
@@ -1224,6 +1253,7 @@ class Dashboard:
                 else chainladder_hidden,
                 bf_style if active_tab == "bornhuetter_ferguson" else bf_hidden,
                 results_style if active_tab == "results" else results_hidden,
+                ai_style if active_tab == "ai_review" else ai_hidden,
             )
 
         @self.app.callback(
@@ -1798,6 +1828,164 @@ class Dashboard:
             return "Finalized. You can continue in your Python script.", True
 
         @self.app.callback(
+            Output("ai-review-store", "data"),
+            Output("ai-chat-history-store", "data"),
+            Output("ai-chat-transcript", "children"),
+            Output("ai-status", "children"),
+            Output("ai-scenario-matrix", "data"),
+            Output("ai-evidence-trace", "data"),
+            Output("ai-governance-panel", "children"),
+            Output("ai-commentary-output", "children"),
+            Input("ai-run-review-button", "n_clicks"),
+            State("params-store", "data"),
+            prevent_initial_call=True,
+        )
+        def _run_ai_review(n_clicks, params_store_data):
+            if not n_clicks:
+                return (no_update,) * 8
+            try:
+                review_data = self._build_ai_review_payload(params_store_data)
+            except Exception as exc:
+                logging.exception("AI review generation failed")
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    f"AI review failed: {exc}",
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                )
+
+            initial_history = [
+                {
+                    "role": "assistant",
+                    "content": str(review_data.get("ai_commentary", "")),
+                }
+            ]
+            governance = review_data.get("governance")
+            uncertainty = review_data.get("uncertainty")
+            governance_panel = html.Div(
+                [
+                    html.Div(
+                        f"Tier: {str((governance or {}).get('tier', 'unknown')).upper()}",
+                        style={"fontWeight": 700, "marginBottom": "6px"},
+                    ),
+                    html.Div(
+                        self._summarize_governance_text(governance, uncertainty),
+                        style={"fontSize": "13px", "color": COLOR_MUTED},
+                    ),
+                ]
+            )
+            return (
+                review_data,
+                initial_history,
+                self._render_ai_chat_transcript(initial_history),
+                "AI review completed.",
+                review_data.get("scenario_matrix", []),
+                review_data.get("evidence_trace", []),
+                governance_panel,
+                review_data.get("ai_commentary", ""),
+            )
+
+        @self.app.callback(
+            Output("ai-chat-history-store", "data"),
+            Output("ai-chat-transcript", "children"),
+            Output("ai-chat-input", "value"),
+            Input("ai-chat-send-button", "n_clicks"),
+            State("ai-chat-input", "value"),
+            State("ai-chat-history-store", "data"),
+            State("ai-review-store", "data"),
+            prevent_initial_call=True,
+        )
+        def _chat_with_ai(_n_clicks, prompt_value, history_data, review_data):
+            prompt = str(prompt_value or "").strip()
+            if not prompt:
+                return no_update, no_update, no_update
+            history: list[dict[str, str]] = []
+            if isinstance(history_data, list):
+                for item in history_data:
+                    if isinstance(item, dict):
+                        history.append(
+                            {
+                                "role": str(item.get("role", "assistant")),
+                                "content": str(item.get("content", "")),
+                            }
+                        )
+            history.append({"role": "user", "content": prompt})
+            response = self._answer_ai_chat_prompt(prompt, review_data)
+            history.append({"role": "assistant", "content": response})
+            return history, self._render_ai_chat_transcript(history), ""
+
+        @self.app.callback(
+            Output("ai-review-store", "data"),
+            Output("ai-decision-status", "children"),
+            Input("ai-save-decision-button", "n_clicks"),
+            State("ai-override-decision", "value"),
+            State("ai-override-approver", "value"),
+            State("ai-override-rationale", "value"),
+            State("ai-review-store", "data"),
+            prevent_initial_call=True,
+        )
+        def _save_ai_decision(
+            n_clicks,
+            decision,
+            approver,
+            rationale,
+            review_data,
+        ):
+            if not n_clicks:
+                return no_update, no_update
+            if not isinstance(review_data, dict):
+                return no_update, "Run AI review first."
+
+            updated = dict(review_data)
+            updated["ai_override"] = {
+                "decision": str(decision or "pending"),
+                "approver": str(approver or "").strip(),
+                "rationale": str(rationale or "").strip(),
+                "signed_off_at": datetime.now(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
+            }
+            updated["ai_decision_packet"] = self._build_ai_decision_packet(updated)
+
+            if self._config is not None:
+                session_payload = self._config.load_session()
+                session_payload["ai_findings"] = updated.get("ai_findings", [])
+                session_payload["ai_commentary"] = updated.get("ai_commentary", "")
+                session_payload["ai_evidence_refs"] = updated.get(
+                    "ai_evidence_refs", []
+                )
+                session_payload["ai_model_meta"] = updated.get("ai_model_meta", {})
+                session_payload["ai_governance"] = updated.get("governance", {})
+                session_payload["ai_override"] = updated.get("ai_override", {})
+                session_payload["ai_decision_packet"] = updated.get(
+                    "ai_decision_packet", {}
+                )
+                self._config.save_session_with_version(session_payload)
+                return updated, "AI decision saved to session."
+            return updated, "AI decision saved in current run state."
+
+        @self.app.callback(
+            Output("ai-decision-download", "data"),
+            Input("ai-export-decision-button", "n_clicks"),
+            State("ai-review-store", "data"),
+            prevent_initial_call=True,
+        )
+        def _export_ai_decision_packet(n_clicks, review_data):
+            if not n_clicks or not isinstance(review_data, dict):
+                return no_update
+            packet = self._build_ai_decision_packet(review_data)
+            segment = self._get_segment_key()
+            return {
+                "content": json.dumps(packet, indent=2, default=str),
+                "filename": f"{segment}-ai-decision-packet.json",
+                "type": "application/json",
+            }
+
+        @self.app.callback(
             Output("triangle-base-figure", "data"),
             Output("emergence-plot", "figure"),
             Input("results-store", "data"),
@@ -1927,6 +2115,336 @@ class Dashboard:
                 color_border=COLOR_BORDER,
             )
 
+    def _build_ai_review_payload(
+        self,
+        params_store_data: object,
+        *,
+        max_scenarios: int = 16,
+    ) -> dict:
+        from source.api.adapters.reserving_adapter import (
+            InMemoryReservingBackend,
+            SessionContext,
+        )
+        from source.api.schemas import ParamsStore, ResultsStoreMeta
+        from source.services.diagnostics_service import DiagnosticsService
+        from source.services.uncertainty_service import UncertaintyService
+
+        params_payload = (
+            params_store_data if isinstance(params_store_data, dict) else {}
+        )
+        params = self._params_service.build_params_state(
+            drop_store=params_payload.get("drop_store", self._default_drop_store),
+            average=params_payload.get("average", self._default_average),
+            tail_attachment_age=params_payload.get(
+                "tail_attachment_age", self._default_tail_attachment_age
+            ),
+            tail_projection_months=params_payload.get(
+                "tail_projection_months", self._default_tail_projection_months
+            ),
+            tail_curve=params_payload.get("tail_curve", self._default_tail_curve),
+            tail_fit_period_selection=params_payload.get(
+                "tail_fit_period_selection",
+                self._default_tail_fit_period_selection,
+            ),
+            bf_apriori_by_uwy=params_payload.get(
+                "bf_apriori_by_uwy",
+                self._params_service.bf_rows_to_mapping(self._default_bf_apriori_rows),
+            ),
+            selected_ultimate_by_uwy=params_payload.get(
+                "selected_ultimate_by_uwy",
+                self._default_selected_ultimate_by_uwy,
+            ),
+            request_id=0,
+            source="ai-review",
+            force_recalc=False,
+            sync_version=0,
+        )
+        params_store = ParamsStore(
+            request_id=0,
+            source="ai-review",
+            force_recalc=False,
+            drop_store=params.get("drop_store", []),
+            tail_attachment_age=params.get("tail_attachment_age"),
+            tail_projection_months=int(params.get("tail_projection_months", 0) or 0),
+            tail_fit_period_selection=params.get("tail_fit_period_selection", []),
+            average=str(params.get("average", self._default_average)),
+            tail_curve=str(params.get("tail_curve", self._default_tail_curve)),
+            bf_apriori_by_uwy=dict(params.get("bf_apriori_by_uwy", {})),
+            selected_ultimate_by_uwy=dict(params.get("selected_ultimate_by_uwy", {})),
+            sync_version=0,
+        )
+
+        backend = InMemoryReservingBackend.__new__(InMemoryReservingBackend)
+        backend._diagnostics_service = DiagnosticsService()
+        backend._uncertainty_service = UncertaintyService()
+        context = SessionContext(
+            session_id=f"{self._get_segment_key()}-dash-ai",
+            segment=self._get_segment_key(),
+            reserving=self._reserving,
+            sync_version=0,
+            params_store=params_store,
+            results_store_meta=ResultsStoreMeta(),
+            last_results_payload={},
+        )
+
+        baseline_params = backend._params_from_store(context)
+        baseline_eval = backend._evaluate_scenario(
+            context=context,
+            scenario_id="baseline",
+            params=baseline_params,
+            summary="Current UI configuration",
+            parent_scenario_id=None,
+            transform="baseline",
+            rationale_evidence_ids=[],
+        )
+        scenario_candidates = backend._build_scenario_candidates(
+            context=context,
+            baseline=baseline_params,
+            baseline_eval=baseline_eval,
+            max_scenarios=max_scenarios,
+        )
+        scenario_evals = [
+            backend._evaluate_scenario(
+                context=context,
+                scenario_id=candidate.scenario_id,
+                params=candidate.params,
+                summary=candidate.summary,
+                parent_scenario_id=candidate.parent_scenario_id,
+                transform=candidate.transform,
+                rationale_evidence_ids=candidate.rationale_evidence_ids,
+            )
+            for candidate in scenario_candidates
+        ]
+        ordered = sorted(scenario_evals, key=lambda item: item.score)
+        best = ordered[0] if ordered else baseline_eval
+
+        bootstrap = backend._uncertainty_service.bootstrap_predictive_distribution(
+            results_df=self._reserving.get_results(),
+            heatmap_data=self._reserving.get_triangle_heatmap_data(),
+        )
+        tail_model = backend._uncertainty_service.tail_model_assessment(
+            scenarios=[
+                {
+                    "scenario_id": item.scenario_id,
+                    "score": item.score,
+                    "transform": item.lineage.get("transform", ""),
+                    "parameters": item.parameters,
+                }
+                for item in ordered
+            ]
+        )
+        aggregate_uncertainty = {
+            "baseline": baseline_eval.uncertainty,
+            "bootstrap": bootstrap,
+            "tail_model": tail_model,
+        }
+
+        scenario_matrix = [
+            {
+                "scenario_id": item.scenario_id,
+                "score": item.score,
+                "governance_tier": item.governance.get("tier", "green"),
+                "summary": item.summary,
+                "transform": item.lineage.get("transform", "baseline"),
+                "evidence_refs": ", ".join(
+                    item.lineage.get("rationale_evidence_ids", [])
+                ),
+            }
+            for item in ([baseline_eval] + ordered)
+        ]
+
+        evidence_trace: list[dict[str, object]] = []
+        for finding in baseline_eval.findings:
+            evidence_trace.append(
+                {
+                    "kind": "finding",
+                    "evidence_id": finding.evidence.evidence_id or "",
+                    "code": finding.code,
+                    "severity": finding.severity,
+                    "message": finding.message,
+                    "metric": finding.evidence.metric_id,
+                    "value": finding.evidence.value,
+                    "threshold": finding.evidence.threshold,
+                }
+            )
+        for recommendation in baseline_eval.recommendations:
+            evidence_trace.append(
+                {
+                    "kind": "recommendation",
+                    "evidence_id": recommendation.evidence.evidence_id or "",
+                    "code": recommendation.code,
+                    "severity": recommendation.priority,
+                    "message": recommendation.message,
+                    "metric": recommendation.evidence.metric_id,
+                    "value": recommendation.evidence.value,
+                    "threshold": recommendation.evidence.threshold,
+                }
+            )
+
+        backend._apply_params_to_reserving(context, baseline_params)
+
+        ai_findings = [item.model_dump() for item in baseline_eval.findings]
+        ai_evidence_refs = [
+            str(row.get("evidence_id", "")).strip()
+            for row in evidence_trace
+            if str(row.get("evidence_id", "")).strip()
+        ]
+        commentary = self._build_ai_commentary(
+            baseline=baseline_eval,
+            best=best,
+            uncertainty=aggregate_uncertainty,
+        )
+        model_meta = {
+            "engine": "deterministic-ai-review",
+            "diagnostics_version": DiagnosticsService.DIAGNOSTICS_VERSION,
+            "generated_at": datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
+        }
+        return {
+            "governance": best.governance,
+            "uncertainty": aggregate_uncertainty,
+            "scenario_matrix": scenario_matrix,
+            "evidence_trace": evidence_trace,
+            "ai_findings": ai_findings,
+            "ai_commentary": commentary,
+            "ai_evidence_refs": ai_evidence_refs,
+            "ai_model_meta": model_meta,
+            "ai_override": {},
+            "ai_decision_packet": {},
+        }
+
+    def _build_ai_commentary(self, *, baseline, best, uncertainty: dict) -> str:
+        baseline_score = float(getattr(baseline, "score", 0.0) or 0.0)
+        best_score = float(getattr(best, "score", baseline_score) or baseline_score)
+        delta = baseline_score - best_score
+        tier = str(best.governance.get("tier", "green")).upper()
+        cv = (
+            uncertainty.get("baseline", {}).get("total_process_cv")
+            if isinstance(uncertainty.get("baseline"), dict)
+            else None
+        )
+        tail_instability = bool(
+            (uncertainty.get("tail_model", {}) or {}).get("instability_flag", False)
+        )
+        cv_text = "n/a" if cv is None else f"{float(cv):.3f}"
+        instability_text = "elevated" if tail_instability else "contained"
+        return (
+            f"Executive view: best scenario improves severity score by {delta:.2f} points versus baseline. "
+            f"Current governance tier is {tier}. Process CV is {cv_text}, and tail instability is {instability_text}. "
+            "Use the scenario matrix and evidence trace below to document sign-off rationale."
+        )
+
+    @staticmethod
+    def _render_ai_chat_transcript(history: list[dict[str, str]]) -> str:
+        lines: list[str] = []
+        for item in history:
+            role = str(item.get("role", "assistant")).strip().lower()
+            label = "You" if role == "user" else "Assistant"
+            content = str(item.get("content", "")).strip()
+            if not content:
+                continue
+            lines.append(f"**{label}:** {content}")
+        return "\n\n".join(lines)
+
+    def _answer_ai_chat_prompt(self, prompt: str, review_data: object) -> str:
+        text = str(prompt or "").strip().lower()
+        if not isinstance(review_data, dict):
+            return "Run AI review first so I can answer from deterministic evidence."
+        governance = review_data.get("governance", {})
+        uncertainty = review_data.get("uncertainty", {})
+        scenario_matrix = review_data.get("scenario_matrix", [])
+        evidence_trace = review_data.get("evidence_trace", [])
+
+        if "governance" in text or "escalation" in text:
+            tier = str((governance or {}).get("tier", "unknown")).upper()
+            triggers = (governance or {}).get("escalation_triggers", [])
+            trigger_text = ", ".join(str(item) for item in triggers) or "none"
+            return f"Governance tier is {tier}. Escalation triggers: {trigger_text}."
+
+        if "uncertainty" in text or "bootstrap" in text or "msep" in text:
+            baseline = (
+                uncertainty.get("baseline", {}) if isinstance(uncertainty, dict) else {}
+            )
+            bootstrap = (
+                uncertainty.get("bootstrap", {})
+                if isinstance(uncertainty, dict)
+                else {}
+            )
+            cv = baseline.get("total_process_cv")
+            p90 = bootstrap.get("p90")
+            p50 = bootstrap.get("p50")
+            return (
+                f"Uncertainty view: process CV={cv}, bootstrap median={p50}, bootstrap p90={p90}. "
+                "Use these as a range instead of relying on a single point estimate."
+            )
+
+        if "scenario" in text or "best" in text:
+            if isinstance(scenario_matrix, list) and scenario_matrix:
+                best = scenario_matrix[0]
+                return (
+                    f"Top scenario is {best.get('scenario_id')} with score={best.get('score')} "
+                    f"and governance tier={best.get('governance_tier')}."
+                )
+            return "No scenario matrix available yet."
+
+        if "evidence" in text or "why" in text:
+            if isinstance(evidence_trace, list) and evidence_trace:
+                top = evidence_trace[0]
+                return (
+                    f"Primary evidence: {top.get('code')} (severity={top.get('severity')}) "
+                    f"with evidence_id={top.get('evidence_id')}."
+                )
+            return "No evidence trace available yet."
+
+        return (
+            "I can answer governance, uncertainty, scenario, and evidence questions. "
+            "Try: 'What is the governance tier?' or 'Summarize uncertainty range'."
+        )
+
+    @staticmethod
+    def _summarize_governance_text(governance: object, uncertainty: object) -> str:
+        tier = (
+            str((governance or {}).get("tier", "unknown")).upper()
+            if isinstance(governance, dict)
+            else "UNKNOWN"
+        )
+        triggers: list[str] = []
+        if isinstance(governance, dict):
+            raw = governance.get("escalation_triggers", [])
+            if isinstance(raw, list):
+                triggers = [str(item) for item in raw]
+        cv = None
+        tail_instability = None
+        if isinstance(uncertainty, dict):
+            baseline = uncertainty.get("baseline")
+            if isinstance(baseline, dict):
+                cv = baseline.get("total_process_cv")
+            tail = uncertainty.get("tail_model")
+            if isinstance(tail, dict):
+                tail_instability = tail.get("instability_flag")
+        trigger_text = ", ".join(triggers) if triggers else "no escalation triggers"
+        return (
+            f"{tier} governance with {trigger_text}. "
+            f"Process CV={cv}; tail instability={tail_instability}."
+        )
+
+    @staticmethod
+    def _build_ai_decision_packet(review_data: dict) -> dict:
+        return {
+            "generated_at": datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "ai_model_meta": review_data.get("ai_model_meta", {}),
+            "ai_commentary": review_data.get("ai_commentary", ""),
+            "governance": review_data.get("governance", {}),
+            "uncertainty": review_data.get("uncertainty", {}),
+            "scenario_matrix": review_data.get("scenario_matrix", []),
+            "evidence_trace": review_data.get("evidence_trace", []),
+            "ai_evidence_refs": review_data.get("ai_evidence_refs", []),
+            "ai_override": review_data.get("ai_override", {}),
+        }
+
     def _create_layout(self):
         """
         Create the Dash layout for the dashboard with tabbed interface.
@@ -1991,12 +2509,15 @@ class Dashboard:
                 dcc.Store(id="sync-tab-id", data=""),
                 dcc.Store(id="sync-ready", data=False),
                 dcc.Store(id="sync-publish-message", data=None),
+                dcc.Store(id="ai-review-store", data={}),
+                dcc.Store(id="ai-chat-history-store", data=[]),
                 dcc.Input(
                     id="sync-inbox",
                     type="text",
                     value="",
                     style={"display": "none"},
                 ),
+                dcc.Download(id="ai-decision-download"),
                 html.Div(id="sync-publish-signal", style={"display": "none"}),
                 html.Div(
                     [
@@ -2021,6 +2542,7 @@ class Dashboard:
                                         html.Button(id="nav-chainladder", n_clicks=0),
                                         html.Button(id="nav-bf", n_clicks=0),
                                         html.Button(id="nav-results", n_clicks=0),
+                                        html.Button(id="nav-ai", n_clicks=0),
                                     ],
                                     id="nav-stack",
                                 ),
@@ -2659,6 +3181,340 @@ class Dashboard:
                                                 "padding": "12px",
                                                 "boxShadow": SHADOW_SOFT,
                                             },
+                                        ),
+                                        html.Div(
+                                            [
+                                                html.Div(
+                                                    [
+                                                        html.Button(
+                                                            "Run AI Review",
+                                                            id="ai-run-review-button",
+                                                            n_clicks=0,
+                                                            style={
+                                                                "padding": "8px 12px",
+                                                                "background": COLOR_ACCENT,
+                                                                "color": "#ffffff",
+                                                                "border": "none",
+                                                                "borderRadius": RADIUS_MD,
+                                                                "fontWeight": 600,
+                                                                "cursor": "pointer",
+                                                            },
+                                                        ),
+                                                        html.Span(
+                                                            "",
+                                                            id="ai-status",
+                                                            style={
+                                                                "fontSize": "13px",
+                                                                "color": COLOR_MUTED,
+                                                            },
+                                                        ),
+                                                    ],
+                                                    style={
+                                                        "display": "flex",
+                                                        "alignItems": "center",
+                                                        "gap": "10px",
+                                                        "marginBottom": "12px",
+                                                        "flexWrap": "wrap",
+                                                    },
+                                                ),
+                                                html.Div(
+                                                    [
+                                                        dcc.Textarea(
+                                                            id="ai-chat-input",
+                                                            placeholder="Ask about governance, uncertainty, scenarios, or evidence...",
+                                                            style={
+                                                                "width": "100%",
+                                                                "minHeight": "72px",
+                                                                "border": f"1px solid {COLOR_BORDER}",
+                                                                "borderRadius": RADIUS_MD,
+                                                                "padding": "8px",
+                                                                "fontFamily": FONT_FAMILY,
+                                                            },
+                                                        ),
+                                                        html.Button(
+                                                            "Send",
+                                                            id="ai-chat-send-button",
+                                                            n_clicks=0,
+                                                            style={
+                                                                "marginTop": "8px",
+                                                                "padding": "8px 12px",
+                                                                "border": f"1px solid {COLOR_BORDER}",
+                                                                "borderRadius": RADIUS_MD,
+                                                                "background": COLOR_SURFACE,
+                                                                "cursor": "pointer",
+                                                            },
+                                                        ),
+                                                        dcc.Markdown(
+                                                            id="ai-chat-transcript",
+                                                            style={
+                                                                "marginTop": "12px",
+                                                                "padding": "10px",
+                                                                "background": "#f9fbfe",
+                                                                "border": f"1px solid {COLOR_BORDER}",
+                                                                "borderRadius": RADIUS_MD,
+                                                                "minHeight": "140px",
+                                                            },
+                                                        ),
+                                                    ],
+                                                    style={
+                                                        "background": COLOR_SURFACE,
+                                                        "border": f"1px solid {COLOR_BORDER}",
+                                                        "borderRadius": RADIUS_LG,
+                                                        "padding": "12px",
+                                                        "marginBottom": "12px",
+                                                    },
+                                                ),
+                                                html.Div(
+                                                    id="ai-commentary-output",
+                                                    style={
+                                                        "background": "#f7fafc",
+                                                        "border": f"1px solid {COLOR_BORDER}",
+                                                        "borderRadius": RADIUS_MD,
+                                                        "padding": "10px",
+                                                        "fontSize": "13px",
+                                                        "marginBottom": "12px",
+                                                    },
+                                                ),
+                                                html.Div(
+                                                    [
+                                                        html.Div(
+                                                            [
+                                                                html.H4(
+                                                                    "Scenario Matrix",
+                                                                    style={
+                                                                        "margin": "0 0 8px 0"
+                                                                    },
+                                                                ),
+                                                                dash_table.DataTable(
+                                                                    id="ai-scenario-matrix",
+                                                                    columns=[
+                                                                        {
+                                                                            "name": "Scenario",
+                                                                            "id": "scenario_id",
+                                                                        },
+                                                                        {
+                                                                            "name": "Score",
+                                                                            "id": "score",
+                                                                        },
+                                                                        {
+                                                                            "name": "Tier",
+                                                                            "id": "governance_tier",
+                                                                        },
+                                                                        {
+                                                                            "name": "Transform",
+                                                                            "id": "transform",
+                                                                        },
+                                                                        {
+                                                                            "name": "Evidence",
+                                                                            "id": "evidence_refs",
+                                                                        },
+                                                                    ],
+                                                                    data=[],
+                                                                    style_table={
+                                                                        "overflowX": "auto"
+                                                                    },
+                                                                    style_cell={
+                                                                        "fontFamily": FONT_FAMILY,
+                                                                        "fontSize": f"{TABLE_CELL_FONT_SIZE}px",
+                                                                        "padding": "8px",
+                                                                        "border": f"1px solid {COLOR_BORDER}",
+                                                                        "textAlign": "left",
+                                                                    },
+                                                                    style_header={
+                                                                        "fontWeight": 600,
+                                                                        "backgroundColor": "#f2f5f9",
+                                                                        "border": f"1px solid {COLOR_BORDER}",
+                                                                    },
+                                                                ),
+                                                            ],
+                                                            style={
+                                                                "marginBottom": "12px"
+                                                            },
+                                                        ),
+                                                        html.Div(
+                                                            [
+                                                                html.H4(
+                                                                    "Evidence Trace",
+                                                                    style={
+                                                                        "margin": "0 0 8px 0"
+                                                                    },
+                                                                ),
+                                                                dash_table.DataTable(
+                                                                    id="ai-evidence-trace",
+                                                                    columns=[
+                                                                        {
+                                                                            "name": "Kind",
+                                                                            "id": "kind",
+                                                                        },
+                                                                        {
+                                                                            "name": "Evidence ID",
+                                                                            "id": "evidence_id",
+                                                                        },
+                                                                        {
+                                                                            "name": "Code",
+                                                                            "id": "code",
+                                                                        },
+                                                                        {
+                                                                            "name": "Severity",
+                                                                            "id": "severity",
+                                                                        },
+                                                                        {
+                                                                            "name": "Metric",
+                                                                            "id": "metric",
+                                                                        },
+                                                                        {
+                                                                            "name": "Value",
+                                                                            "id": "value",
+                                                                        },
+                                                                    ],
+                                                                    data=[],
+                                                                    style_table={
+                                                                        "overflowX": "auto"
+                                                                    },
+                                                                    style_cell={
+                                                                        "fontFamily": FONT_FAMILY,
+                                                                        "fontSize": f"{TABLE_CELL_FONT_SIZE}px",
+                                                                        "padding": "8px",
+                                                                        "border": f"1px solid {COLOR_BORDER}",
+                                                                        "textAlign": "left",
+                                                                    },
+                                                                    style_header={
+                                                                        "fontWeight": 600,
+                                                                        "backgroundColor": "#f2f5f9",
+                                                                        "border": f"1px solid {COLOR_BORDER}",
+                                                                    },
+                                                                ),
+                                                            ],
+                                                            style={
+                                                                "marginBottom": "12px"
+                                                            },
+                                                        ),
+                                                        html.Div(
+                                                            id="ai-governance-panel",
+                                                            style={
+                                                                "background": "#f9fbfe",
+                                                                "border": f"1px solid {COLOR_BORDER}",
+                                                                "borderRadius": RADIUS_MD,
+                                                                "padding": "10px",
+                                                                "marginBottom": "12px",
+                                                            },
+                                                        ),
+                                                    ]
+                                                ),
+                                                html.Div(
+                                                    [
+                                                        html.H4(
+                                                            "Override and Sign-off",
+                                                            style={
+                                                                "margin": "0 0 8px 0"
+                                                            },
+                                                        ),
+                                                        dcc.Dropdown(
+                                                            id="ai-override-decision",
+                                                            options=[
+                                                                {
+                                                                    "label": "Approve",
+                                                                    "value": "approve",
+                                                                },
+                                                                {
+                                                                    "label": "Approve with conditions",
+                                                                    "value": "approve_with_conditions",
+                                                                },
+                                                                {
+                                                                    "label": "Escalate",
+                                                                    "value": "escalate",
+                                                                },
+                                                                {
+                                                                    "label": "Reject",
+                                                                    "value": "reject",
+                                                                },
+                                                            ],
+                                                            value="approve_with_conditions",
+                                                            clearable=False,
+                                                            style={
+                                                                "maxWidth": "320px",
+                                                                "marginBottom": "8px",
+                                                            },
+                                                        ),
+                                                        dcc.Input(
+                                                            id="ai-override-approver",
+                                                            type="text",
+                                                            placeholder="Approver name",
+                                                            style={
+                                                                "width": "320px",
+                                                                "padding": "8px",
+                                                                "border": f"1px solid {COLOR_BORDER}",
+                                                                "borderRadius": RADIUS_MD,
+                                                                "marginBottom": "8px",
+                                                            },
+                                                        ),
+                                                        dcc.Textarea(
+                                                            id="ai-override-rationale",
+                                                            placeholder="Document rationale and conditions...",
+                                                            style={
+                                                                "width": "100%",
+                                                                "minHeight": "90px",
+                                                                "border": f"1px solid {COLOR_BORDER}",
+                                                                "borderRadius": RADIUS_MD,
+                                                                "padding": "8px",
+                                                            },
+                                                        ),
+                                                        html.Div(
+                                                            [
+                                                                html.Button(
+                                                                    "Save decision",
+                                                                    id="ai-save-decision-button",
+                                                                    n_clicks=0,
+                                                                    style={
+                                                                        "padding": "8px 12px",
+                                                                        "background": COLOR_ACCENT,
+                                                                        "color": "#ffffff",
+                                                                        "border": "none",
+                                                                        "borderRadius": RADIUS_MD,
+                                                                        "fontWeight": 600,
+                                                                        "cursor": "pointer",
+                                                                    },
+                                                                ),
+                                                                html.Button(
+                                                                    "Export decision packet",
+                                                                    id="ai-export-decision-button",
+                                                                    n_clicks=0,
+                                                                    style={
+                                                                        "padding": "8px 12px",
+                                                                        "background": COLOR_SURFACE,
+                                                                        "border": f"1px solid {COLOR_BORDER}",
+                                                                        "borderRadius": RADIUS_MD,
+                                                                        "cursor": "pointer",
+                                                                    },
+                                                                ),
+                                                                html.Span(
+                                                                    "",
+                                                                    id="ai-decision-status",
+                                                                    style={
+                                                                        "fontSize": "13px",
+                                                                        "color": COLOR_MUTED,
+                                                                    },
+                                                                ),
+                                                            ],
+                                                            style={
+                                                                "display": "flex",
+                                                                "gap": "10px",
+                                                                "alignItems": "center",
+                                                                "marginTop": "8px",
+                                                                "flexWrap": "wrap",
+                                                            },
+                                                        ),
+                                                    ],
+                                                    style={
+                                                        "background": COLOR_SURFACE,
+                                                        "border": f"1px solid {COLOR_BORDER}",
+                                                        "borderRadius": RADIUS_LG,
+                                                        "padding": "12px",
+                                                    },
+                                                ),
+                                            ],
+                                            id="tab-ai",
+                                            style={"display": "none"},
                                         ),
                                     ],
                                     style={

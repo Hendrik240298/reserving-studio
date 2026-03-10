@@ -198,3 +198,37 @@ def test_assistant_strips_system_reminder_block() -> None:
     )
     assert "system-reminder" not in guarded.lower()
     assert "final answer" in guarded.lower()
+
+
+def test_assistant_guardrail_includes_tail_and_process_uncertainty_notes() -> None:
+    guarded = AssistantService._apply_narrative_guardrails(
+        "Recommendation text.",
+        {
+            "portfolio_shift_unconfirmed": False,
+            "paid_incurred_conflict": False,
+            "low_confidence": False,
+            "tail_instability": True,
+            "high_process_uncertainty": True,
+        },
+    )
+    assert "tail uncertainty note" in guarded.lower()
+    assert "process variability note" in guarded.lower()
+
+
+def test_assistant_uncertainty_state_updates_from_payload() -> None:
+    state = {
+        "portfolio_shift_unconfirmed": False,
+        "paid_incurred_conflict": False,
+        "low_confidence": False,
+        "tail_instability": False,
+        "high_process_uncertainty": False,
+    }
+    AssistantService._update_uncertainty_state(
+        state,
+        {
+            "baseline": {"total_process_cv": 0.42},
+            "tail_model": {"instability_flag": True},
+        },
+    )
+    assert state["tail_instability"] is True
+    assert state["high_process_uncertainty"] is True

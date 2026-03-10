@@ -18,6 +18,34 @@ class _FakeClient:
         return self._responses.pop(0)
 
 
+class _FailingClient:
+    def __init__(self):
+        self._calls = 0
+
+    def chat_completion(self, **_kwargs):
+        self._calls += 1
+        if self._calls == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "function": {
+                                        "name": "tool_run_diagnostics",
+                                        "arguments": '{"session_id": "s-1"}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        raise RuntimeError("provider outage")
+
+
 class _FakeTools:
     tool_specs = []
 
@@ -102,9 +130,9 @@ def test_answer_forces_iteration_before_final_output() -> None:
     ]
 
     service = AssistantService.__new__(AssistantService)
-    service._client = _FakeClient(responses)
+    setattr(service, "_client", _FakeClient(responses))
     fake_tools = _FakeTools()
-    service._tools = fake_tools
+    setattr(service, "_tools", fake_tools)
     service._observability_enabled = False
 
     result = service.answer(user_prompt="Run diagnostics")
@@ -113,3 +141,16 @@ def test_answer_forces_iteration_before_final_output() -> None:
     assert "tool_run_diagnostics" in tool_names
     assert "tool_iterate_diagnostics" in tool_names
     assert "Final commentary" in result
+
+
+def test_answer_returns_graceful_message_when_provider_fails_after_diagnostics() -> (
+    None
+):
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", _FailingClient())
+    setattr(service, "_tools", _FakeTools())
+    service._observability_enabled = False
+
+    result = service.answer(user_prompt="Run diagnostics", max_steps=2)
+
+    assert "temporarily unavailable" in result.lower()

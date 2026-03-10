@@ -20,6 +20,7 @@ SYSTEM_PROMPT = (
     "Include checks for latest diagonal actual-vs-expected emergence and incurred-on-premium development at matched ages. "
     "When available, run iterative scenario analysis using tool_iterate_diagnostics "
     "before final recommendations on drops, tail fitting, and BF apriori. "
+    "Include uncertainty interpretation (MSEP/error, bootstrap quantiles, tail instability/model averaging) when available. "
     "If evidence is missing, say so explicitly."
 )
 
@@ -57,6 +58,8 @@ class AssistantService:
             "portfolio_shift_unconfirmed": False,
             "paid_incurred_conflict": False,
             "low_confidence": False,
+            "tail_instability": False,
+            "high_process_uncertainty": False,
         }
         workflow_state: dict[str, Any] = {
             "session_id": None,
@@ -70,13 +73,28 @@ class AssistantService:
                 logger.info(
                     "[OBS] ai.step request_openrouter messages=%s", len(messages)
                 )
-            response = self._client.chat_completion(
-                messages=messages,
-                tools=tool_specs,
-                tool_choice="auto",
-                temperature=0.1,
-                max_tokens=1200,
-            )
+            try:
+                response = self._client.chat_completion(
+                    messages=messages,
+                    tools=tool_specs,
+                    tool_choice="auto",
+                    temperature=0.1,
+                    max_tokens=1200,
+                )
+            except RuntimeError as error:
+                if workflow_state.get("ran_diagnostics"):
+                    session_id = workflow_state.get("session_id")
+                    suffix = (
+                        f" session_id={session_id}"
+                        if isinstance(session_id, str)
+                        else ""
+                    )
+                    return (
+                        "Model provider is temporarily unavailable after deterministic tool execution. "
+                        "Diagnostics and scenario evaluation completed successfully; "
+                        "retry to generate narrative commentary." + suffix
+                    )
+                raise error
             choice = response["choices"][0]["message"]
             tool_calls = choice.get("tool_calls") or []
             if self._observability_enabled:
@@ -216,6 +234,11 @@ class AssistantService:
             tier = str(metrics.get("governance_tier", "")).lower()
             if tier in {"amber", "red"}:
                 state["low_confidence"] = True
+            uncertainty = metrics.get("uncertainty")
+            AssistantService._update_uncertainty_state(state, uncertainty)
+
+        top_uncertainty = tool_result.get("uncertainty")
+        AssistantService._update_uncertainty_state(state, top_uncertainty)
 
         scenarios = tool_result.get("scenarios")
         if isinstance(scenarios, list):
@@ -234,6 +257,39 @@ class AssistantService:
                             state["portfolio_shift_unconfirmed"] = True
                         if "PAID_INCURRED_COHERENCE" in code:
                             state["paid_incurred_conflict"] = True
+
+                scenario_uncertainty = scenario.get("uncertainty")
+                AssistantService._update_uncertainty_state(state, scenario_uncertainty)
+
+    @staticmethod
+    def _update_uncertainty_state(
+        state: dict[str, bool],
+        uncertainty_payload: object,
+    ) -> None:
+        if not isinstance(uncertainty_payload, dict):
+            return
+        cv_raw = uncertainty_payload.get("total_process_cv")
+        try:
+            if cv_raw is not None and float(cv_raw) >= 0.35:
+                state["high_process_uncertainty"] = True
+        except (TypeError, ValueError):
+            pass
+        if bool(uncertainty_payload.get("instability_flag")):
+            state["tail_instability"] = True
+
+        baseline = uncertainty_payload.get("baseline")
+        if isinstance(baseline, dict):
+            cv_raw = baseline.get("total_process_cv")
+            try:
+                if cv_raw is not None and float(cv_raw) >= 0.35:
+                    state["high_process_uncertainty"] = True
+            except (TypeError, ValueError):
+                pass
+
+        tail_model = uncertainty_payload.get("tail_model")
+        if isinstance(tail_model, dict):
+            if bool(tail_model.get("instability_flag")):
+                state["tail_instability"] = True
 
     @staticmethod
     def _apply_narrative_guardrails(
@@ -275,6 +331,15 @@ class AssistantService:
 
         if state.get("low_confidence") and "uncertain" not in guarded.lower():
             guarded += "\n\nUncertainty note: diagnostic confidence is reduced; treat recommendations as provisional and review before sign-off."
+
+        if state.get("tail_instability") and "tail instability" not in guarded.lower():
+            guarded += "\n\nTail uncertainty note: tail scenario dispersion indicates instability; avoid over-confident tail curve selection and document rationale for chosen tail assumptions."
+
+        if (
+            state.get("high_process_uncertainty")
+            and "process variability" not in guarded.lower()
+        ):
+            guarded += "\n\nProcess variability note: aggregate reserve variability is elevated (high process CV); communicate a range-based view using bootstrap quantiles rather than point estimates only."
 
         return guarded
 

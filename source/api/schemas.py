@@ -167,6 +167,10 @@ class ScenarioEvaluation(BaseModel):
     findings: list[DiagnosticFinding] = Field(default_factory=list)
     recommendations: list[DiagnosticRecommendation] = Field(default_factory=list)
     metrics: dict = Field(default_factory=dict)
+    lineage: dict = Field(default_factory=dict)
+    governance: dict = Field(default_factory=dict)
+    calibration: dict = Field(default_factory=dict)
+    uncertainty: dict = Field(default_factory=dict)
     run_metadata: RunMetadata | None = None
 
 
@@ -176,6 +180,9 @@ class DiagnosticsResponse(BaseModel):
     findings: list[DiagnosticFinding] = Field(default_factory=list)
     recommendations: list[DiagnosticRecommendation] = Field(default_factory=list)
     metrics: dict = Field(default_factory=dict)
+    governance: dict = Field(default_factory=dict)
+    calibration: dict = Field(default_factory=dict)
+    uncertainty: dict = Field(default_factory=dict)
     run_metadata: RunMetadata | None = None
 
 
@@ -185,6 +192,9 @@ class DiagnosticsIterateResponse(BaseModel):
     baseline: ScenarioEvaluation | None = None
     scenarios: list[ScenarioEvaluation] = Field(default_factory=list)
     iteration_metrics: dict = Field(default_factory=dict)
+    governance: dict = Field(default_factory=dict)
+    calibration: dict = Field(default_factory=dict)
+    uncertainty: dict = Field(default_factory=dict)
     run_metadata: RunMetadata | None = None
 
 
