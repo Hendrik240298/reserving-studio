@@ -2,6 +2,22 @@
 
 This file tracks major documentation additions and structural changes.
 
+## 2026-03-11
+
+### Added
+
+- `docs/integration-contract.md`
+
+### Updated
+
+- `README.md` (added integration contract link)
+- `docs/actuary-workflow.md`
+- `docs/technical-architecture.md`
+- `docs/start-with-your-data.md`
+- `docs/actuary-quickstart.md`
+- `docs/api-reference.md`
+- `docs/workflow-technical-map.md`
+
 ## 2026-03-04
 
 ### Added

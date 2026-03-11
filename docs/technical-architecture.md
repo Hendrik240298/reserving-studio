@@ -9,6 +9,8 @@ It explains:
 - end-to-end data handling
 - session/sync/caching behavior
 
+For the preferred external integration boundary, see `docs/integration-contract.md`.
+
 ## 1) Runtime modes and entrypoints
 
 Primary entrypoint: `source/app.py`.
@@ -19,7 +21,9 @@ Supported execution modes:
    - command: `uv run python -m source.app`
    - flow: sample data -> reserving objects -> Dash UI
 2. **Scripted interactive mode**
-   - build `Reserving` from custom dataframes
+   - build or load custom dataframes
+   - initialize `ClaimsCollection` and `PremiumRepository`
+   - build `Reserving` from those domain objects
    - run UI in background thread via `run_interactive_session(...)`
    - consume finalized payload in script
 3. **Config-driven input mode**
@@ -179,10 +183,10 @@ Notable internal responsibilities:
 
 - `load_config()`
   - resolves `RESERVING_CONFIG` env var fallback to `config.yml`
-- `build_workflow_from_dataframes(claims_df, premium_df, config=None)`
-  - preferred API for custom ETL integrations
 - `build_workflow_from_collections(claims, premium, config=None)`
-  - lower-level domain-object variant
+  - preferred integration boundary once config, claims, and premium objects are initialized
+- `build_workflow_from_dataframes(claims_df, premium_df, config=None)`
+  - convenience shortcut that initializes `ClaimsCollection` and `PremiumRepository` internally
 - `build_sample_triangle()`
   - default sample bootstrap path
 - `build_reserving(triangle, config=None)`
@@ -225,11 +229,21 @@ Premium path (`PremiumInputRepository` -> `PremiumRepository`):
 
 This transforms both claims and premium to aligned step-based valuation dates.
 
-### D) Triangle construction
+### D) Domain object initialization
+
+Recommended workflow boundary for integrations:
+
+1. initialize `ConfigManager`
+2. load or prepare claims and premium dataframes
+3. initialize `ClaimsCollection`
+4. initialize `PremiumRepository`
+5. call `build_workflow_from_collections(...)`
+
+### E) Triangle construction
 
 `Triangle.from_claims(...)` merges normalized claims and premium into one reserving-ready dataset and creates a chainladder triangle.
 
-### E) Model execution
+### F) Model execution
 
 `ReservingService.apply_recalculation(...)` applies UI/session params to `Reserving`:
 
@@ -240,7 +254,7 @@ This transforms both claims and premium to aligned step-based valuation dates.
 
 Results and emergence data are extracted after each recalculation.
 
-### F) Presentation payload
+### G) Presentation payload
 
 `ReservingService.build_results_payload(...)` composes:
 

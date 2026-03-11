@@ -21,6 +21,7 @@ The Chainladder tab displays link ratios, loss development factors, and fitted p
 ## Documentation (actuary-first)
 
 - Complete own-data onboarding: `docs/start-with-your-data.md`
+- Integration contract: `docs/integration-contract.md`
 - Quickstart: `docs/actuary-quickstart.md`
 - Workflow guide: `docs/actuary-workflow.md`
 - Config reference: `docs/config-practical-reference.md`
@@ -69,18 +70,42 @@ Open http://127.0.0.1:8050
 
 ## Scripted custom input workflow
 
-- For custom SQL/CSV reads, use your own Python script to prepare claims and premium dataframes, then pass them into `source.app.build_workflow_from_dataframes(...)`.
+- The workflow boundary can be either normalized dataframes or initialized domain objects.
+- If your own project already has validated `ConfigManager`, `ClaimsCollection`, and `PremiumRepository` objects, treat those as the reserving workflow input and call `source.app.build_workflow_from_collections(...)`.
+- If claims and premium repositories are not already configured, initialize them first in your script, then pass the resulting objects into the workflow.
+- Use `source.app.build_workflow_from_dataframes(...)` only when your integration point is still raw dataframes.
 - Start the GUI from script with `source.app.run_interactive_session(...)`.
 - In the Results tab, click **Finalize & Continue** to hand control back to your script with finalized parameters and results payload.
 - A ready-to-run quarterly example is available at `examples/run_quarterly_interactive.py`.
 - A CLRD portfolio-level example is available at `examples/run_clrd_interactive.py`.
 - A SQL-template example runner is available at `examples/run_sql_interactive.py`.
+- These example runners now follow the explicit flow `DataFrame -> ClaimsCollection/PremiumRepository -> build_workflow_from_collections(...)`.
 - Both examples now load their own YAML config (`examples/config_quarterly.yml` and `examples/config_clrd.yml`).
 - Use `granularity: quarterly|yearly` in the example config to control how claims and premium data are aggregated.
 - The CLRD example still filters to `LOB = comauto` by default (`workflow.clrd_lob` in config).
 - SQL templates live in `examples/sql/` and are referenced from `examples/config_sql_template.yml`.
 - SQL connection settings are defined in YAML (`driver`, `server`, `database`, `trusted_connection`).
 - You can configure source-to-canonical column mapping in YAML via `workflow.input.claims.column_map` and `workflow.input.premium.column_map`.
+
+Example object-driven flow:
+
+```python
+from source.app import build_workflow_from_collections, run_interactive_session
+from source.claims_collection import ClaimsCollection
+from source.config_manager import ConfigManager
+from source.premium_repository import PremiumRepository
+
+
+config = ConfigManager.from_yaml("config.yml")
+
+# Either create these from your own repository layer...
+claims = ClaimsCollection(claims_df, values_are_cumulative=False)
+premium = PremiumRepository.from_dataframe(config, premium_df)
+
+# ...or use already initialized objects from your other project.
+reserving = build_workflow_from_collections(claims, premium, config=config)
+finalized = run_interactive_session(reserving, config=config)
+```
 
 ```bash
 uv run python examples/run_quarterly_interactive.py

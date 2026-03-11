@@ -2,6 +2,8 @@
 
 This is the end-to-end guide for a first-time user who wants to run Reserving Studio on real portfolio data.
 
+If you want the exact object-level handoff expected by the app, see `docs/integration-contract.md`.
+
 It covers:
 
 - how to prepare claims and premium inputs
@@ -33,7 +35,7 @@ Use one of these:
 
 1. **CSV config path** (best first real-data run)
 2. **SQL config path** (production-like data extraction)
-3. **Python script path** (you already have dataframes in memory)
+3. **Python script path** (you already have dataframes in memory and want explicit control)
 
 If this is your first run, start with CSV config path.
 
@@ -175,24 +177,32 @@ Run:
 uv run python examples/run_sql_interactive.py
 ```
 
-## 6) Python-script path (best for custom ETL)
+## 6) Python-script path (best for custom ETL and explicit integration control)
 
 If you already load/clean data in Python, use this pattern:
 
 ```python
 from source.app import (
-    build_workflow_from_dataframes,
+    build_workflow_from_collections,
     create_interactive_session_controller,
     run_interactive_session,
 )
+from source.claims_collection import ClaimsCollection
 from source.config_manager import ConfigManager
+from source.premium_repository import PremiumRepository
 
 config = ConfigManager.from_yaml("examples/config_my_portfolio.yml")
 
 # claims_df and premium_df prepared by your own ETL
-reserving = build_workflow_from_dataframes(
-    claims_df=claims_df,
-    premium_df=premium_df,
+claims = ClaimsCollection(
+    claims_df,
+    values_are_cumulative=False,
+)
+premium = PremiumRepository.from_dataframe(config, premium_df)
+
+reserving = build_workflow_from_collections(
+    claims=claims,
+    premium=premium,
     config=config,
 )
 
@@ -208,6 +218,8 @@ finalized = run_interactive_session(
 results_df = finalized.results_df
 params = finalized.params_store
 ```
+
+If you prefer a shorter shortcut, `build_workflow_from_dataframes(...)` is still available, but the explicit object-driven flow is the recommended integration contract for other projects.
 
 ## 7) First-session workflow in the UI
 
@@ -291,6 +303,7 @@ This gives a clean audit trail from assumptions to reported figures.
 ## 10) Where to go next
 
 - `docs/actuary-quickstart.md` for fast local startup
+- `docs/integration-contract.md` for the preferred object-driven handoff into the reserving workflow
 - `docs/actuary-workflow.md` for workflow context
 - `docs/config-practical-reference.md` for YAML options
 - `docs/practical-notes.md` for operational notes

@@ -77,6 +77,7 @@ Use this page when you know the actuarial workflow step you care about and want 
 
 - **I need data issues explained:** `docs/data-handling-deep-dive.md`.
 - **I need module/class architecture:** `docs/technical-architecture.md`.
+- **I need the preferred integration boundary for another project:** `docs/integration-contract.md`.
 - **I need user onboarding on own data:** `docs/start-with-your-data.md`.
 - **I need sync behavior details:** `docs/cross-tab-sync.md`.
 - **I need a safe implementation checklist for Results-tab changes:** `docs/results-tab-change-impact-map.md`.

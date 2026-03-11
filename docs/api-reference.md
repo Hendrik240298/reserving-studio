@@ -4,6 +4,8 @@ This is a practical API index for developers and technical actuaries.
 
 It focuses on the most important callable interfaces used in reserving workflows.
 
+For the recommended way to combine these interfaces in another project, see `docs/integration-contract.md`.
+
 ## `source/app.py`
 
 ### Workflow bootstrap
@@ -14,8 +16,10 @@ It focuses on the most important callable interfaces used in reserving workflows
 
 ### Custom data integrations
 
-- `build_workflow_from_dataframes(claims_df: pd.DataFrame, premium_df: pd.DataFrame, *, config: ConfigManager | None = None) -> Reserving`
-- `build_workflow_from_collections(claims: ClaimsCollection, premium: PremiumRepository, *, config: ConfigManager | None = None) -> Reserving`
+- Preferred integration contract:
+  - `build_workflow_from_collections(claims: ClaimsCollection, premium: PremiumRepository, *, config: ConfigManager | None = None) -> Reserving`
+- Convenience shortcut when your integration point is still raw dataframes:
+  - `build_workflow_from_dataframes(claims_df: pd.DataFrame, premium_df: pd.DataFrame, *, config: ConfigManager | None = None) -> Reserving`
 
 ### Interactive session runtime
 
@@ -70,7 +74,7 @@ It focuses on the most important callable interfaces used in reserving workflows
 
 ## `source/claims_collection.py`
 
-- `ClaimsCollection(df: pd.DataFrame)`
+- `ClaimsCollection(df: pd.DataFrame, values_are_cumulative: bool = False)`
 - `iter_claims()`
 - `get_claim_amounts() -> pd.Series`
 - `to_dataframe() -> pd.DataFrame`

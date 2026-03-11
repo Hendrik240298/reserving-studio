@@ -3,6 +3,7 @@
 This guide gets you from clone to a working reserving UI quickly.
 
 If you want the full own-data onboarding (data preparation, config patterns, and roadblocks), start with `docs/start-with-your-data.md`.
+If you want the preferred integration handoff for another project, see `docs/integration-contract.md`.
 
 ## 1) Install and start
 
@@ -35,6 +36,13 @@ The UI recalculates on updates and persists parameters in the session YAML.
 
 If you launch from an example script, click **Finalize & Continue** in Results.
 The script resumes with finalized payloads and a numeric results dataframe.
+
+The recommended script flow is:
+
+1. load dataframes
+2. initialize `ConfigManager`, `ClaimsCollection`, and `PremiumRepository`
+3. pass those objects into `build_workflow_from_collections(...)`
+4. run the interactive session
 
 Example launchers:
 

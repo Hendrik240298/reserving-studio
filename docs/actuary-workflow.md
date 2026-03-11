@@ -3,6 +3,7 @@
 This is the practical end-to-end workflow for using Reserving Studio as an actuarial analysis tool.
 
 For first-time setup on your own data (including roadblocks and fixes), see `docs/start-with-your-data.md`.
+For the recommended cross-project boundary, see `docs/integration-contract.md`.
 
 ## Workflow overview
 
@@ -23,24 +24,29 @@ For first-time setup on your own data (including roadblocks and fixes), see `doc
 
 ### B) Scripted workflow (recommended for repeatable analyses)
 
-- Build claims/premium dataframes in your script.
+- Preferred contract: initialize `ConfigManager`, `ClaimsCollection`, and `PremiumRepository`, then pass those objects into the reserving workflow.
+- If your other project already owns claim and premium repository setup, keep that control there and use the existing objects as workflow input.
+- If repositories are not yet configured, initialize them first in your script, then build the workflow.
 - Start interactive session and finalize from UI.
 - Use returned payload for reporting/ETL.
 
 Entrypoints are in `source/app.py`:
 
+- `build_workflow_from_collections(...)`
 - `build_workflow_from_dataframes(...)`
 - `run_interactive_session(...)`
 
-#### Minimal script template for your own reserving run
+#### Minimal script template for object-driven workflow
 
 ```python
 from source.app import (
-    build_workflow_from_dataframes,
+    build_workflow_from_collections,
     create_interactive_session_controller,
     run_interactive_session,
 )
+from source.claims_collection import ClaimsCollection
 from source.config_manager import ConfigManager
+from source.premium_repository import PremiumRepository
 import pandas as pd
 
 
@@ -50,9 +56,12 @@ def main() -> None:
     claims_df = pd.read_csv("your_claims.csv")
     premium_df = pd.read_csv("your_premium.csv")
 
-    reserving = build_workflow_from_dataframes(
-        claims_df=claims_df,
-        premium_df=premium_df,
+    claims = ClaimsCollection(claims_df, values_are_cumulative=False)
+    premium = PremiumRepository.from_dataframe(config, premium_df)
+
+    reserving = build_workflow_from_collections(
+        claims=claims,
+        premium=premium,
         config=config,
     )
     controller = create_interactive_session_controller()
@@ -72,7 +81,12 @@ if __name__ == "__main__":
     main()
 ```
 
-Use `examples/run_quarterly_interactive.py`, `examples/run_clrd_interactive.py`, and `examples/run_sql_interactive.py` as production-ready patterns.
+#### Alternative when your integration point is still raw dataframes
+
+- `build_workflow_from_dataframes(...)` remains available and internally initializes `ClaimsCollection` and `PremiumRepository` for you.
+- This is convenient for quick scripts, but the object-driven flow is the better fit when you want explicit control over claims, premium, and config setup.
+
+Use `examples/run_quarterly_interactive.py`, `examples/run_clrd_interactive.py`, and `examples/run_sql_interactive.py` as production-ready patterns for the explicit flow `DataFrame -> ClaimsCollection/PremiumRepository -> build_workflow_from_collections(...)`.
 
 #### What to consider when setting up your own script
 

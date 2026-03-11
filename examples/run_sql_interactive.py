@@ -8,12 +8,14 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from source.app import (
-    build_workflow_from_dataframes,
+    build_workflow_from_collections,
     create_interactive_session_controller,
     run_interactive_session,
 )
+from source.claims_collection import ClaimsCollection
 from source.config_manager import ConfigManager
 from source.input_loader import load_inputs_from_config
+from source.premium_repository import PremiumRepository
 
 
 def _load_config() -> ConfigManager:
@@ -26,10 +28,15 @@ def _load_config() -> ConfigManager:
 def main() -> None:
     config = _load_config()
     claims_df, premium_df = load_inputs_from_config(config, repo_root=REPO_ROOT)
+    claims = ClaimsCollection(
+        claims_df,
+        values_are_cumulative=bool(claims_df.attrs.get("values_are_cumulative", False)),
+    )
+    premium = PremiumRepository.from_dataframe(config, premium_df)
 
-    reserving = build_workflow_from_dataframes(
-        claims_df=claims_df,
-        premium_df=premium_df,
+    reserving = build_workflow_from_collections(
+        claims=claims,
+        premium=premium,
         config=config,
     )
     controller = create_interactive_session_controller()
