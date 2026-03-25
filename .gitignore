@@ -5,3 +5,4 @@ __pycache__/
 .pytest_cache/
 Plan.md
 sessions/
+tests/artifacts/e2e/

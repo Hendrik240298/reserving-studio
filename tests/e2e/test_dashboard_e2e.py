@@ -7,9 +7,11 @@ from tests.e2e.helpers import (
     click_results_method_cell,
     edit_first_bf_apriori_value,
     graph_fingerprint,
+    read_first_origin_label,
     read_results_cell_style,
     read_results_column_values,
     trigger_first_valid_drop_click,
+    trigger_first_origin_drop_click,
     wait_for_dashboard_ready,
     wait_for_graph_fingerprint_change,
     wait_for_graph_ready,
@@ -52,6 +54,35 @@ def test_drop_updates_emergence_and_results(
         page,
         results_before,
     )
+    assert results_after != results_before
+
+
+@pytest.mark.e2e
+def test_origin_header_click_drops_full_origin(
+    dash_base_url: str,
+    page: Page,
+) -> None:
+    wait_for_dashboard_ready(page, dash_base_url)
+
+    page.click("#nav-chainladder")
+    wait_for_graph_ready(page, "triangle-heatmap")
+    wait_for_graph_ready(page, "emergence-plot")
+    emergence_before = graph_fingerprint(page, "emergence-plot")
+
+    page.click("#nav-results")
+    wait_for_results_table_ready(page)
+    results_before = read_results_column_values(
+        page,
+        ["Selected Ultimate (EUR)", "IBNR (EUR)"],
+    )
+
+    page.click("#nav-chainladder")
+    target_origin = read_first_origin_label(page, "triangle-heatmap")
+    trigger_first_origin_drop_click(page, target_origin)
+    wait_for_graph_fingerprint_change(page, "emergence-plot", emergence_before)
+
+    page.click("#nav-results")
+    results_after = wait_for_results_column_change(page, results_before)
     assert results_after != results_before
 
 

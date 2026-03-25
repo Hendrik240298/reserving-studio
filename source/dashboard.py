@@ -772,6 +772,24 @@ class Dashboard:
                 labels.append(label)
         return labels
 
+    def _get_valid_drop_devs_for_origin(self, origin_label: object) -> List[int]:
+        raw_link_ratio = self._reserving._triangle.get_triangle().link_ratio["incurred"]
+        target_origin = str(origin_label)
+        valid_devs: List[int] = []
+        for origin in raw_link_ratio.origin:
+            if self._reserving._origin_to_uwy_label(origin) != target_origin:
+                continue
+            row = raw_link_ratio[raw_link_ratio.origin == origin].to_frame().iloc[0]
+            for dev_label, value in row.items():
+                if pd.isna(value):
+                    continue
+                dev = self._params_service.parse_dev_label(dev_label)
+                if dev is None or dev in valid_devs:
+                    continue
+                valid_devs.append(dev)
+            break
+        return valid_devs
+
     def _register_callbacks(self) -> None:
         clientside_callback(
             """
@@ -1342,33 +1360,45 @@ class Dashboard:
                 point = click["points"][0]
                 origin = point.get("y")
                 dev_label = point.get("x")
-                dev = self._params_service.parse_dev_label(dev_label)
-                if dev is None:
-                    return no_update
-                if origin == "Tail":
-                    next_tail = (
-                        None if working_params["tail_attachment_age"] == dev else dev
-                    )
-                    if working_params["tail_attachment_age"] != next_tail:
-                        working_params["tail_attachment_age"] = next_tail
-                        changed = True
-                elif origin == "LDF":
-                    updated_fit = self._params_service.toggle_tail_fit_selection(
-                        working_params["tail_fit_period_selection"],
-                        dev,
-                    )
-                    if updated_fit != working_params["tail_fit_period_selection"]:
-                        working_params["tail_fit_period_selection"] = updated_fit
-                        changed = True
-                elif dev_label is not None:
-                    updated_drops = self._params_service.toggle_drop(
+                if dev_label == "UWY" and origin not in {None, "LDF", "Tail"}:
+                    updated_drops = self._params_service.toggle_origin_drops(
                         working_params["drop_store"],
                         str(origin),
-                        dev,
+                        self._get_valid_drop_devs_for_origin(origin),
                     )
                     if updated_drops != working_params["drop_store"]:
                         working_params["drop_store"] = updated_drops
                         changed = True
+                else:
+                    dev = self._params_service.parse_dev_label(dev_label)
+                    if dev is None:
+                        return no_update
+                    if origin == "Tail":
+                        next_tail = (
+                            None
+                            if working_params["tail_attachment_age"] == dev
+                            else dev
+                        )
+                        if working_params["tail_attachment_age"] != next_tail:
+                            working_params["tail_attachment_age"] = next_tail
+                            changed = True
+                    elif origin == "LDF":
+                        updated_fit = self._params_service.toggle_tail_fit_selection(
+                            working_params["tail_fit_period_selection"],
+                            dev,
+                        )
+                        if updated_fit != working_params["tail_fit_period_selection"]:
+                            working_params["tail_fit_period_selection"] = updated_fit
+                            changed = True
+                    elif dev_label is not None:
+                        updated_drops = self._params_service.toggle_drop(
+                            working_params["drop_store"],
+                            str(origin),
+                            dev,
+                        )
+                        if updated_drops != working_params["drop_store"]:
+                            working_params["drop_store"] = updated_drops
+                            changed = True
 
             elif trigger == "average-method":
                 next_average = average or self._default_average

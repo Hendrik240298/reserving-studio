@@ -217,6 +217,49 @@ class ParamsService:
             normalized.append(entry)
         return [[item[0], item[1]] for item in normalized]
 
+    def toggle_origin_drops(
+        self,
+        existing: list[list[str | int]] | None,
+        origin: str,
+        valid_devs: list[int],
+    ) -> list[list[str | int]]:
+        normalized_entries: list[tuple[str, int]] = []
+        for item in existing or []:
+            if not isinstance(item, list) or len(item) != 2:
+                continue
+            try:
+                entry = (str(item[0]), int(item[1]))
+            except (TypeError, ValueError):
+                continue
+            if entry not in normalized_entries:
+                normalized_entries.append(entry)
+
+        normalized_valid_devs: list[int] = []
+        for dev in valid_devs:
+            try:
+                dev_value = int(dev)
+            except (TypeError, ValueError):
+                continue
+            if dev_value not in normalized_valid_devs:
+                normalized_valid_devs.append(dev_value)
+
+        origin_entries = {(str(origin), dev) for dev in normalized_valid_devs}
+        if not origin_entries:
+            return [[item[0], item[1]] for item in normalized_entries]
+
+        existing_set = set(normalized_entries)
+        if origin_entries.issubset(existing_set):
+            updated = [
+                item for item in normalized_entries if item not in origin_entries
+            ]
+        else:
+            updated = normalized_entries[:]
+            for entry in sorted(origin_entries, key=lambda item: item[1]):
+                if entry not in existing_set:
+                    updated.append(entry)
+                    existing_set.add(entry)
+        return [[item[0], item[1]] for item in updated]
+
     def drops_to_tuples(
         self,
         drops: list[list[str | int]] | None,

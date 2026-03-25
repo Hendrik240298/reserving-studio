@@ -65,10 +65,73 @@ def get_graph_data(page: Page, graph_id: str) -> list[dict]:
     return payload
 
 
+def read_first_origin_label(page: Page, graph_id: str) -> str:
+    payload = page.evaluate(
+        """
+        (id) => {
+            const root = document.getElementById(id);
+            if (!root) {
+                return null;
+            }
+            const gd = root.classList.contains("js-plotly-plot")
+                ? root
+                : root.querySelector(".js-plotly-plot");
+            if (!gd || !Array.isArray(gd.data) || gd.data.length === 0) {
+                return null;
+            }
+            const heatmap = gd.data.find((trace) => trace && trace.type === "heatmap") || gd.data[0];
+            const yValues = Array.isArray(heatmap.y) ? heatmap.y.map(String) : [];
+            return yValues.find((value) => value !== "Dev" && value !== "LDF" && value !== "Tail") || null;
+        }
+        """,
+        graph_id,
+    )
+    if not isinstance(payload, str) or not payload.strip():
+        raise AssertionError(f"Could not read first origin label for {graph_id}")
+    return payload.strip()
+
+
 def graph_fingerprint(page: Page, graph_id: str) -> str:
     data = get_graph_data(page, graph_id)
     blob = json.dumps(data, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def read_heatmap_row_non_null_count(page: Page, graph_id: str, y_label: str) -> int:
+    count = page.evaluate(
+        """
+        ({ id, targetY }) => {
+            const root = document.getElementById(id);
+            if (!root) {
+                return -1;
+            }
+            const gd = root.classList.contains("js-plotly-plot")
+                ? root
+                : root.querySelector(".js-plotly-plot");
+            if (!gd || !Array.isArray(gd.data) || gd.data.length === 0) {
+                return -1;
+            }
+            const heatmap = gd.data.find((trace) => trace && trace.type === "heatmap") || gd.data[0];
+            const yValues = Array.isArray(heatmap.y) ? heatmap.y.map(String) : [];
+            const zValues = Array.isArray(heatmap.z) ? heatmap.z : [];
+            const rowIndex = yValues.findIndex((value) => value === targetY);
+            if (rowIndex < 0 || !Array.isArray(zValues[rowIndex])) {
+                return -1;
+            }
+            let nonNullCount = 0;
+            for (const value of zValues[rowIndex]) {
+                if (value !== null && value !== undefined && !Number.isNaN(value)) {
+                    nonNullCount += 1;
+                }
+            }
+            return nonNullCount;
+        }
+        """,
+        {"id": graph_id, "targetY": y_label},
+    )
+    if not isinstance(count, int) or count < 0:
+        raise AssertionError(f"Could not read heatmap row count for {y_label}")
+    return count
 
 
 def wait_for_graph_fingerprint_change(
@@ -138,6 +201,68 @@ def trigger_first_valid_drop_click(page: Page) -> dict[str, str]:
     y = str(payload.get("y", "")).strip()
     if not x or not y:
         raise AssertionError("Heatmap click payload is missing x/y")
+    return {"x": x, "y": y}
+
+
+def trigger_first_origin_drop_click(
+    page: Page,
+    target_origin: str | None = None,
+) -> dict[str, str]:
+    payload = page.evaluate(
+        """
+        (requestedOrigin) => {
+            const root = document.getElementById("triangle-heatmap");
+            if (!root) {
+                return null;
+            }
+            const gd = root.classList.contains("js-plotly-plot")
+                ? root
+                : root.querySelector(".js-plotly-plot");
+            if (!gd || !Array.isArray(gd.data) || gd.data.length === 0) {
+                return null;
+            }
+
+            const heatmap = gd.data.find((trace) => trace && trace.type === "heatmap") || gd.data[0];
+            const yValues = Array.isArray(heatmap.y) ? heatmap.y.map(String) : [];
+            const candidates = yValues.filter(
+                (value) => value !== "Dev" && value !== "LDF" && value !== "Tail"
+            );
+            if (requestedOrigin && !candidates.includes(String(requestedOrigin))) {
+                return { x: "UWY", y: "", missing: String(requestedOrigin) };
+            }
+            const targetY = requestedOrigin ? String(requestedOrigin) : candidates[0];
+            if (!targetY) {
+                return null;
+            }
+
+            if (typeof gd.emit === "function") {
+                gd.emit("plotly_click", {
+                    points: [
+                        {
+                            x: "UWY",
+                            y: targetY,
+                            curveNumber: 0,
+                            pointNumber: 0,
+                        },
+                    ],
+                });
+                return { x: "UWY", y: targetY };
+            }
+
+            return null;
+        }
+        """,
+        target_origin,
+    )
+    if not isinstance(payload, dict):
+        raise AssertionError("Could not trigger origin drop click")
+    x = str(payload.get("x", "")).strip()
+    y = str(payload.get("y", "")).strip()
+    if x != "UWY" or not y:
+        missing = str(payload.get("missing", "")).strip()
+        if missing:
+            raise AssertionError(f"Could not find origin row {missing} in heatmap")
+        raise AssertionError("Origin drop click payload is missing x/y")
     return {"x": x, "y": y}
 
 
@@ -257,6 +382,24 @@ def wait_for_results_column_change(
             return current_values
         page.wait_for_timeout(150)
     raise AssertionError("Results columns did not update before timeout")
+
+
+def wait_for_results_columns(
+    page: Page,
+    expected_values: dict[str, list[str]],
+    timeout_ms: int = 20_000,
+) -> dict[str, list[str]]:
+    headers = list(expected_values.keys())
+    deadline = time.time() + (timeout_ms / 1000)
+    while time.time() < deadline:
+        current_values = read_results_column_values(page, headers)
+        if all(
+            current_values.get(key, []) == expected_values.get(key, [])
+            for key in headers
+        ):
+            return current_values
+        page.wait_for_timeout(150)
+    raise AssertionError("Results columns did not match expected values before timeout")
 
 
 def edit_first_bf_apriori_value(page: Page, new_value: str) -> None:

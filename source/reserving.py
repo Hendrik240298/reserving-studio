@@ -74,6 +74,63 @@ class Reserving:
     ) -> cl.Triangle:
         return triangle[triangle.valuation.normalize() <= latest_valuation]
 
+    def _expand_drop_origins(
+        self,
+        drop_origin: str | list[str] | None,
+    ) -> list[tuple[str, int]]:
+        if drop_origin is None:
+            return []
+        origin_values = [drop_origin] if isinstance(drop_origin, str) else drop_origin
+        if not isinstance(origin_values, list):
+            raise ValueError(
+                f"drop_origin must be a string or list, got {type(drop_origin).__name__}"
+            )
+
+        normalized_origins: list[str] = []
+        for i, origin in enumerate(origin_values):
+            if not isinstance(origin, str):
+                raise ValueError(
+                    f"drop_origin[{i}] must be a string (origin), got {type(origin).__name__}"
+                )
+            if origin not in normalized_origins:
+                normalized_origins.append(origin)
+
+        raw_link_ratio = self._triangle.get_triangle().link_ratio["incurred"].to_frame()
+        expanded: list[tuple[str, int]] = []
+        for origin in normalized_origins:
+            matching_index = next(
+                (
+                    index
+                    for index in raw_link_ratio.index
+                    if self._origin_to_uwy_label(index) == origin
+                ),
+                None,
+            )
+            if matching_index is None:
+                continue
+            for dev_label, value in raw_link_ratio.loc[matching_index].items():
+                if pd.isna(value):
+                    continue
+                age = self._parse_cdf_label_to_age(dev_label)
+                if age is None:
+                    continue
+                entry = (origin, age)
+                if entry not in expanded:
+                    expanded.append(entry)
+        return expanded
+
+    @staticmethod
+    def _merge_drop_tuples(
+        drop: list[tuple[str, int]] | None,
+        expanded_drop_origin: list[tuple[str, int]],
+    ) -> list[tuple[str, int]] | None:
+        merged: list[tuple[str, int]] = []
+        for item in (drop or []) + expanded_drop_origin:
+            entry = (str(item[0]), int(item[1]))
+            if entry not in merged:
+                merged.append(entry)
+        return merged or None
+
     def _get_selected_method_by_origin(
         self,
         selected_ultimate_by_uwy: Optional[dict[str, str]] = None,
@@ -119,6 +176,7 @@ class Reserving:
         self,
         average: str = "volume",
         drop: Optional[list] = None,
+        drop_origin: str | list[str] | None = None,
         drop_valuation: Optional[list] = None,
     ):
         if average not in ("volume", "simple"):
@@ -158,11 +216,14 @@ class Reserving:
                         f"drop_valuation[{i}] must be a string (year), got {type(year).__name__}"
                     )
 
+        expanded_drop_origin = self._expand_drop_origins(drop_origin)
+        merged_drop = self._merge_drop_tuples(drop, expanded_drop_origin)
+
         params: dict[str, Any] = {
             "average": average,
         }
-        if drop is not None:
-            params["drop"] = drop
+        if merged_drop is not None:
+            params["drop"] = merged_drop
         if drop_valuation is not None:
             params["drop_valuation"] = drop_valuation
 
