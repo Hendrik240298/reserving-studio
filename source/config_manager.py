@@ -3,6 +3,7 @@ from __future__ import annotations
 import yaml
 import logging
 import os
+import time
 from pathlib import Path
 from datetime import datetime
 import re
@@ -183,6 +184,9 @@ class ConfigManager:
         normalized.setdefault("segment", self._segment)
         return normalized
 
+    def normalize_session_payload(self, payload: dict) -> dict:
+        return self._normalize_session_payload(payload)
+
     def get_sync_version(self) -> int:
         with self._SESSION_LOCK:
             session = self._load_session_unlocked()
@@ -196,6 +200,7 @@ class ConfigManager:
         return version
 
     def save_session_with_version(self, data: dict) -> int:
+        started = time.perf_counter()
         with self._SESSION_LOCK:
             session = self._load_session_unlocked()
             raw_version = session.get("sync_version", 0)
@@ -209,12 +214,25 @@ class ConfigManager:
             normalized_current = self._normalize_session_payload(session)
             normalized_incoming = self._normalize_session_payload(data)
             if normalized_current == normalized_incoming:
+                elapsed_ms = (time.perf_counter() - started) * 1000
+                logging.info(
+                    "Session save skipped for segment '%s' in %.0f ms",
+                    self._segment,
+                    elapsed_ms,
+                )
                 return current_version
 
             next_version = current_version + 1
             payload = data.copy()
             payload["sync_version"] = next_version
             self._save_session_unlocked(payload)
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            logging.info(
+                "Session save completed for segment '%s' version=%s total_ms=%.0f",
+                self._segment,
+                next_version,
+                elapsed_ms,
+            )
             return next_version
 
     def save_session(self, data: dict) -> None:
@@ -226,15 +244,63 @@ class ConfigManager:
                 return
             self._save_session_unlocked(data)
 
+    def persist_session_snapshot(self, data: dict, sync_version: int) -> int:
+        started = time.perf_counter()
+        with self._SESSION_LOCK:
+            session = self._load_session_unlocked()
+            normalized_current = self._normalize_session_payload(session)
+            normalized_incoming = self._normalize_session_payload(data)
+            current_version = self.get_sync_version()
+            if (
+                normalized_current == normalized_incoming
+                and current_version >= sync_version
+            ):
+                elapsed_ms = (time.perf_counter() - started) * 1000
+                logging.info(
+                    "Session snapshot skipped for segment '%s' version=%s in %.0f ms",
+                    self._segment,
+                    current_version,
+                    elapsed_ms,
+                )
+                return current_version
+
+            payload = data.copy()
+            payload["sync_version"] = max(int(sync_version), 0)
+            self._save_session_unlocked(payload)
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            logging.info(
+                "Session snapshot persisted for segment '%s' version=%s in %.0f ms",
+                self._segment,
+                payload["sync_version"],
+                elapsed_ms,
+            )
+            return payload["sync_version"]
+
     def _save_session_unlocked(self, data: dict) -> None:
+        started = time.perf_counter()
         session_path = self.get_session_path()
         session_path.parent.mkdir(parents=True, exist_ok=True)
         payload = data.copy()
         payload.setdefault("segment", self._segment)
         payload["updated_at"] = datetime.utcnow().isoformat() + "Z"
         tmp_path = session_path.with_suffix(session_path.suffix + ".tmp")
+        dump_started = time.perf_counter()
         with tmp_path.open("w") as f:
             yaml.safe_dump(payload, f, sort_keys=False)
+            dump_elapsed_ms = (time.perf_counter() - dump_started) * 1000
             f.flush()
+            fsync_started = time.perf_counter()
             os.fsync(f.fileno())
+            fsync_elapsed_ms = (time.perf_counter() - fsync_started) * 1000
+        replace_started = time.perf_counter()
         tmp_path.replace(session_path)
+        replace_elapsed_ms = (time.perf_counter() - replace_started) * 1000
+        total_elapsed_ms = (time.perf_counter() - started) * 1000
+        logging.info(
+            "Session write timings segment='%s' dump_ms=%.0f fsync_ms=%.0f replace_ms=%.0f total_ms=%.0f",
+            self._segment,
+            dump_elapsed_ms,
+            fsync_elapsed_ms,
+            replace_elapsed_ms,
+            total_elapsed_ms,
+        )

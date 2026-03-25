@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import time
-from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -39,6 +38,7 @@ class ReservingService:
         payload_cache: dict[str, dict],
         triangle_cache: dict[str, dict],
         emergence_cache: dict[str, dict],
+        ave_cache: dict[str, dict] | None = None,
     ) -> None:
         self._reserving = reserving
         self._params_service = params_service
@@ -58,6 +58,7 @@ class ReservingService:
         self._payload_cache = payload_cache
         self._triangle_cache = triangle_cache
         self._emergence_cache = emergence_cache
+        self._ave_cache = ave_cache if ave_cache is not None else {}
 
     def _infer_months_per_development_period(self, reserving: Reserving) -> int:
         try:
@@ -421,16 +422,28 @@ class ReservingService:
         bf_apriori_by_uwy: dict[str, float] | None,
         selected_ultimate_by_uwy: dict[str, str] | None,
     ) -> None:
+        total_started = time.perf_counter()
+        step_started = time.perf_counter()
         self._reserving.set_development(
             average=average,
             drop=drops,
         )
+        logging.info(
+            "Recalc step set_development completed in %.0f ms",
+            (time.perf_counter() - step_started) * 1000,
+        )
+        step_started = time.perf_counter()
         _months_per_dev, extrap_periods, projection_period = (
             self.derive_tail_projection_settings(
                 reserving=self._reserving,
                 tail_projection_months=tail_projection_months,
             )
         )
+        logging.info(
+            "Recalc step derive_tail_projection completed in %.0f ms",
+            (time.perf_counter() - step_started) * 1000,
+        )
+        step_started = time.perf_counter()
         self._reserving.set_tail(
             curve=tail_curve,
             extrap_periods=extrap_periods,
@@ -438,15 +451,38 @@ class ReservingService:
             attachment_age=tail_attachment_age,
             fit_period=fit_period,
         )
+        logging.info(
+            "Recalc step set_tail completed in %.0f ms",
+            (time.perf_counter() - step_started) * 1000,
+        )
+        step_started = time.perf_counter()
         if bf_apriori_by_uwy:
             self._reserving.set_bornhuetter_ferguson(apriori=bf_apriori_by_uwy)
         else:
             self._reserving.set_bornhuetter_ferguson(apriori=self._default_bf_apriori)
+        logging.info(
+            "Recalc step set_bornhuetter_ferguson completed in %.0f ms",
+            (time.perf_counter() - step_started) * 1000,
+        )
+        step_started = time.perf_counter()
         self._reserving.reserve(
             final_ultimate="chainladder",
             selected_ultimate_by_uwy=selected_ultimate_by_uwy,
         )
+        logging.info(
+            "Recalc step reserve completed in %.0f ms",
+            (time.perf_counter() - step_started) * 1000,
+        )
+        step_started = time.perf_counter()
         self._extract_data()
+        logging.info(
+            "Recalc step extract_data completed in %.0f ms",
+            (time.perf_counter() - step_started) * 1000,
+        )
+        logging.info(
+            "Recalc apply_recalculation total completed in %.0f ms",
+            (time.perf_counter() - total_started) * 1000,
+        )
 
     @staticmethod
     def _apply_selected_ultimate_to_results(
@@ -488,21 +524,26 @@ class ReservingService:
         selected_ultimate_by_uwy: dict[str, str] | None,
         results_cache_key: str,
     ) -> dict:
-        payload = deepcopy(base_payload)
+        payload = base_payload.copy()
+        selection_started = time.perf_counter()
         selected_results_df = self._apply_selected_ultimate_to_results(
             self._get_results(),
             selected_ultimate_by_uwy,
         )
+        select_elapsed_ms = (time.perf_counter() - selection_started) * 1000
+        rows_started = time.perf_counter()
+        rows = self._build_results_table_rows(selected_results_df)
+        rows_elapsed_ms = (time.perf_counter() - rows_started) * 1000
         payload["selected_ultimate_by_uwy"] = selected_ultimate_by_uwy or {}
-        payload["results_table_rows"] = self._build_results_table_rows(
-            selected_results_df
-        )
-        payload["ave_data"] = self._build_ave_payload(
-            self._get_ave(selected_ultimate_by_uwy or None)
-        )
+        payload["results_table_rows"] = rows
         payload["cache_key"] = results_cache_key
         payload["last_updated"] = (
             datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+        logging.info(
+            "Selection-only payload steps selected_results_ms=%.0f rows_ms=%.0f",
+            select_elapsed_ms,
+            rows_elapsed_ms,
         )
         return payload
 
@@ -517,6 +558,7 @@ class ReservingService:
         bf_apriori_by_uwy: dict[str, float] | None,
         selected_ultimate_by_uwy: dict[str, str] | None,
     ) -> dict:
+        payload_started = time.perf_counter()
         timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         display = "None"
         if drop_store:
@@ -557,33 +599,17 @@ class ReservingService:
             selected_ultimate_by_uwy,
         )
 
-        triangle_figure = self._cache_service.get_or_build(
-            cache=self._triangle_cache,
-            cache_key=visual_cache_key,
-            label="Triangle figure",
-            builder=lambda: self._build_triangle_figure(
-                self._get_triangle(),
-                "Triangle - Link Ratios",
-                tail_attachment_age,
-                tail_fit_period_selection,
-            ),
+        logging.info(
+            "Payload step apply_selected_results completed in %.0f ms",
+            (time.perf_counter() - payload_started) * 1000,
         )
-        emergence_figure = self._cache_service.get_or_build(
-            cache=self._emergence_cache,
-            cache_key=visual_cache_key,
-            label="Emergence figure",
-            builder=lambda: self._build_emergence_figure(
-                self._get_emergence(),
-                "Emergence Pattern",
-            ),
+        rows_started = time.perf_counter()
+        rows = self._build_results_table_rows(selected_results_df)
+        logging.info(
+            "Payload step build_results_rows completed in %.0f ms",
+            (time.perf_counter() - rows_started) * 1000,
         )
-        ave_payload = self._build_ave_payload(
-            self._get_ave(selected_ultimate_by_uwy or None)
-        )
-        return {
-            "triangle_figure": triangle_figure,
-            "emergence_figure": emergence_figure,
-            "ave_data": ave_payload,
+        payload = {
             "drops_display": display,
             "average": average,
             "tail_curve": tail_curve,
@@ -594,9 +620,125 @@ class ReservingService:
             "tail_fit_period_selection": tail_fit_period_selection or [],
             "tail_fit_period_display": fit_period_display,
             "selected_ultimate_by_uwy": selected_ultimate_by_uwy or {},
-            "results_table_rows": self._build_results_table_rows(selected_results_df),
+            "results_table_rows": rows,
+            "visual_cache_key": visual_cache_key,
             "model_cache_key": model_cache_key,
             "last_updated": timestamp,
+        }
+        logging.info(
+            "Payload build_results_payload total completed in %.0f ms",
+            (time.perf_counter() - payload_started) * 1000,
+        )
+        return payload
+
+    def get_or_build_visual_payload(
+        self,
+        *,
+        drop_store: list[list[str | int]] | None,
+        average: str | None,
+        tail_attachment_age: int | None,
+        tail_projection_months: int,
+        tail_curve: str | None,
+        tail_fit_period_selection: list[int] | None,
+    ) -> tuple[dict, dict]:
+        visual_started = time.perf_counter()
+        visual_cache_key = self._build_visual_cache_key(
+            drop_store,
+            average,
+            tail_attachment_age,
+            tail_projection_months,
+            tail_curve,
+            tail_fit_period_selection,
+        )
+        triangle_started = time.perf_counter()
+        triangle_figure = self._cache_service.get_or_build(
+            cache=self._triangle_cache,
+            cache_key=visual_cache_key,
+            label="Triangle figure",
+            builder=lambda: self._build_triangle_figure(
+                self._get_triangle(),
+                "Triangle - Link Ratios",
+                tail_attachment_age,
+                tail_fit_period_selection,
+            ),
+            copy_mode="none",
+        )
+        logging.info(
+            "Payload step triangle_figure completed in %.0f ms",
+            (time.perf_counter() - triangle_started) * 1000,
+        )
+        emergence_started = time.perf_counter()
+        emergence_figure = self._cache_service.get_or_build(
+            cache=self._emergence_cache,
+            cache_key=visual_cache_key,
+            label="Emergence figure",
+            builder=lambda: self._build_emergence_figure(
+                self._get_emergence(),
+                "Emergence Pattern",
+            ),
+            copy_mode="none",
+        )
+        logging.info(
+            "Payload step emergence_figure completed in %.0f ms",
+            (time.perf_counter() - emergence_started) * 1000,
+        )
+        logging.info(
+            "Visual payload total completed in %.0f ms",
+            (time.perf_counter() - visual_started) * 1000,
+        )
+        return triangle_figure, emergence_figure
+
+    def get_or_build_ave_payload(
+        self,
+        *,
+        results_cache_key: str,
+        selected_ultimate_by_uwy: dict[str, str] | None,
+    ) -> dict:
+        cached_payload = self._cache_service.get(
+            self._ave_cache,
+            results_cache_key,
+            copy_mode="none",
+            label="AvE payload",
+        )
+        if cached_payload is not None:
+            return cached_payload
+
+        ave_started = time.perf_counter()
+        triangles_started = time.perf_counter()
+        ave_triangles = self._get_ave(selected_ultimate_by_uwy or None)
+        logging.info(
+            "Payload step get_ave_triangles completed in %.0f ms",
+            (time.perf_counter() - triangles_started) * 1000,
+        )
+        build_started = time.perf_counter()
+        ave_payload = self._build_ave_payload(ave_triangles)
+        logging.info(
+            "Payload step build_ave_payload completed in %.0f ms",
+            (time.perf_counter() - build_started) * 1000,
+        )
+        ave_payload["cache_key"] = results_cache_key
+        self._cache_service.set(
+            self._ave_cache,
+            results_cache_key,
+            ave_payload,
+            copy_mode="none",
+            label="AvE payload",
+        )
+        logging.info(
+            "AvE payload total completed in %.0f ms",
+            (time.perf_counter() - ave_started) * 1000,
+        )
+        return ave_payload
+
+    @staticmethod
+    def build_empty_ave_payload() -> dict:
+        return {
+            "available": False,
+            "options": [],
+            "default_valuation": None,
+            "origin_views": {},
+            "series": {"valuation": [], "expected": [], "actual": [], "diff": []},
+            "cache_key": None,
         }
 
     def get_or_build_results_payload(
@@ -634,7 +776,12 @@ class ReservingService:
         cached_payload = (
             None
             if force_recalc
-            else self._cache_service.get(self._payload_cache, model_cache_key)
+            else self._cache_service.get(
+                self._payload_cache,
+                model_cache_key,
+                copy_mode="shallow",
+                label="Results metadata",
+            )
         )
         if cached_payload is not None:
             logging.info("Using cached reserving model payload for current parameters")
@@ -676,5 +823,11 @@ class ReservingService:
         logging.info("Payload build completed in %.0f ms", payload_elapsed_ms)
         payload["cache_key"] = results_cache_key
         payload["model_cache_key"] = model_cache_key
-        self._cache_service.set(self._payload_cache, model_cache_key, payload)
+        self._cache_service.set(
+            self._payload_cache,
+            model_cache_key,
+            payload,
+            copy_mode="shallow",
+            label="Results metadata",
+        )
         return payload

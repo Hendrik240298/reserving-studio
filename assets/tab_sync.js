@@ -15,6 +15,7 @@
     storageListenerBound: false,
   };
 
+  var PROTOCOL_VERSION = "v2";
   var STORAGE_PREFIX = "reserving-sync-storage:";
 
   function buildTabId() {
@@ -54,9 +55,12 @@
     if (!payload || payload.type !== "session_changed") {
       return;
     }
+    if (payload.protocol_version !== PROTOCOL_VERSION) {
+      return;
+    }
     if (!state.userKey && payload.user_key) {
       state.userKey = String(payload.user_key);
-      state.storageKey = STORAGE_PREFIX + state.userKey;
+      state.storageKey = STORAGE_PREFIX + PROTOCOL_VERSION + ":" + state.userKey;
     }
     if (!state.userKey || payload.user_key !== state.userKey) {
       return;
@@ -121,8 +125,8 @@
 
     state.userKey = nextUserKey;
     state.tabId = nextTabId;
-    state.channelName = "reserving-sync:" + state.userKey;
-    state.storageKey = "reserving-sync-storage:" + state.userKey;
+    state.channelName = "reserving-sync:" + PROTOCOL_VERSION + ":" + state.userKey;
+    state.storageKey = "reserving-sync-storage:" + PROTOCOL_VERSION + ":" + state.userKey;
 
     if (state.channel && typeof state.channel.close === "function") {
       state.channel.close();
@@ -140,6 +144,7 @@
     }
     var payload = {
       type: "session_changed",
+      protocol_version: PROTOCOL_VERSION,
       user_key: state.userKey,
       sync_version: Number(message.sync_version || 0),
       origin_tab_id: state.tabId,

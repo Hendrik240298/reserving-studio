@@ -158,10 +158,23 @@ def test_selection_change_reuses_model_without_recalc() -> None:
         row_by_uwy["2002"]["ultimate_display"]
         == row_by_uwy["2002"]["cl_ultimate_display"]
     )
-    assert payload_bf["ave_data"]["available"] is True
-    assert payload_bf["ave_data"]["default_valuation"] == "2001Q2"
-    assert payload_cl["ave_data"]["origin_views"]["2001Q1"]["diff"][0] == 10.0
-    assert payload_bf["ave_data"]["origin_views"]["2001Q1"]["diff"][0] == 20.0
+
+    ave_payload_cl = service.get_or_build_ave_payload(
+        results_cache_key=payload_cl["cache_key"],
+        selected_ultimate_by_uwy={"2001": "chainladder", "2002": "chainladder"},
+    )
+    ave_payload_bf = service.get_or_build_ave_payload(
+        results_cache_key=payload_bf["cache_key"],
+        selected_ultimate_by_uwy={
+            "2001": "bornhuetter_ferguson",
+            "2002": "chainladder",
+        },
+    )
+
+    assert ave_payload_bf["available"] is True
+    assert ave_payload_bf["default_valuation"] == "2001Q2"
+    assert ave_payload_cl["origin_views"]["2001Q1"]["diff"][0] == 10.0
+    assert ave_payload_bf["origin_views"]["2001Q1"]["diff"][0] == 20.0
 
     assert payload_cl["model_cache_key"] == payload_bf["model_cache_key"]
     assert payload_cl["cache_key"] != payload_bf["cache_key"]

@@ -19,8 +19,6 @@ class ParamsState(TypedDict):
 
 
 class ResultsPayload(TypedDict, total=False):
-    triangle_figure: dict
-    emergence_figure: dict
     drops_display: str
     average: str
     tail_curve: str
@@ -35,5 +33,6 @@ class ResultsPayload(TypedDict, total=False):
     last_updated: str
     cache_key: str
     model_cache_key: str
+    visual_cache_key: str
     figure_version: int
     sync_version: int

@@ -13,10 +13,21 @@ from source.services.session_sync_service import SessionSyncService
 class _FakeConfig:
     def __init__(self) -> None:
         self.saved_payload: dict | None = None
+        self.persisted_version: int | None = None
 
-    def save_session_with_version(self, data: dict) -> int:
+    def load_session(self) -> dict:
+        return {}
+
+    def get_sync_version(self) -> int:
+        return 0
+
+    def normalize_session_payload(self, payload: dict) -> dict:
+        return payload.copy()
+
+    def persist_session_snapshot(self, data: dict, sync_version: int) -> int:
         self.saved_payload = data
-        return 7
+        self.persisted_version = sync_version
+        return sync_version
 
 
 def test_local_sync_persists_tail_projection_months() -> None:
@@ -40,14 +51,19 @@ def test_local_sync_persists_tail_projection_months() -> None:
         "selected_ultimate_by_uwy": {"2001": "chainladder"},
     }
 
-    payload, publish_message = service.apply_local_source_payload(
+    payload, publish_message, save_request = service.apply_local_source_payload(
         results_payload=results_payload,
         params=params,  # type: ignore[arg-type]
         current_payload=None,
         sync_ready=False,
     )
 
+    assert fake_config.saved_payload is None
+    assert save_request is not None
+    persisted_version = service.flush_pending_session_save(save_request)
+
     assert fake_config.saved_payload is not None
     assert fake_config.saved_payload["tail_projection_months"] == 24
-    assert payload["sync_version"] == 7
+    assert persisted_version == 1
+    assert payload["sync_version"] == 1
     assert publish_message is None

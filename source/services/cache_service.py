@@ -4,6 +4,7 @@ import json
 import logging
 import time
 from copy import deepcopy
+from sys import getsizeof
 from typing import Callable
 
 
@@ -11,20 +12,98 @@ class CacheService:
     def __init__(self, max_entries: int = 32):
         self._max_entries = max_entries
 
-    def get(self, cache: dict[str, dict], key: str) -> dict | None:
+    @staticmethod
+    def _copy_value(value: dict, copy_mode: str) -> dict:
+        if copy_mode == "none":
+            return value
+        if copy_mode == "shallow":
+            return value.copy()
+        return deepcopy(value)
+
+    @staticmethod
+    def _estimate_size_bytes(value: dict) -> int | None:
+        try:
+            return len(json.dumps(value, sort_keys=True, default=str))
+        except (TypeError, ValueError):
+            try:
+                return getsizeof(value)
+            except TypeError:
+                return None
+
+    def get(
+        self,
+        cache: dict[str, dict],
+        key: str,
+        *,
+        copy_mode: str = "deep",
+        label: str | None = None,
+    ) -> dict | None:
+        started = time.perf_counter()
         cached_value = cache.get(key)
         if cached_value is None:
+            if label:
+                logging.info("%s cache miss key=%s", label, key)
             return None
         cache.pop(key, None)
         cache[key] = cached_value
-        return deepcopy(cached_value)
+        copied_value = self._copy_value(cached_value, copy_mode)
+        if label:
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            size_bytes = self._estimate_size_bytes(cached_value)
+            if size_bytes is None:
+                logging.info(
+                    "%s cache hit key=%s copy_mode=%s copy_ms=%.0f",
+                    label,
+                    key,
+                    copy_mode,
+                    elapsed_ms,
+                )
+            else:
+                logging.info(
+                    "%s cache hit key=%s copy_mode=%s copy_ms=%.0f approx_bytes=%s",
+                    label,
+                    key,
+                    copy_mode,
+                    elapsed_ms,
+                    size_bytes,
+                )
+        return copied_value
 
-    def set(self, cache: dict[str, dict], key: str, value: dict) -> None:
+    def set(
+        self,
+        cache: dict[str, dict],
+        key: str,
+        value: dict,
+        *,
+        copy_mode: str = "deep",
+        label: str | None = None,
+    ) -> None:
+        started = time.perf_counter()
         cache.pop(key, None)
-        cache[key] = deepcopy(value)
+        cache[key] = self._copy_value(value, copy_mode)
         while len(cache) > self._max_entries:
             oldest_key = next(iter(cache))
             cache.pop(oldest_key, None)
+        if label:
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            size_bytes = self._estimate_size_bytes(value)
+            if size_bytes is None:
+                logging.info(
+                    "%s cache store key=%s copy_mode=%s copy_ms=%.0f",
+                    label,
+                    key,
+                    copy_mode,
+                    elapsed_ms,
+                )
+            else:
+                logging.info(
+                    "%s cache store key=%s copy_mode=%s copy_ms=%.0f approx_bytes=%s",
+                    label,
+                    key,
+                    copy_mode,
+                    elapsed_ms,
+                    size_bytes,
+                )
 
     def get_or_build(
         self,
@@ -33,9 +112,15 @@ class CacheService:
         cache_key: str,
         label: str,
         builder: Callable[[], dict],
+        copy_mode: str = "deep",
     ) -> dict:
         started = time.perf_counter()
-        cached_figure = self.get(cache, cache_key)
+        cached_figure = self.get(
+            cache,
+            cache_key,
+            copy_mode=copy_mode,
+            label=label,
+        )
         if cached_figure is not None:
             elapsed_ms = (time.perf_counter() - started) * 1000
             logging.info("%s reused in %.0f ms", label, elapsed_ms)
@@ -44,7 +129,13 @@ class CacheService:
         figure_dict = builder()
         elapsed_ms = (time.perf_counter() - started) * 1000
         logging.info("%s built in %.0f ms", label, elapsed_ms)
-        self.set(cache, cache_key, figure_dict)
+        self.set(
+            cache,
+            cache_key,
+            figure_dict,
+            copy_mode=copy_mode,
+            label=label,
+        )
         return figure_dict
 
     @staticmethod

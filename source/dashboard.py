@@ -46,6 +46,7 @@ from dash import (
 
 
 _LIVE_RESULTS_BY_SEGMENT: dict[str, dict] = {}
+_LIVE_SESSION_STATE_BY_SEGMENT: dict[str, dict] = {}
 
 FONT_FAMILY = '"Manrope", "Segoe UI", "Helvetica Neue", Arial, sans-serif'
 FIGURE_FONT_SIZE = 12
@@ -110,6 +111,7 @@ class Dashboard:
         self._payload_cache: dict[str, dict] = {}
         self._triangle_figure_cache: dict[str, dict] = {}
         self._emergence_figure_cache: dict[str, dict] = {}
+        self._ave_payload_cache: dict[str, dict] = {}
         self._heatmap_core_cache: dict[str, dict] = {}
         self._cache_max_entries = 32
         self._recalc_request_seq = 0
@@ -120,9 +122,7 @@ class Dashboard:
             default_tail_projection_months=self._default_tail_projection_months,
             default_bf_apriori=self._default_bf_apriori,
             get_uwy_labels=self._get_uwy_labels,
-            load_session=self._config.load_session
-            if self._config is not None
-            else None,
+            load_session=self._load_latest_session_payload,
             get_sync_version=(
                 self._config.get_sync_version if self._config is not None else None
             ),
@@ -174,11 +174,13 @@ class Dashboard:
             payload_cache=self._payload_cache,
             triangle_cache=self._triangle_figure_cache,
             emergence_cache=self._emergence_figure_cache,
+            ave_cache=self._ave_payload_cache,
         )
         self._session_sync_service = SessionSyncService(
             config=self._config,
             segment_key_provider=self._get_segment_key,
             live_results_store=_LIVE_RESULTS_BY_SEGMENT,
+            live_session_store=_LIVE_SESSION_STATE_BY_SEGMENT,
         )
 
         self._register_callbacks()
@@ -199,7 +201,12 @@ class Dashboard:
             incurred_data=self.incurred,
             premium_data=self.premium,
         )
-        core_payload = self._cache_service.get(self._heatmap_core_cache, core_cache_key)
+        core_payload = self._cache_service.get(
+            self._heatmap_core_cache,
+            core_cache_key,
+            copy_mode="none",
+            label="Heatmap core",
+        )
         if core_payload is None:
             core_payload = build_heatmap_core(
                 triangle_data=triangle_data,
@@ -208,7 +215,11 @@ class Dashboard:
                 reserving=self._reserving,
             )
             self._cache_service.set(
-                self._heatmap_core_cache, core_cache_key, core_payload
+                self._heatmap_core_cache,
+                core_cache_key,
+                core_payload,
+                copy_mode="none",
+                label="Heatmap core",
             )
 
         figure, _ = plot_triangle_heatmap_clean(
@@ -232,6 +243,17 @@ class Dashboard:
         )
         return figure.to_dict()
 
+    def _load_latest_session_payload(self) -> dict:
+        segment_key = self._get_segment_key()
+        live_state = _LIVE_SESSION_STATE_BY_SEGMENT.get(segment_key)
+        if isinstance(live_state, dict):
+            session_payload = live_state.get("session_payload")
+            if isinstance(session_payload, dict):
+                return session_payload.copy()
+        if self._config is None:
+            return {}
+        return self._config.load_session()
+
     def _load_session_defaults(self) -> None:
         if self._config is None:
             self._default_bf_apriori_rows = self._params_service.build_bf_apriori_rows()
@@ -239,7 +261,7 @@ class Dashboard:
                 self._params_service.build_selected_ultimate_by_uwy()
             )
             return
-        session = self._config.load_session()
+        session = self._load_latest_session_payload()
         self._default_average = session.get("average", self._default_average)
         self._default_tail_curve = session.get(
             "tail_curve",
@@ -1490,10 +1512,17 @@ class Dashboard:
                         current_sync_version = 0
                 if incoming_version <= current_sync_version:
                     return no_update
-                if self._config is None:
+                if self._config is None and not isinstance(
+                    message.get("session_payload"), dict
+                ):
                     return no_update
 
-                session = self._config.load_session()
+                session_payload = message.get("session_payload")
+                session = (
+                    session_payload
+                    if isinstance(session_payload, dict)
+                    else self._load_latest_session_payload()
+                )
                 synced_params = self._params_service.build_params_state(
                     drop_store=session.get("drops"),
                     average=session.get("average", self._default_average),
@@ -1542,14 +1571,27 @@ class Dashboard:
 
         @self.app.callback(
             Output("results-store", "data"),
+            Output("results-table-store", "data"),
+            Output("triangle-base-figure", "data"),
+            Output("emergence-plot", "figure"),
             Output("sync-publish-message", "data"),
+            Output("session-save-store", "data"),
+            Output("session-save-interval", "disabled"),
             Input("params-store", "data"),
             State("results-store", "data"),
             State("sync-ready", "data"),
         )
         def _update_results(params, current_payload, sync_ready):
             if not params or not isinstance(params, dict):
-                return no_update, no_update
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                )
 
             callback_started = time.perf_counter()
             request_id = params.get("request_id", "n/a")
@@ -1600,7 +1642,15 @@ class Dashboard:
                 )
                 total_elapsed_ms = (time.perf_counter() - callback_started) * 1000
                 logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
-                return current_payload, no_update
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                )
 
             logging.info(
                 "[recalc] start request=%s source=%s force=%s",
@@ -1622,14 +1672,55 @@ class Dashboard:
                 )
             except Exception as exc:
                 logging.error(f"Failed to recalculate reserving: {exc}", exc_info=True)
-                return no_update, no_update
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                )
+
+            results_table_rows = results_payload.get("results_table_rows", [])
+            results_store_payload = results_payload.copy()
+            results_store_payload.pop("results_table_rows", None)
+
+            model_changed = (
+                force_recalc
+                or not isinstance(current_payload, dict)
+                or current_payload.get("model_cache_key")
+                != results_store_payload.get("model_cache_key")
+            )
+            triangle_output = no_update
+            emergence_output = no_update
+            if model_changed:
+                triangle_figure, emergence_figure = (
+                    self._reserving_service.get_or_build_visual_payload(
+                        drop_store=drop_store,
+                        average=average,
+                        tail_attachment_age=tail_attachment_age,
+                        tail_projection_months=tail_projection_months,
+                        tail_curve=tail_curve,
+                        tail_fit_period_selection=tail_fit_period_selection,
+                    )
+                )
+                try:
+                    figure_version = int(request_id)
+                except (TypeError, ValueError):
+                    figure_version = 0
+                triangle_output = {
+                    "figure": triangle_figure,
+                    "figure_version": figure_version,
+                }
+                emergence_output = emergence_figure
 
             if self._controller is not None:
                 try:
                     self._controller.publish_latest(
                         params_store=ParamsStoreSnapshot.from_store_dict(params),
                         results_store=ResultsStoreSnapshot.from_store_dict(
-                            results_payload
+                            results_store_payload
                         ),
                     )
                 except Exception:
@@ -1638,19 +1729,19 @@ class Dashboard:
                     )
 
             try:
-                results_payload["figure_version"] = int(request_id)
+                results_store_payload["figure_version"] = int(request_id)
             except (TypeError, ValueError):
-                results_payload["figure_version"] = 0
+                results_store_payload["figure_version"] = 0
 
             source = params.get("source")
             if source == "sync":
-                results_payload, _ = (
+                results_store_payload, _, _ = (
                     self._session_sync_service.apply_sync_source_payload(
-                        results_payload=results_payload,
+                        results_payload=results_store_payload,
                         params=params,
                     )
                 )
-                sync_version = int(results_payload.get("sync_version", 0))
+                sync_version = int(results_store_payload.get("sync_version", 0))
                 logging.info(
                     "[recalc] finish request=%s sync_version=%s",
                     request_id,
@@ -1658,16 +1749,24 @@ class Dashboard:
                 )
                 total_elapsed_ms = (time.perf_counter() - callback_started) * 1000
                 logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
-                return results_payload, no_update
+                return (
+                    results_store_payload,
+                    results_table_rows,
+                    triangle_output,
+                    emergence_output,
+                    no_update,
+                    no_update,
+                    no_update,
+                )
 
             if not bool(sync_ready):
                 logging.warning(
                     "Tab sync bridge unavailable; update applied only in current tab"
                 )
 
-            results_payload, publish_message = (
+            results_store_payload, publish_message, save_request = (
                 self._session_sync_service.apply_local_source_payload(
-                    results_payload=results_payload,
+                    results_payload=results_store_payload,
                     params=params,
                     current_payload=current_payload
                     if isinstance(current_payload, dict)
@@ -1675,7 +1774,7 @@ class Dashboard:
                     sync_ready=bool(sync_ready),
                 )
             )
-            sync_version = int(results_payload.get("sync_version", 0))
+            sync_version = int(results_store_payload.get("sync_version", 0))
             segment_key = self._get_segment_key()
 
             if publish_message is None:
@@ -1690,7 +1789,15 @@ class Dashboard:
                 )
                 total_elapsed_ms = (time.perf_counter() - callback_started) * 1000
                 logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
-                return results_payload, no_update
+                return (
+                    results_store_payload,
+                    results_table_rows,
+                    triangle_output,
+                    emergence_output,
+                    no_update,
+                    save_request,
+                    False if save_request else no_update,
+                )
 
             logging.info(
                 "Publishing sync update for segment '%s' at version %s",
@@ -1704,7 +1811,36 @@ class Dashboard:
             )
             total_elapsed_ms = (time.perf_counter() - callback_started) * 1000
             logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
-            return results_payload, publish_message
+            return (
+                results_store_payload,
+                results_table_rows,
+                triangle_output,
+                emergence_output,
+                publish_message,
+                save_request,
+                False if save_request else no_update,
+            )
+
+        @self.app.callback(
+            Output("session-save-store", "data", allow_duplicate=True),
+            Output("session-save-interval", "disabled", allow_duplicate=True),
+            Input("session-save-interval", "n_intervals"),
+            Input("session-save-store", "data"),
+            prevent_initial_call=True,
+        )
+        def _flush_pending_session_save(_n_intervals, save_request):
+            if not isinstance(save_request, dict):
+                return None, True
+
+            try:
+                due_at = float(save_request.get("due_at", 0.0))
+            except (TypeError, ValueError):
+                due_at = 0.0
+            if time.time() < due_at:
+                return no_update, False
+
+            self._session_sync_service.flush_pending_session_save(save_request)
+            return None, True
 
         @self.app.callback(
             Output("average-method", "value"),
@@ -1785,16 +1921,17 @@ class Dashboard:
             Output("results-table", "data"),
             Output("results-table", "style_cell_conditional"),
             Output("results-table", "style_data_conditional"),
+            Input("results-table-store", "data"),
             Input("results-store", "data"),
             Input("results-view-store", "data"),
         )
-        def _hydrate_results_table(results_payload, results_view_mode):
+        def _hydrate_results_table(
+            results_rows_store, results_payload, results_view_mode
+        ):
             normalized_mode = (results_view_mode or "absolute").lower()
             rows = []
-            if isinstance(results_payload, dict):
-                payload_rows = results_payload.get("results_table_rows")
-                if isinstance(payload_rows, list):
-                    rows = payload_rows
+            if isinstance(results_rows_store, list):
+                rows = results_rows_store
             if not rows:
                 rows = self._build_results_table_rows(self.results)
             columns = self._build_results_table_columns(normalized_mode)
@@ -1862,51 +1999,41 @@ class Dashboard:
             return "Finalized. You can continue in your Python script.", True
 
         @self.app.callback(
-            Output("triangle-base-figure", "data"),
-            Output("emergence-plot", "figure"),
+            Output("ave-data-store", "data"),
             Input("results-store", "data"),
+            Input("active-tab", "data"),
+            State("ave-data-store", "data"),
         )
-        def _hydrate_tabs(results_payload):
-            if not results_payload:
-                return (
-                    {
-                        "figure": self._build_triangle_figure_dict(
-                            self.triangle,
-                            "Triangle - Link Ratios",
-                            self._default_tail_attachment_age,
-                            self._default_tail_fit_period_selection,
-                        ),
-                        "figure_version": 0,
-                    },
-                    plot_emergence(
-                        emergence_pattern=self.emergence_pattern,
-                        title="Emergence Pattern",
-                        font_family=FONT_FAMILY,
-                        figure_font_size=FIGURE_FONT_SIZE,
-                        figure_title_font_size=FIGURE_TITLE_FONT_SIZE,
-                        alert_annotation_font_size=ALERT_ANNOTATION_FONT_SIZE,
-                        color_text=COLOR_TEXT,
-                        color_surface=COLOR_SURFACE,
-                        color_border=COLOR_BORDER,
-                    ),
-                )
+        def _hydrate_ave_data(results_payload, active_tab, current_ave_data):
+            if active_tab != "ave":
+                return no_update
+            if not isinstance(results_payload, dict):
+                return self._reserving_service.build_empty_ave_payload()
 
-            return (
-                {
-                    "figure": results_payload.get("triangle_figure"),
-                    "figure_version": results_payload.get("figure_version", 0),
-                },
-                results_payload.get("emergence_figure"),
+            results_cache_key = results_payload.get("cache_key")
+            if not results_cache_key:
+                return self._reserving_service.build_empty_ave_payload()
+            if (
+                isinstance(current_ave_data, dict)
+                and current_ave_data.get("cache_key") == results_cache_key
+            ):
+                return no_update
+
+            return self._reserving_service.get_or_build_ave_payload(
+                results_cache_key=str(results_cache_key),
+                selected_ultimate_by_uwy=self._params_service.build_selected_ultimate_by_uwy(
+                    results_payload.get("selected_ultimate_by_uwy")
+                ),
             )
 
         @self.app.callback(
             Output("ave-valuation-selector", "options"),
             Output("ave-valuation-selector", "value"),
-            Input("results-store", "data"),
+            Input("ave-data-store", "data"),
             State("ave-valuation-selector", "value"),
         )
-        def _hydrate_ave_controls(results_payload, current_valuation):
-            ave_data = (results_payload or {}).get("ave_data", {})
+        def _hydrate_ave_controls(ave_data, current_valuation):
+            ave_data = ave_data or {}
             options = ave_data.get("options", [])
             valid_values = {option.get("value") for option in options}
             if current_valuation in valid_values:
@@ -1919,11 +2046,11 @@ class Dashboard:
             Output("ave-kpi-actual", "children"),
             Output("ave-origin-plot", "figure"),
             Output("ave-valuation-plot", "figure"),
-            Input("results-store", "data"),
+            Input("ave-data-store", "data"),
             Input("ave-valuation-selector", "value"),
         )
-        def _hydrate_ave_tab(results_payload, selected_valuation):
-            ave_data = (results_payload or {}).get("ave_data", {})
+        def _hydrate_ave_tab(ave_data, selected_valuation):
+            ave_data = ave_data or {}
             origin_views = ave_data.get("origin_views", {})
             valuation_key = selected_valuation or ave_data.get("default_valuation")
             selected_view = origin_views.get(valuation_key, {})
@@ -2078,16 +2205,29 @@ class Dashboard:
             ),
             selected_ultimate_by_uwy=self._default_selected_ultimate_by_uwy,
         )
+        initial_triangle_figure, initial_emergence_figure = (
+            self._reserving_service.get_or_build_visual_payload(
+                drop_store=self._default_drop_store,
+                average=self._default_average,
+                tail_attachment_age=self._default_tail_attachment_age,
+                tail_projection_months=self._default_tail_projection_months,
+                tail_curve=self._default_tail_curve,
+                tail_fit_period_selection=self._default_tail_fit_period_selection,
+            )
+        )
         results_payload["figure_version"] = 0
         initial_sync_version = 0
         if self._config is not None:
             initial_sync_version = self._config.get_sync_version()
         results_payload["sync_version"] = initial_sync_version
+        initial_results_rows = results_payload.get("results_table_rows", [])
+        initial_results_store = results_payload.copy()
+        initial_results_store.pop("results_table_rows", None)
         segment_key = self._get_segment_key()
         existing_payload = _LIVE_RESULTS_BY_SEGMENT.get(segment_key)
         if existing_payload:
-            results_payload = existing_payload
-        _LIVE_RESULTS_BY_SEGMENT[segment_key] = results_payload
+            initial_results_store = existing_payload
+        _LIVE_RESULTS_BY_SEGMENT[segment_key] = initial_results_store
         initial_data_triangle, initial_data_weights, initial_ratio_mode = (
             self._build_data_tab_display(
                 "incurred",
@@ -2098,7 +2238,7 @@ class Dashboard:
         initial_bf_apriori_rows = self._params_service.build_bf_apriori_rows(
             self._default_bf_apriori_rows
         )
-        initial_ave_data = results_payload.get("ave_data", {})
+        initial_ave_data = self._reserving_service.build_empty_ave_payload()
         initial_ave_valuation = initial_ave_data.get("default_valuation")
         initial_ave_view = initial_ave_data.get("origin_views", {}).get(
             initial_ave_valuation,
@@ -2108,12 +2248,19 @@ class Dashboard:
             [
                 dcc.Location(id="page-location", refresh=False),
                 dcc.Store(id="params-store", data=None),
-                dcc.Store(id="results-store", data=results_payload),
+                dcc.Store(id="results-store", data=initial_results_store),
+                dcc.Store(
+                    id="results-table-store",
+                    data=initial_results_rows,
+                ),
+                dcc.Store(id="ave-data-store", data=initial_ave_data),
                 dcc.Store(
                     id="triangle-base-figure",
                     data={
-                        "figure": results_payload.get("triangle_figure"),
-                        "figure_version": results_payload.get("figure_version", 0),
+                        "figure": initial_triangle_figure,
+                        "figure_version": initial_results_store.get(
+                            "figure_version", 0
+                        ),
                     },
                 ),
                 dcc.Store(id="triangle-overlay-signature", data=None),
@@ -2125,6 +2272,13 @@ class Dashboard:
                 dcc.Store(id="sync-tab-id", data=""),
                 dcc.Store(id="sync-ready", data=False),
                 dcc.Store(id="sync-publish-message", data=None),
+                dcc.Store(id="session-save-store", data=None),
+                dcc.Interval(
+                    id="session-save-interval",
+                    interval=250,
+                    disabled=True,
+                    n_intervals=0,
+                ),
                 dcc.Input(
                     id="sync-inbox",
                     type="text",
@@ -2465,9 +2619,7 @@ class Dashboard:
                                                             [
                                                                 dcc.Graph(
                                                                     id="triangle-heatmap",
-                                                                    figure=results_payload.get(
-                                                                        "triangle_figure"
-                                                                    ),
+                                                                    figure=initial_triangle_figure,
                                                                     config={
                                                                         "scrollZoom": False,
                                                                         "doubleClick": False,
@@ -2497,9 +2649,7 @@ class Dashboard:
                                                             [
                                                                 dcc.Graph(
                                                                     id="emergence-plot",
-                                                                    figure=results_payload.get(
-                                                                        "emergence_figure"
-                                                                    ),
+                                                                    figure=initial_emergence_figure,
                                                                     config={
                                                                         "responsive": False
                                                                     },
