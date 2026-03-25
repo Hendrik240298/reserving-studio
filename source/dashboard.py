@@ -23,6 +23,7 @@ from source.interactive_session import (
 )
 from source.reserving import Reserving
 from source.services import (
+    BackgroundRecalcService,
     CacheService,
     ParamsService,
     ReservingService,
@@ -182,6 +183,9 @@ class Dashboard:
             live_results_store=_LIVE_RESULTS_BY_SEGMENT,
             live_session_store=_LIVE_SESSION_STATE_BY_SEGMENT,
         )
+        self._background_recalc_service = BackgroundRecalcService(
+            worker=self._run_background_recalculation
+        )
 
         self._register_callbacks()
         logging.info("Dashboard initialized successfully")
@@ -253,6 +257,206 @@ class Dashboard:
         if self._config is None:
             return {}
         return self._config.load_session()
+
+    def _normalize_request_context(self, params: dict) -> dict:
+        drop_store = params.get("drop_store") or []
+        average = params.get("average") or self._default_average
+        tail_attachment_age = params.get("tail_attachment_age")
+        tail_projection_months = self._normalize_tail_projection_months_for_ui(
+            params.get("tail_projection_months", self._default_tail_projection_months)
+        )
+        tail_curve = params.get("tail_curve") or self._default_tail_curve
+        tail_fit_period_selection = params.get("tail_fit_period_selection") or []
+        bf_apriori_by_uwy = params.get("bf_apriori_by_uwy") or {}
+        selected_ultimate_by_uwy = self._params_service.build_selected_ultimate_by_uwy(
+            params.get("selected_ultimate_by_uwy")
+        )
+        request_id = params.get("request_id", "n/a")
+        force_recalc = bool(params.get("force_recalc"))
+        model_cache_key = self._cache_service.build_model_cache_key(
+            segment=self._get_segment_key(),
+            default_average=self._default_average,
+            default_tail_curve=self._default_tail_curve,
+            drop_store=drop_store,
+            average=average,
+            tail_attachment_age=tail_attachment_age,
+            tail_projection_months=tail_projection_months,
+            tail_curve=tail_curve,
+            tail_fit_period_selection=tail_fit_period_selection,
+            bf_apriori_by_uwy=bf_apriori_by_uwy,
+        )
+        return {
+            "request_id": request_id,
+            "drop_store": drop_store,
+            "average": average,
+            "tail_attachment_age": tail_attachment_age,
+            "tail_projection_months": tail_projection_months,
+            "tail_curve": tail_curve,
+            "tail_fit_period_selection": tail_fit_period_selection,
+            "bf_apriori_by_uwy": bf_apriori_by_uwy,
+            "selected_ultimate_by_uwy": selected_ultimate_by_uwy,
+            "force_recalc": force_recalc,
+            "model_cache_key": model_cache_key,
+            "source": params.get("source"),
+            "params": params,
+        }
+
+    def _run_background_recalculation(self, job: dict) -> dict:
+        request_id = int(job.get("request_id", 0))
+        temp_reserving = Reserving(self._reserving._triangle)
+        temp_service = ReservingService(
+            reserving=temp_reserving,
+            params_service=self._params_service,
+            cache_service=self._cache_service,
+            default_average=self._default_average,
+            default_tail_curve=self._default_tail_curve,
+            default_bf_apriori=self._default_bf_apriori,
+            fallback_months_per_dev=self._tail_projection_step_months(),
+            segment_key_provider=lambda: str(
+                job.get("segment_key", self._get_segment_key())
+            ),
+            extract_data=lambda: None,
+            get_triangle=lambda: None,
+            get_emergence=lambda: None,
+            get_ave=lambda selected_by_uwy=None: temp_reserving.get_ave_triangle(
+                selected_ultimate_by_uwy=selected_by_uwy
+            ),
+            get_results=lambda: temp_reserving.get_results(),
+            build_triangle_figure=lambda *_args: {},
+            build_emergence_figure=lambda *_args: {},
+            payload_cache={},
+            triangle_cache={},
+            emergence_cache={},
+            ave_cache={},
+        )
+        fit_period = self._params_service.derive_tail_fit_period(
+            job.get("tail_fit_period_selection") or []
+        )
+        temp_service.apply_recalculation(
+            str(job.get("average") or self._default_average),
+            self._params_service.drops_to_tuples(job.get("drop_store") or []),
+            job.get("tail_attachment_age"),
+            int(job.get("tail_projection_months", 0)),
+            str(job.get("tail_curve") or self._default_tail_curve),
+            fit_period,
+            job.get("bf_apriori_by_uwy") or {},
+            None,
+        )
+        emergence_pattern = temp_reserving.get_emergence_pattern()
+        triangle_data = temp_reserving.get_triangle_heatmap_data()
+        results_payload = temp_service.build_results_payload(
+            drop_store=job.get("drop_store") or [],
+            average=job.get("average"),
+            tail_attachment_age=job.get("tail_attachment_age"),
+            tail_projection_months=int(job.get("tail_projection_months", 0)),
+            tail_curve=job.get("tail_curve"),
+            tail_fit_period_selection=job.get("tail_fit_period_selection") or [],
+            bf_apriori_by_uwy=job.get("bf_apriori_by_uwy") or {},
+            selected_ultimate_by_uwy=job.get("selected_ultimate_by_uwy") or {},
+        )
+        return {
+            "request_id": request_id,
+            "reserving": temp_reserving,
+            "emergence_pattern": emergence_pattern,
+            "triangle": triangle_data.get("link_ratios"),
+            "incurred": triangle_data.get("incurred"),
+            "premium": triangle_data.get("premium"),
+            "results": temp_reserving.get_results(),
+            "results_payload": results_payload,
+            "job": job,
+        }
+
+    def _finalize_results_update(
+        self,
+        *,
+        results_payload: dict,
+        params: dict,
+        current_payload: dict | None,
+        sync_ready: bool,
+        request_id: object,
+        model_changed: bool,
+    ) -> tuple[object, object, object, object, object, object, object]:
+        results_table_rows = results_payload.get("results_table_rows", [])
+        results_store_payload = results_payload.copy()
+        results_store_payload.pop("results_table_rows", None)
+
+        triangle_output = no_update
+        emergence_output = no_update
+        if model_changed:
+            triangle_figure, emergence_figure = (
+                self._reserving_service.get_or_build_visual_payload(
+                    drop_store=params.get("drop_store") or [],
+                    average=params.get("average"),
+                    tail_attachment_age=params.get("tail_attachment_age"),
+                    tail_projection_months=int(params.get("tail_projection_months", 0)),
+                    tail_curve=params.get("tail_curve"),
+                    tail_fit_period_selection=params.get("tail_fit_period_selection")
+                    or [],
+                )
+            )
+            try:
+                figure_version = int(request_id)
+            except (TypeError, ValueError):
+                figure_version = 0
+            triangle_output = {
+                "figure": triangle_figure,
+                "figure_version": figure_version,
+            }
+            emergence_output = emergence_figure
+
+        if self._controller is not None:
+            try:
+                self._controller.publish_latest(
+                    params_store=ParamsStoreSnapshot.from_store_dict(params),
+                    results_store=ResultsStoreSnapshot.from_store_dict(
+                        results_store_payload
+                    ),
+                )
+            except Exception:
+                logging.exception("Failed to publish latest interactive session state")
+
+        try:
+            results_store_payload["figure_version"] = int(request_id)
+        except (TypeError, ValueError):
+            results_store_payload["figure_version"] = 0
+
+        source = params.get("source")
+        if source == "sync":
+            results_store_payload, _, _ = (
+                self._session_sync_service.apply_sync_source_payload(
+                    results_payload=results_store_payload,
+                    params=params,
+                )
+            )
+            return (
+                results_store_payload,
+                results_table_rows,
+                triangle_output,
+                emergence_output,
+                no_update,
+                no_update,
+                no_update,
+            )
+
+        results_store_payload, publish_message, save_request = (
+            self._session_sync_service.apply_local_source_payload(
+                results_payload=results_store_payload,
+                params=params,
+                current_payload=current_payload
+                if isinstance(current_payload, dict)
+                else None,
+                sync_ready=bool(sync_ready),
+            )
+        )
+        return (
+            results_store_payload,
+            results_table_rows,
+            triangle_output,
+            emergence_output,
+            publish_message if publish_message is not None else no_update,
+            save_request,
+            False if save_request else no_update,
+        )
 
     def _load_session_defaults(self) -> None:
         if self._config is None:
@@ -1577,6 +1781,8 @@ class Dashboard:
             Output("sync-publish-message", "data"),
             Output("session-save-store", "data"),
             Output("session-save-interval", "disabled"),
+            Output("recalc-status-store", "data"),
+            Output("recalc-poll-interval", "disabled"),
             Input("params-store", "data"),
             State("results-store", "data"),
             State("sync-ready", "data"),
@@ -1591,40 +1797,16 @@ class Dashboard:
                     no_update,
                     no_update,
                     no_update,
+                    no_update,
+                    no_update,
                 )
 
             callback_started = time.perf_counter()
-            request_id = params.get("request_id", "n/a")
-            drop_store = params.get("drop_store") or []
-            average = params.get("average") or self._default_average
-            tail_attachment_age = params.get("tail_attachment_age")
-            tail_projection_months = self._normalize_tail_projection_months_for_ui(
-                params.get(
-                    "tail_projection_months", self._default_tail_projection_months
-                )
-            )
-            tail_curve = params.get("tail_curve") or self._default_tail_curve
-            tail_fit_period_selection = params.get("tail_fit_period_selection") or []
-            bf_apriori_by_uwy = params.get("bf_apriori_by_uwy") or {}
-            selected_ultimate_by_uwy = (
-                self._params_service.build_selected_ultimate_by_uwy(
-                    params.get("selected_ultimate_by_uwy")
-                )
-            )
-            force_recalc = bool(params.get("force_recalc"))
-
-            model_cache_key = self._cache_service.build_model_cache_key(
-                segment=self._get_segment_key(),
-                default_average=self._default_average,
-                default_tail_curve=self._default_tail_curve,
-                drop_store=drop_store,
-                average=average,
-                tail_attachment_age=tail_attachment_age,
-                tail_projection_months=tail_projection_months,
-                tail_curve=tail_curve,
-                tail_fit_period_selection=tail_fit_period_selection,
-                bf_apriori_by_uwy=bf_apriori_by_uwy,
-            )
+            context = self._normalize_request_context(params)
+            request_id = context["request_id"]
+            selected_ultimate_by_uwy = context["selected_ultimate_by_uwy"]
+            force_recalc = bool(context["force_recalc"])
+            model_cache_key = context["model_cache_key"]
 
             if (
                 not force_recalc
@@ -1650,182 +1832,241 @@ class Dashboard:
                     no_update,
                     no_update,
                     no_update,
+                    no_update,
+                    True,
                 )
-
-            logging.info(
-                "[recalc] start request=%s source=%s force=%s",
-                request_id,
-                params.get("source"),
-                force_recalc,
-            )
-            try:
-                results_payload = self._reserving_service.get_or_build_results_payload(
-                    drop_store=drop_store,
-                    average=average,
-                    tail_attachment_age=tail_attachment_age,
-                    tail_projection_months=tail_projection_months,
-                    tail_curve=tail_curve,
-                    tail_fit_period_selection=tail_fit_period_selection,
-                    bf_apriori_by_uwy=bf_apriori_by_uwy,
-                    selected_ultimate_by_uwy=selected_ultimate_by_uwy,
-                    force_recalc=force_recalc,
-                )
-            except Exception as exc:
-                logging.error(f"Failed to recalculate reserving: {exc}", exc_info=True)
-                return (
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                )
-
-            results_table_rows = results_payload.get("results_table_rows", [])
-            results_store_payload = results_payload.copy()
-            results_store_payload.pop("results_table_rows", None)
 
             model_changed = (
                 force_recalc
                 or not isinstance(current_payload, dict)
-                or current_payload.get("model_cache_key")
-                != results_store_payload.get("model_cache_key")
+                or current_payload.get("model_cache_key") != model_cache_key
             )
-            triangle_output = no_update
-            emergence_output = no_update
-            if model_changed:
-                triangle_figure, emergence_figure = (
-                    self._reserving_service.get_or_build_visual_payload(
-                        drop_store=drop_store,
-                        average=average,
-                        tail_attachment_age=tail_attachment_age,
-                        tail_projection_months=tail_projection_months,
-                        tail_curve=tail_curve,
-                        tail_fit_period_selection=tail_fit_period_selection,
-                    )
-                )
+            if context["source"] == "load":
                 try:
-                    figure_version = int(request_id)
-                except (TypeError, ValueError):
-                    figure_version = 0
-                triangle_output = {
-                    "figure": triangle_figure,
-                    "figure_version": figure_version,
-                }
-                emergence_output = emergence_figure
-
-            if self._controller is not None:
-                try:
-                    self._controller.publish_latest(
-                        params_store=ParamsStoreSnapshot.from_store_dict(params),
-                        results_store=ResultsStoreSnapshot.from_store_dict(
-                            results_store_payload
-                        ),
+                    results_payload = (
+                        self._reserving_service.get_or_build_results_payload(
+                            drop_store=context["drop_store"],
+                            average=context["average"],
+                            tail_attachment_age=context["tail_attachment_age"],
+                            tail_projection_months=context["tail_projection_months"],
+                            tail_curve=context["tail_curve"],
+                            tail_fit_period_selection=context[
+                                "tail_fit_period_selection"
+                            ],
+                            bf_apriori_by_uwy=context["bf_apriori_by_uwy"],
+                            selected_ultimate_by_uwy=context[
+                                "selected_ultimate_by_uwy"
+                            ],
+                            force_recalc=force_recalc,
+                        )
                     )
-                except Exception:
-                    logging.exception(
-                        "Failed to publish latest interactive session state"
+                except Exception as exc:
+                    logging.error(
+                        f"Failed to recalculate reserving on load: {exc}",
+                        exc_info=True,
                     )
-
-            try:
-                results_store_payload["figure_version"] = int(request_id)
-            except (TypeError, ValueError):
-                results_store_payload["figure_version"] = 0
-
-            source = params.get("source")
-            if source == "sync":
-                results_store_payload, _, _ = (
-                    self._session_sync_service.apply_sync_source_payload(
-                        results_payload=results_store_payload,
-                        params=params,
+                    return (
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        {"state": "error", "request_id": request_id, "error": str(exc)},
+                        True,
                     )
-                )
-                sync_version = int(results_store_payload.get("sync_version", 0))
-                logging.info(
-                    "[recalc] finish request=%s sync_version=%s",
-                    request_id,
-                    sync_version,
-                )
-                total_elapsed_ms = (time.perf_counter() - callback_started) * 1000
-                logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
-                return (
-                    results_store_payload,
-                    results_table_rows,
-                    triangle_output,
-                    emergence_output,
-                    no_update,
-                    no_update,
-                    no_update,
-                )
-
-            if not bool(sync_ready):
-                logging.warning(
-                    "Tab sync bridge unavailable; update applied only in current tab"
-                )
-
-            results_store_payload, publish_message, save_request = (
-                self._session_sync_service.apply_local_source_payload(
-                    results_payload=results_store_payload,
+                outputs = self._finalize_results_update(
+                    results_payload=results_payload,
                     params=params,
                     current_payload=current_payload
                     if isinstance(current_payload, dict)
                     else None,
                     sync_ready=bool(sync_ready),
-                )
-            )
-            sync_version = int(results_store_payload.get("sync_version", 0))
-            segment_key = self._get_segment_key()
-
-            if publish_message is None:
-                logging.info(
-                    "Session unchanged; skipping sync publish for segment '%s'",
-                    segment_key,
-                )
-                logging.info(
-                    "[recalc] finish request=%s sync_version=%s (no publish)",
-                    request_id,
-                    sync_version,
+                    request_id=request_id,
+                    model_changed=model_changed,
                 )
                 total_elapsed_ms = (time.perf_counter() - callback_started) * 1000
                 logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
-                return (
-                    results_store_payload,
-                    results_table_rows,
-                    triangle_output,
-                    emergence_output,
-                    no_update,
-                    save_request,
-                    False if save_request else no_update,
-                )
+                return (*outputs, {"state": "idle", "request_id": request_id}, True)
 
-            logging.info(
-                "Publishing sync update for segment '%s' at version %s",
-                segment_key,
-                sync_version,
+            if not model_changed:
+                if not bool(sync_ready) and context["source"] != "sync":
+                    logging.warning(
+                        "Tab sync bridge unavailable; update applied only in current tab"
+                    )
+                logging.info(
+                    "[recalc] using selection fast path request=%s source=%s",
+                    request_id,
+                    context["source"],
+                )
+                try:
+                    results_payload = (
+                        self._reserving_service.get_or_build_results_payload(
+                            drop_store=context["drop_store"],
+                            average=context["average"],
+                            tail_attachment_age=context["tail_attachment_age"],
+                            tail_projection_months=context["tail_projection_months"],
+                            tail_curve=context["tail_curve"],
+                            tail_fit_period_selection=context[
+                                "tail_fit_period_selection"
+                            ],
+                            bf_apriori_by_uwy=context["bf_apriori_by_uwy"],
+                            selected_ultimate_by_uwy=context[
+                                "selected_ultimate_by_uwy"
+                            ],
+                            force_recalc=False,
+                        )
+                    )
+                except Exception as exc:
+                    logging.error(
+                        f"Failed to update reserving selection state: {exc}",
+                        exc_info=True,
+                    )
+                    return (
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        {"state": "error", "request_id": request_id, "error": str(exc)},
+                        True,
+                    )
+                outputs = self._finalize_results_update(
+                    results_payload=results_payload,
+                    params=params,
+                    current_payload=current_payload
+                    if isinstance(current_payload, dict)
+                    else None,
+                    sync_ready=bool(sync_ready),
+                    request_id=request_id,
+                    model_changed=False,
+                )
+                total_elapsed_ms = (time.perf_counter() - callback_started) * 1000
+                logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
+                return (*outputs, {"state": "idle", "request_id": request_id}, True)
+
+            queue_status = self._background_recalc_service.submit(
+                {
+                    "request_id": int(request_id),
+                    "segment_key": self._get_segment_key(),
+                    "drop_store": context["drop_store"],
+                    "average": context["average"],
+                    "tail_attachment_age": context["tail_attachment_age"],
+                    "tail_projection_months": context["tail_projection_months"],
+                    "tail_curve": context["tail_curve"],
+                    "tail_fit_period_selection": context["tail_fit_period_selection"],
+                    "bf_apriori_by_uwy": context["bf_apriori_by_uwy"],
+                    "selected_ultimate_by_uwy": context["selected_ultimate_by_uwy"],
+                    "params": params,
+                }
             )
             logging.info(
-                "[recalc] finish request=%s sync_version=%s",
+                "[recalc] queued background request=%s state=%s",
                 request_id,
-                sync_version,
+                queue_status.get("state"),
             )
             total_elapsed_ms = (time.perf_counter() - callback_started) * 1000
             logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
             return (
-                results_store_payload,
-                results_table_rows,
-                triangle_output,
-                emergence_output,
-                publish_message,
-                save_request,
-                False if save_request else no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                queue_status,
+                False,
             )
+
+        @self.app.callback(
+            Output("results-store", "data", allow_duplicate=True),
+            Output("results-table-store", "data", allow_duplicate=True),
+            Output("triangle-base-figure", "data", allow_duplicate=True),
+            Output("emergence-plot", "figure", allow_duplicate=True),
+            Output("sync-publish-message", "data", allow_duplicate=True),
+            Output("session-save-store", "data", allow_duplicate=True),
+            Output("session-save-interval", "disabled", allow_duplicate=True),
+            Output("recalc-status-store", "data", allow_duplicate=True),
+            Output("recalc-poll-interval", "disabled", allow_duplicate=True),
+            Input("recalc-poll-interval", "n_intervals"),
+            State("results-store", "data"),
+            State("sync-ready", "data"),
+            prevent_initial_call=True,
+        )
+        def _poll_background_results(_n_intervals, current_payload, sync_ready):
+            poll_state = self._background_recalc_service.poll()
+            state = poll_state.get("state")
+            if state in {"running", "queued"}:
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    poll_state,
+                    False,
+                )
+            if state == "error":
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    poll_state,
+                    True,
+                )
+            if state != "completed":
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    True,
+                )
+
+            job_result = poll_state.get("result") or {}
+            job = job_result.get("job") or {}
+            params = job.get("params") or {}
+            request_id = job_result.get("request_id", job.get("request_id", 0))
+
+            self._reserving = job_result["reserving"]
+            self._reserving_service.set_reserving(self._reserving)
+            self.emergence_pattern = job_result.get("emergence_pattern")
+            self.triangle = job_result.get("triangle")
+            self.incurred = job_result.get("incurred")
+            self.premium = job_result.get("premium")
+            self.results = job_result.get("results")
+
+            outputs = self._finalize_results_update(
+                results_payload=job_result.get("results_payload") or {},
+                params=params,
+                current_payload=current_payload
+                if isinstance(current_payload, dict)
+                else None,
+                sync_ready=bool(sync_ready),
+                request_id=request_id,
+                model_changed=True,
+            )
+            return (*outputs, {"state": "idle", "request_id": request_id}, True)
 
         @self.app.callback(
             Output("session-save-store", "data", allow_duplicate=True),
             Output("session-save-interval", "disabled", allow_duplicate=True),
             Input("session-save-interval", "n_intervals"),
-            Input("session-save-store", "data"),
+            State("session-save-store", "data"),
             prevent_initial_call=True,
         )
         def _flush_pending_session_save(_n_intervals, save_request):
@@ -2273,8 +2514,15 @@ class Dashboard:
                 dcc.Store(id="sync-ready", data=False),
                 dcc.Store(id="sync-publish-message", data=None),
                 dcc.Store(id="session-save-store", data=None),
+                dcc.Store(id="recalc-status-store", data={"state": "idle"}),
                 dcc.Interval(
                     id="session-save-interval",
+                    interval=250,
+                    disabled=True,
+                    n_intervals=0,
+                ),
+                dcc.Interval(
+                    id="recalc-poll-interval",
                     interval=250,
                     disabled=True,
                     n_intervals=0,

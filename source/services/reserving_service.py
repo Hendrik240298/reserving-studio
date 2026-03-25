@@ -60,6 +60,9 @@ class ReservingService:
         self._emergence_cache = emergence_cache
         self._ave_cache = ave_cache if ave_cache is not None else {}
 
+    def set_reserving(self, reserving: Reserving) -> None:
+        self._reserving = reserving
+
     def _infer_months_per_development_period(self, reserving: Reserving) -> int:
         try:
             triangle = reserving._triangle.get_triangle()["incurred"]
