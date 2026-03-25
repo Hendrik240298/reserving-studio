@@ -82,6 +82,63 @@ def test_bf_apriori_updates_bf_result_entries(
 
 
 @pytest.mark.e2e
+def test_ave_tab_renders_origin_and_valuation_charts(
+    dash_base_url: str,
+    page: Page,
+) -> None:
+    wait_for_dashboard_ready(page, dash_base_url)
+
+    page.click("#nav-ave")
+    wait_for_graph_ready(page, "ave-origin-plot")
+    wait_for_graph_ready(page, "ave-valuation-plot")
+
+    valuation_text = page.locator("#ave-valuation-selector").text_content() or ""
+    assert "Q" in valuation_text
+
+
+@pytest.mark.e2e
+def test_results_selection_updates_ave_view(
+    dash_base_url: str,
+    page: Page,
+) -> None:
+    wait_for_dashboard_ready(page, dash_base_url)
+
+    page.click("#nav-ave")
+    wait_for_graph_ready(page, "ave-origin-plot")
+    ave_before = graph_fingerprint(page, "ave-origin-plot")
+
+    page.click("#nav-results")
+    wait_for_results_table_ready(page)
+    baseline = read_results_column_values(
+        page,
+        ["UWY", "CL Ultimate (EUR)", "BF Ultimate (EUR)", "Selected Ultimate (EUR)"],
+    )
+    differing_indices = [
+        idx
+        for idx, (cl_value, bf_value) in enumerate(
+            zip(baseline["CL Ultimate (EUR)"], baseline["BF Ultimate (EUR)"])
+        )
+        if cl_value != bf_value and baseline["Selected Ultimate (EUR)"][idx] == cl_value
+    ]
+    assert differing_indices
+
+    target_uwy = baseline["UWY"][differing_indices[0]]
+    click_results_method_cell(page, target_uwy, "bornhuetter_ferguson")
+
+    page.click("#nav-ave")
+    ave_after = wait_for_graph_fingerprint_change(
+        page,
+        "ave-origin-plot",
+        ave_before,
+    )
+    assert ave_after != ave_before
+
+    page.click("#nav-results")
+    click_results_method_cell(page, target_uwy, "chainladder")
+    wait_for_results_column_change(page, baseline)
+
+
+@pytest.mark.e2e
 def test_results_selection_is_per_uwy_and_persists(
     dash_base_url: str,
     page: Page,

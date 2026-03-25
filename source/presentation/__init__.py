@@ -1,6 +1,8 @@
 from source.presentation.plot_builders import (
     build_heatmap_core,
     build_heatmap_core_cache_key,
+    plot_ave_by_origin,
+    plot_ave_by_valuation,
     plot_data_triangle_table,
     plot_emergence,
     plot_reserving_results_table,
@@ -10,6 +12,8 @@ from source.presentation.plot_builders import (
 __all__ = [
     "build_heatmap_core",
     "build_heatmap_core_cache_key",
+    "plot_ave_by_origin",
+    "plot_ave_by_valuation",
     "plot_data_triangle_table",
     "plot_emergence",
     "plot_reserving_results_table",

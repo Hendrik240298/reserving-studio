@@ -16,6 +16,8 @@ from source.presentation.plot_builders import (
     build_heatmap_core_cache_key,
     build_triangle_customdata,
     format_millions_array,
+    plot_ave_by_origin,
+    plot_ave_by_valuation,
     plot_data_triangle_table,
     plot_emergence,
     plot_reserving_results_table,
@@ -299,6 +301,47 @@ def test_plot_reserving_results_table_returns_table_trace() -> None:
     )
     assert len(figure.data) == 1
     assert figure.data[0].type == "table"
+
+
+def test_plot_ave_by_origin_returns_bar_and_line_traces() -> None:
+    figure = plot_ave_by_origin(
+        ave_view={
+            "origin": ["2001", "2002"],
+            "expected": [100.0, 125.0],
+            "actual": [110.0, 120.0],
+            "diff": [10.0, -5.0],
+        },
+        title="Actual vs Expected by Underwriting Year",
+        font_family=STYLE["font_family"],
+        figure_font_size=STYLE["figure_font_size"],
+        figure_title_font_size=STYLE["figure_title_font_size"],
+        alert_annotation_font_size=STYLE["alert_annotation_font_size"],
+        color_text=STYLE["color_text"],
+        color_surface=STYLE["color_surface"],
+        color_border=STYLE["color_border"],
+    )
+
+    assert len(figure.data) == 3
+    assert figure.data[0].type == "bar"
+    assert figure.data[1].type == "bar"
+    assert figure.data[2].type == "scatter"
+
+
+def test_plot_ave_by_valuation_returns_empty_figure_when_missing() -> None:
+    figure = plot_ave_by_valuation(
+        series_data=None,
+        title="Actual vs Expected by Valuation Quarter",
+        font_family=STYLE["font_family"],
+        figure_font_size=STYLE["figure_font_size"],
+        figure_title_font_size=STYLE["figure_title_font_size"],
+        alert_annotation_font_size=STYLE["alert_annotation_font_size"],
+        color_text=STYLE["color_text"],
+        color_surface=STYLE["color_surface"],
+        color_border=STYLE["color_border"],
+    )
+
+    assert len(figure.data) == 0
+    assert len(figure.layout.annotations) == 1
 
 
 def test_plot_triangle_heatmap_clean_returns_figure_and_payload() -> None:

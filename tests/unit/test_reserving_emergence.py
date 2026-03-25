@@ -88,3 +88,63 @@ def test_emergence_expected_has_values_for_all_development_columns() -> None:
     expected = emergence["Expected"]
 
     assert not expected.isna().all(axis=0).any()
+
+
+def test_get_ave_triangle_returns_incremental_valuation_based_incurred() -> None:
+    reserving = _build_reserving()
+    reserving.reserve(final_ultimate="chainladder")
+
+    ave, actual, expected = reserving.get_ave_triangle(
+        incremental=True,
+        valuation_based=True,
+    )
+
+    ave_df = ave.to_frame(keepdims=True).reset_index()
+    actual_df = actual.to_frame(keepdims=True).reset_index()
+    expected_df = expected.to_frame(keepdims=True).reset_index()
+
+    latest_valuation = reserving._triangle.get_triangle()["incurred"].valuation_date
+    assert pd.to_datetime(ave_df["valuation"]).max() <= latest_valuation
+    assert "development" not in ave_df.columns
+
+    merged = actual_df.rename(columns={"incurred": "actual"}).merge(
+        expected_df.rename(columns={"incurred": "expected"}),
+        on=["Total", "origin", "valuation"],
+    )
+    merged = merged.merge(
+        ave_df.rename(columns={"incurred": "diff"}),
+        on=["Total", "origin", "valuation"],
+    )
+    pd.testing.assert_series_equal(
+        merged["diff"],
+        merged["actual"] - merged["expected"],
+        check_names=False,
+    )
+
+
+def test_get_ave_triangle_reflects_selected_method_by_origin() -> None:
+    reserving = _build_reserving()
+    reserving.reserve(final_ultimate="chainladder")
+
+    _, _, expected_cl = reserving.get_ave_triangle(
+        incremental=True,
+        valuation_based=True,
+        selected_ultimate_by_uwy={"2001": "chainladder"},
+    )
+    _, _, expected_bf = reserving.get_ave_triangle(
+        incremental=True,
+        valuation_based=True,
+        selected_ultimate_by_uwy={"2001": "bornhuetter_ferguson"},
+    )
+
+    expected_cl_df = expected_cl.to_frame(keepdims=True).reset_index()
+    expected_bf_df = expected_bf.to_frame(keepdims=True).reset_index()
+
+    cl_origin = expected_cl_df[
+        expected_cl_df["origin"].astype(str).str.startswith("2001")
+    ]["incurred"].reset_index(drop=True)
+    bf_origin = expected_bf_df[
+        expected_bf_df["origin"].astype(str).str.startswith("2001")
+    ]["incurred"].reset_index(drop=True)
+
+    assert not cl_origin.equals(bf_origin)

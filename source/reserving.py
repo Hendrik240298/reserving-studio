@@ -53,6 +53,68 @@ class Reserving:
         except (TypeError, ValueError):
             return None
 
+    def _get_latest_observed_valuation(self) -> pd.Timestamp:
+        triangle = self._triangle.get_triangle()["incurred"]
+        return pd.Timestamp(triangle.valuation_date).normalize()
+
+    @staticmethod
+    def _drop_ultimate_development_period(triangle: cl.Triangle) -> cl.Triangle:
+        try:
+            development = [str(value) for value in triangle.development.tolist()]
+        except Exception:
+            development = []
+        if development and development[-1] == "9999":
+            return triangle.iloc[..., :-1]
+        return triangle
+
+    @staticmethod
+    def _filter_triangle_to_latest_valuation(
+        triangle: cl.Triangle,
+        latest_valuation: pd.Timestamp,
+    ) -> cl.Triangle:
+        return triangle[triangle.valuation.normalize() <= latest_valuation]
+
+    def _get_selected_method_by_origin(
+        self,
+        selected_ultimate_by_uwy: Optional[dict[str, str]] = None,
+    ) -> dict[object, str]:
+        if self._chainladder_result is None or self._bornhuetter_result is None:
+            raise ValueError("Reserving results not available. Call reserve() first.")
+
+        selected_mapping_input: dict[str, str] = {}
+        source_mapping = selected_ultimate_by_uwy or self._selected_ultimate_by_uwy
+        for key, value in source_mapping.items():
+            method = self._normalize_selected_method(value)
+            if method is not None:
+                selected_mapping_input[str(key)] = method
+
+        origin_methods: dict[object, str] = {}
+        for origin in self._chainladder_result.named_steps.model.full_triangle_[
+            "incurred"
+        ].origin:
+            uwy_label = self._origin_to_uwy_label(origin)
+            origin_methods[origin] = selected_mapping_input.get(
+                uwy_label, "chainladder"
+            )
+        return origin_methods
+
+    @staticmethod
+    def _combine_triangles_by_origin(
+        chainladder_triangle: cl.Triangle,
+        bornhuetter_triangle: cl.Triangle,
+        selected_methods: dict[object, str],
+    ) -> cl.Triangle:
+        triangle_parts: list[cl.Triangle] = []
+        for origin in chainladder_triangle.origin:
+            selected_method = selected_methods.get(origin, "chainladder")
+            source_triangle = (
+                bornhuetter_triangle
+                if selected_method == "bornhuetter_ferguson"
+                else chainladder_triangle
+            )
+            triangle_parts.append(source_triangle[source_triangle.origin == origin])
+        return cl.concat(triangle_parts, axis=2)
+
     def set_development(
         self,
         average: str = "volume",
@@ -401,6 +463,57 @@ class Reserving:
 
     def get_results(self):
         return self.df_results.copy()
+
+    def get_ave_triangle(
+        self,
+        incremental: bool = True,
+        valuation_based: bool = True,
+        selected_ultimate_by_uwy: Optional[dict[str, str]] = None,
+    ) -> tuple[cl.Triangle, cl.Triangle, cl.Triangle]:
+        if self._chainladder_result is None or self._bornhuetter_result is None:
+            raise ValueError("Results not available. Call reserve() first")
+
+        selected_methods = self._get_selected_method_by_origin(selected_ultimate_by_uwy)
+        chainladder_model = self._chainladder_result.named_steps.model
+        bornhuetter_model = self._bornhuetter_result.named_steps.model
+        full_triangle = self._combine_triangles_by_origin(
+            chainladder_model.full_triangle_["incurred"],
+            bornhuetter_model.full_triangle_["incurred"],
+            selected_methods,
+        )
+        full_expectation = self._combine_triangles_by_origin(
+            chainladder_model.full_expectation_["incurred"],
+            bornhuetter_model.full_expectation_["incurred"],
+            selected_methods,
+        )
+        latest_valuation = self._get_latest_observed_valuation()
+
+        if incremental:
+            full_triangle = full_triangle.cum_to_incr()
+            full_expectation = full_expectation.cum_to_incr()
+
+        ave = full_triangle - full_expectation
+
+        if valuation_based:
+            full_triangle = self._drop_ultimate_development_period(
+                full_triangle
+            ).dev_to_val()
+            full_expectation = self._drop_ultimate_development_period(
+                full_expectation
+            ).dev_to_val()
+            ave = self._drop_ultimate_development_period(ave).dev_to_val()
+
+            full_triangle = self._filter_triangle_to_latest_valuation(
+                full_triangle,
+                latest_valuation,
+            )
+            full_expectation = self._filter_triangle_to_latest_valuation(
+                full_expectation,
+                latest_valuation,
+            )
+            ave = self._filter_triangle_to_latest_valuation(ave, latest_valuation)
+
+        return ave, full_triangle, full_expectation
 
     def get_emergence_pattern(self):
         # Calculate emergence triangle: for each UWY, show incurred as % of ultimate over development

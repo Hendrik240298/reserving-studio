@@ -28,6 +28,9 @@ class ReservingService:
         extract_data: Callable[[], None],
         get_triangle: Callable[[], pd.DataFrame | None],
         get_emergence: Callable[[], pd.DataFrame | None],
+        get_ave: Callable[
+            [dict[str, str] | None], tuple[object, object, object] | None
+        ],
         get_results: Callable[[], pd.DataFrame | None],
         build_triangle_figure: Callable[
             [pd.DataFrame | None, str, int | None, list[int] | None], dict
@@ -48,6 +51,7 @@ class ReservingService:
         self._extract_data = extract_data
         self._get_triangle = get_triangle
         self._get_emergence = get_emergence
+        self._get_ave = get_ave
         self._get_results = get_results
         self._build_triangle_figure = build_triangle_figure
         self._build_emergence_figure = build_emergence_figure
@@ -135,6 +139,207 @@ class ReservingService:
                 }
             )
         return rows
+
+    @staticmethod
+    def _normalize_origin_label(value: object) -> str:
+        if hasattr(value, "year"):
+            return str(value.year)
+        text = str(value)
+        if len(text) >= 4 and text[:4].isdigit():
+            return text[:4]
+        return text
+
+    @staticmethod
+    def _normalize_origin_sort(value: object) -> int | str:
+        label = ReservingService._normalize_origin_label(value)
+        if label.isdigit():
+            return int(label)
+        return label
+
+    @staticmethod
+    def _normalize_valuation_label(value: object) -> str:
+        if isinstance(value, pd.Period):
+            period = value.asfreq("Q")
+            return f"{period.year}Q{period.quarter}"
+        timestamp = pd.to_datetime(value, errors="coerce")
+        if pd.notna(timestamp):
+            period = timestamp.to_period("Q")
+            return f"{period.year}Q{period.quarter}"
+        return str(value)
+
+    @staticmethod
+    def _normalize_valuation_sort(value: object) -> int | str:
+        timestamp = pd.to_datetime(value, errors="coerce")
+        if pd.notna(timestamp):
+            period = timestamp.to_period("Q")
+            return int(period.year) * 10 + int(period.quarter)
+        return ReservingService._normalize_valuation_label(value)
+
+    @staticmethod
+    def _flatten_ave_triangle(triangle: object, value_name: str) -> pd.DataFrame:
+        if triangle is None:
+            return pd.DataFrame(
+                columns=[
+                    "origin",
+                    "origin_label",
+                    "origin_sort",
+                    "valuation",
+                    "valuation_sort",
+                    value_name,
+                ]
+            )
+
+        frame = triangle.to_frame(keepdims=True).reset_index()
+        candidate_columns = [
+            column
+            for column in frame.columns
+            if column not in {"index", "level_0", "Total", "origin", "valuation"}
+        ]
+        if "incurred" in candidate_columns:
+            value_column = "incurred"
+        else:
+            numeric_candidates = (
+                frame[candidate_columns]
+                .select_dtypes(include=["number"])
+                .columns.tolist()
+            )
+            value_column = numeric_candidates[0] if numeric_candidates else None
+            if value_column is None and candidate_columns:
+                value_column = candidate_columns[0]
+        if value_column is None:
+            return pd.DataFrame(
+                columns=[
+                    "origin",
+                    "origin_label",
+                    "origin_sort",
+                    "valuation",
+                    "valuation_sort",
+                    value_name,
+                ]
+            )
+
+        flattened = frame[["origin", "valuation", value_column]].copy()
+        flattened["origin_label"] = flattened["origin"].map(
+            ReservingService._normalize_origin_label
+        )
+        flattened["origin_sort"] = flattened["origin"].map(
+            ReservingService._normalize_origin_sort
+        )
+        flattened["valuation"] = flattened["valuation"].map(
+            ReservingService._normalize_valuation_label
+        )
+        flattened["valuation_sort"] = frame["valuation"].map(
+            ReservingService._normalize_valuation_sort
+        )
+        flattened = flattened.rename(columns={value_column: value_name})
+        return flattened
+
+    @staticmethod
+    def _build_ave_payload(
+        ave_triangles: tuple[object, object, object] | None,
+    ) -> dict:
+        empty_payload = {
+            "available": False,
+            "options": [],
+            "default_valuation": None,
+            "origin_views": {},
+            "series": {"valuation": [], "expected": [], "actual": [], "diff": []},
+        }
+        if ave_triangles is None:
+            return empty_payload
+
+        ave_triangle, actual_triangle, expected_triangle = ave_triangles
+        diff_df = ReservingService._flatten_ave_triangle(ave_triangle, "diff")
+        actual_df = ReservingService._flatten_ave_triangle(actual_triangle, "actual")
+        expected_df = ReservingService._flatten_ave_triangle(
+            expected_triangle, "expected"
+        )
+
+        merge_keys = [
+            "origin",
+            "origin_label",
+            "origin_sort",
+            "valuation",
+            "valuation_sort",
+        ]
+        merged = diff_df.merge(actual_df, on=merge_keys, how="outer")
+        merged = merged.merge(expected_df, on=merge_keys, how="outer")
+        if merged.empty:
+            return empty_payload
+
+        for column in ["actual", "expected", "diff"]:
+            merged[column] = pd.to_numeric(merged[column], errors="coerce")
+        merged = merged.dropna(subset=["actual", "expected", "diff"], how="all")
+        if merged.empty:
+            return empty_payload
+
+        merged["diff"] = merged["diff"].where(
+            merged["diff"].notna(),
+            merged["actual"] - merged["expected"],
+        )
+
+        origin_agg = (
+            merged.groupby(
+                ["valuation", "valuation_sort", "origin_label", "origin_sort"],
+                dropna=False,
+            )[["actual", "expected", "diff"]]
+            .sum(min_count=1)
+            .reset_index()
+            .sort_values(["valuation_sort", "origin_sort"])
+        )
+        series_agg = (
+            merged.groupby(["valuation", "valuation_sort"], dropna=False)[
+                ["actual", "expected", "diff"]
+            ]
+            .sum(min_count=1)
+            .reset_index()
+            .sort_values("valuation_sort")
+        )
+
+        valuation_options = [
+            {"value": str(value), "label": str(value)}
+            for value in series_agg["valuation"].tolist()
+        ]
+        if not valuation_options:
+            return empty_payload
+
+        origin_views: dict[str, dict] = {}
+        for valuation, group in origin_agg.groupby("valuation", sort=False):
+            valuation_key = str(valuation)
+            ordered = group.sort_values("origin_sort")
+            expected = pd.to_numeric(ordered["expected"], errors="coerce").fillna(0.0)
+            actual = pd.to_numeric(ordered["actual"], errors="coerce").fillna(0.0)
+            diff = pd.to_numeric(ordered["diff"], errors="coerce").fillna(0.0)
+            origin_views[valuation_key] = {
+                "origin": [str(value) for value in ordered["origin_label"].tolist()],
+                "expected": expected.tolist(),
+                "actual": actual.tolist(),
+                "diff": diff.tolist(),
+                "kpis": {
+                    "expected_total": float(expected.sum()),
+                    "actual_total": float(actual.sum()),
+                    "diff_total": float(diff.sum()),
+                },
+            }
+
+        return {
+            "available": True,
+            "options": valuation_options,
+            "default_valuation": valuation_options[-1]["value"],
+            "origin_views": origin_views,
+            "series": {
+                "valuation": [str(value) for value in series_agg["valuation"].tolist()],
+                "expected": pd.to_numeric(series_agg["expected"], errors="coerce")
+                .fillna(0.0)
+                .tolist(),
+                "actual": pd.to_numeric(series_agg["actual"], errors="coerce")
+                .fillna(0.0)
+                .tolist(),
+                "diff": pd.to_numeric(series_agg["diff"], errors="coerce")
+                .fillna(0.0)
+                .tolist(),
+            },
+        }
 
     def _build_results_cache_key(
         self,
@@ -292,6 +497,9 @@ class ReservingService:
         payload["results_table_rows"] = self._build_results_table_rows(
             selected_results_df
         )
+        payload["ave_data"] = self._build_ave_payload(
+            self._get_ave(selected_ultimate_by_uwy or None)
+        )
         payload["cache_key"] = results_cache_key
         payload["last_updated"] = (
             datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -369,9 +577,13 @@ class ReservingService:
                 "Emergence Pattern",
             ),
         )
+        ave_payload = self._build_ave_payload(
+            self._get_ave(selected_ultimate_by_uwy or None)
+        )
         return {
             "triangle_figure": triangle_figure,
             "emergence_figure": emergence_figure,
+            "ave_data": ave_payload,
             "drops_display": display,
             "average": average,
             "tail_curve": tail_curve,

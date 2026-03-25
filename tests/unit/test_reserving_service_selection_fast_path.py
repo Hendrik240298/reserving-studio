@@ -50,6 +50,33 @@ class _FakeReserving:
         self.reserve_calls += 1
 
 
+class _FakeAveTriangle:
+    def __init__(self, frame: pd.DataFrame) -> None:
+        self._frame = frame
+
+    def to_frame(self, keepdims: bool = True) -> pd.DataFrame:
+        return self._frame.copy()
+
+
+def _build_fake_ave_triangles(
+    selected_ultimate_by_uwy: dict[str, str] | None = None,
+) -> tuple[_FakeAveTriangle, _FakeAveTriangle, _FakeAveTriangle]:
+    use_bf = (selected_ultimate_by_uwy or {}).get("2001") == "bornhuetter_ferguson"
+    base = pd.DataFrame(
+        {
+            "Total": ["Total", "Total", "Total"],
+            "origin": ["2001", "2002", "2001"],
+            "valuation": ["2001Q1", "2001Q1", "2001Q2"],
+            "incurred": [20.0 if use_bf else 10.0, -5.0, 25.0 if use_bf else 15.0],
+        }
+    )
+    actual = base.copy()
+    actual["incurred"] = [110.0, 120.0, 130.0]
+    expected = base.copy()
+    expected["incurred"] = [100.0, 125.0, 115.0]
+    return _FakeAveTriangle(base), _FakeAveTriangle(actual), _FakeAveTriangle(expected)
+
+
 def test_selection_change_reuses_model_without_recalc() -> None:
     fake_reserving = _FakeReserving()
     results_df = pd.DataFrame(
@@ -84,6 +111,7 @@ def test_selection_change_reuses_model_without_recalc() -> None:
         extract_data=lambda: None,
         get_triangle=lambda: pd.DataFrame(),
         get_emergence=lambda: pd.DataFrame(),
+        get_ave=_build_fake_ave_triangles,
         get_results=lambda: results_df,
         build_triangle_figure=lambda *_args: {"kind": "triangle"},
         build_emergence_figure=lambda *_args: {"kind": "emergence"},
@@ -130,6 +158,10 @@ def test_selection_change_reuses_model_without_recalc() -> None:
         row_by_uwy["2002"]["ultimate_display"]
         == row_by_uwy["2002"]["cl_ultimate_display"]
     )
+    assert payload_bf["ave_data"]["available"] is True
+    assert payload_bf["ave_data"]["default_valuation"] == "2001Q2"
+    assert payload_cl["ave_data"]["origin_views"]["2001Q1"]["diff"][0] == 10.0
+    assert payload_bf["ave_data"]["origin_views"]["2001Q1"]["diff"][0] == 20.0
 
     assert payload_cl["model_cache_key"] == payload_bf["model_cache_key"]
     assert payload_cl["cache_key"] != payload_bf["cache_key"]
@@ -158,6 +190,7 @@ def test_tail_projection_uses_fallback_dev_spacing() -> None:
         extract_data=lambda: None,
         get_triangle=lambda: pd.DataFrame(),
         get_emergence=lambda: pd.DataFrame(),
+        get_ave=_build_fake_ave_triangles,
         get_results=lambda: pd.DataFrame(
             {
                 "incurred": [100.0],

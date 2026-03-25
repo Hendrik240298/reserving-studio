@@ -9,6 +9,8 @@ from source.config_manager import ConfigManager
 from source.presentation import (
     build_heatmap_core,
     build_heatmap_core_cache_key,
+    plot_ave_by_origin,
+    plot_ave_by_valuation,
     plot_data_triangle_table,
     plot_emergence,
     plot_triangle_heatmap_clean,
@@ -143,6 +145,9 @@ class Dashboard:
             extract_data=self._extract_data,
             get_triangle=lambda: self.triangle,
             get_emergence=lambda: self.emergence_pattern,
+            get_ave=lambda selected_by_uwy=None: self._reserving.get_ave_triangle(
+                selected_ultimate_by_uwy=selected_by_uwy
+            ),
             get_results=lambda: self.results,
             build_triangle_figure=lambda triangle_data,
             title,
@@ -978,6 +983,7 @@ class Dashboard:
             Output("active-tab", "data"),
             Input("nav-data", "n_clicks"),
             Input("nav-chainladder", "n_clicks"),
+            Input("nav-ave", "n_clicks"),
             Input("nav-bf", "n_clicks"),
             Input("nav-results", "n_clicks"),
             State("active-tab", "data"),
@@ -985,6 +991,7 @@ class Dashboard:
         def _set_active_tab(
             data_clicks,
             chainladder_clicks,
+            ave_clicks,
             bf_clicks,
             results_clicks,
             current_tab,
@@ -996,6 +1003,7 @@ class Dashboard:
             mapping = {
                 "nav-data": "data",
                 "nav-chainladder": "chainladder",
+                "nav-ave": "ave",
                 "nav-bf": "bornhuetter_ferguson",
                 "nav-results": "results",
             }
@@ -1017,10 +1025,12 @@ class Dashboard:
             Output("nav-stack", "style"),
             Output("nav-data", "style"),
             Output("nav-chainladder", "style"),
+            Output("nav-ave", "style"),
             Output("nav-bf", "style"),
             Output("nav-results", "style"),
             Output("nav-data", "children"),
             Output("nav-chainladder", "children"),
+            Output("nav-ave", "children"),
             Output("nav-bf", "children"),
             Output("nav-results", "children"),
             Output("sidebar-toggle", "children"),
@@ -1094,6 +1104,7 @@ class Dashboard:
             labels_full = {
                 "data": "Data",
                 "chainladder": "Chainladder",
+                "ave": "Actual vs Expected",
                 "bornhuetter_ferguson": "Bornhuetter-Ferguson",
                 "results": "Results",
             }
@@ -1129,6 +1140,9 @@ class Dashboard:
                 else (active_style if active_tab == "chainladder" else inactive_style),
                 collapsed_button_style
                 if is_collapsed
+                else (active_style if active_tab == "ave" else inactive_style),
+                collapsed_button_style
+                if is_collapsed
                 else (
                     active_style
                     if active_tab == "bornhuetter_ferguson"
@@ -1139,6 +1153,7 @@ class Dashboard:
                 else (active_style if active_tab == "results" else inactive_style),
                 labels.get("data", ""),
                 labels.get("chainladder", ""),
+                labels.get("ave", ""),
                 labels.get("bornhuetter_ferguson", ""),
                 labels.get("results", ""),
                 toggle_label,
@@ -1148,6 +1163,7 @@ class Dashboard:
         @self.app.callback(
             Output("tab-data", "style"),
             Output("tab-chainladder", "style"),
+            Output("tab-ave", "style"),
             Output("tab-bf", "style"),
             Output("tab-results", "style"),
             Input("active-tab", "data"),
@@ -1199,6 +1215,23 @@ class Dashboard:
                 **bf_style,
                 "display": "none",
             }
+            ave_style = {
+                "display": "block",
+                "background": COLOR_SURFACE,
+                "border": f"1px solid {COLOR_BORDER}",
+                "borderRadius": RADIUS_LG,
+                "padding": "16px",
+                "boxShadow": SHADOW_SOFT,
+                "minHeight": "70vh",
+                "boxSizing": "border-box",
+                "width": "100%",
+                "maxWidth": "100%",
+                "overflowX": "hidden",
+            }
+            ave_hidden = {
+                **ave_style,
+                "display": "none",
+            }
             results_style = {
                 "display": "block",
                 "width": "100%",
@@ -1222,6 +1255,7 @@ class Dashboard:
                 chainladder_style
                 if active_tab == "chainladder"
                 else chainladder_hidden,
+                ave_style if active_tab == "ave" else ave_hidden,
                 bf_style if active_tab == "bornhuetter_ferguson" else bf_hidden,
                 results_style if active_tab == "results" else results_hidden,
             )
@@ -1836,6 +1870,70 @@ class Dashboard:
             )
 
         @self.app.callback(
+            Output("ave-valuation-selector", "options"),
+            Output("ave-valuation-selector", "value"),
+            Input("results-store", "data"),
+            State("ave-valuation-selector", "value"),
+        )
+        def _hydrate_ave_controls(results_payload, current_valuation):
+            ave_data = (results_payload or {}).get("ave_data", {})
+            options = ave_data.get("options", [])
+            valid_values = {option.get("value") for option in options}
+            if current_valuation in valid_values:
+                return options, current_valuation
+            return options, ave_data.get("default_valuation")
+
+        @self.app.callback(
+            Output("ave-kpi-diff", "children"),
+            Output("ave-kpi-expected", "children"),
+            Output("ave-kpi-actual", "children"),
+            Output("ave-origin-plot", "figure"),
+            Output("ave-valuation-plot", "figure"),
+            Input("results-store", "data"),
+            Input("ave-valuation-selector", "value"),
+        )
+        def _hydrate_ave_tab(results_payload, selected_valuation):
+            ave_data = (results_payload or {}).get("ave_data", {})
+            origin_views = ave_data.get("origin_views", {})
+            valuation_key = selected_valuation or ave_data.get("default_valuation")
+            selected_view = origin_views.get(valuation_key, {})
+            kpis = selected_view.get("kpis", {})
+
+            diff_value = f"{float(kpis.get('diff_total', 0.0)):,.0f}"
+            expected_value = f"{float(kpis.get('expected_total', 0.0)):,.0f}"
+            actual_value = f"{float(kpis.get('actual_total', 0.0)):,.0f}"
+
+            origin_figure = plot_ave_by_origin(
+                ave_view=selected_view,
+                title="Actual vs Expected by Underwriting Year",
+                font_family=FONT_FAMILY,
+                figure_font_size=FIGURE_FONT_SIZE,
+                figure_title_font_size=FIGURE_TITLE_FONT_SIZE,
+                alert_annotation_font_size=ALERT_ANNOTATION_FONT_SIZE,
+                color_text=COLOR_TEXT,
+                color_surface=COLOR_SURFACE,
+                color_border=COLOR_BORDER,
+            )
+            valuation_figure = plot_ave_by_valuation(
+                series_data=ave_data.get("series"),
+                title="Actual vs Expected by Valuation Quarter",
+                font_family=FONT_FAMILY,
+                figure_font_size=FIGURE_FONT_SIZE,
+                figure_title_font_size=FIGURE_TITLE_FONT_SIZE,
+                alert_annotation_font_size=ALERT_ANNOTATION_FONT_SIZE,
+                color_text=COLOR_TEXT,
+                color_surface=COLOR_SURFACE,
+                color_border=COLOR_BORDER,
+            )
+            return (
+                diff_value,
+                expected_value,
+                actual_value,
+                origin_figure,
+                valuation_figure,
+            )
+
+        @self.app.callback(
             Output("data-view-store", "data"),
             Input("data-view-toggle", "n_clicks"),
             State("data-view-store", "data"),
@@ -1970,6 +2068,12 @@ class Dashboard:
         initial_bf_apriori_rows = self._params_service.build_bf_apriori_rows(
             self._default_bf_apriori_rows
         )
+        initial_ave_data = results_payload.get("ave_data", {})
+        initial_ave_valuation = initial_ave_data.get("default_valuation")
+        initial_ave_view = initial_ave_data.get("origin_views", {}).get(
+            initial_ave_valuation,
+            {},
+        )
         return html.Div(
             [
                 dcc.Location(id="page-location", refresh=False),
@@ -2019,6 +2123,7 @@ class Dashboard:
                                     [
                                         html.Button(id="nav-data", n_clicks=0),
                                         html.Button(id="nav-chainladder", n_clicks=0),
+                                        html.Button(id="nav-ave", n_clicks=0),
                                         html.Button(id="nav-bf", n_clicks=0),
                                         html.Button(id="nav-results", n_clicks=0),
                                     ],
@@ -2389,6 +2494,199 @@ class Dashboard:
                                                 ),
                                             ],
                                             id="tab-chainladder",
+                                            style={"display": "none"},
+                                        ),
+                                        html.Div(
+                                            [
+                                                html.Div(
+                                                    [
+                                                        html.Div(
+                                                            [
+                                                                html.Label(
+                                                                    "Valuation quarter",
+                                                                    style={
+                                                                        "fontWeight": 600,
+                                                                        "marginBottom": "6px",
+                                                                        "display": "block",
+                                                                    },
+                                                                ),
+                                                                dcc.Dropdown(
+                                                                    id="ave-valuation-selector",
+                                                                    options=initial_ave_data.get(
+                                                                        "options", []
+                                                                    ),
+                                                                    value=initial_ave_valuation,
+                                                                    clearable=False,
+                                                                    style={
+                                                                        "width": "220px"
+                                                                    },
+                                                                ),
+                                                            ]
+                                                        ),
+                                                    ],
+                                                    style={
+                                                        "display": "flex",
+                                                        "gap": "16px",
+                                                        "marginBottom": "16px",
+                                                        "flexWrap": "wrap",
+                                                    },
+                                                ),
+                                                html.Div(
+                                                    [
+                                                        html.Div(
+                                                            [
+                                                                html.Div(
+                                                                    "AvE overall",
+                                                                    style={
+                                                                        "fontSize": "13px",
+                                                                        "color": COLOR_MUTED,
+                                                                    },
+                                                                ),
+                                                                html.Div(
+                                                                    f"{float(initial_ave_view.get('kpis', {}).get('diff_total', 0.0)):,.0f}",
+                                                                    id="ave-kpi-diff",
+                                                                    style={
+                                                                        "fontSize": "28px",
+                                                                        "fontWeight": 700,
+                                                                        "marginTop": "6px",
+                                                                    },
+                                                                ),
+                                                            ],
+                                                            style={
+                                                                "background": COLOR_SURFACE,
+                                                                "border": f"1px solid {COLOR_BORDER}",
+                                                                "borderRadius": RADIUS_MD,
+                                                                "padding": "16px",
+                                                                "boxShadow": SHADOW_SOFT,
+                                                            },
+                                                        ),
+                                                        html.Div(
+                                                            [
+                                                                html.Div(
+                                                                    "Expected total",
+                                                                    style={
+                                                                        "fontSize": "13px",
+                                                                        "color": COLOR_MUTED,
+                                                                    },
+                                                                ),
+                                                                html.Div(
+                                                                    f"{float(initial_ave_view.get('kpis', {}).get('expected_total', 0.0)):,.0f}",
+                                                                    id="ave-kpi-expected",
+                                                                    style={
+                                                                        "fontSize": "28px",
+                                                                        "fontWeight": 700,
+                                                                        "marginTop": "6px",
+                                                                    },
+                                                                ),
+                                                            ],
+                                                            style={
+                                                                "background": COLOR_SURFACE,
+                                                                "border": f"1px solid {COLOR_BORDER}",
+                                                                "borderRadius": RADIUS_MD,
+                                                                "padding": "16px",
+                                                                "boxShadow": SHADOW_SOFT,
+                                                            },
+                                                        ),
+                                                        html.Div(
+                                                            [
+                                                                html.Div(
+                                                                    "Actual total",
+                                                                    style={
+                                                                        "fontSize": "13px",
+                                                                        "color": COLOR_MUTED,
+                                                                    },
+                                                                ),
+                                                                html.Div(
+                                                                    f"{float(initial_ave_view.get('kpis', {}).get('actual_total', 0.0)):,.0f}",
+                                                                    id="ave-kpi-actual",
+                                                                    style={
+                                                                        "fontSize": "28px",
+                                                                        "fontWeight": 700,
+                                                                        "marginTop": "6px",
+                                                                    },
+                                                                ),
+                                                            ],
+                                                            style={
+                                                                "background": COLOR_SURFACE,
+                                                                "border": f"1px solid {COLOR_BORDER}",
+                                                                "borderRadius": RADIUS_MD,
+                                                                "padding": "16px",
+                                                                "boxShadow": SHADOW_SOFT,
+                                                            },
+                                                        ),
+                                                    ],
+                                                    style={
+                                                        "display": "grid",
+                                                        "gridTemplateColumns": "repeat(auto-fit, minmax(200px, 1fr))",
+                                                        "gap": "12px",
+                                                        "marginBottom": "16px",
+                                                    },
+                                                ),
+                                                html.Div(
+                                                    [
+                                                        dcc.Graph(
+                                                            id="ave-origin-plot",
+                                                            figure=plot_ave_by_origin(
+                                                                ave_view=initial_ave_view,
+                                                                title="Actual vs Expected by Underwriting Year",
+                                                                font_family=FONT_FAMILY,
+                                                                figure_font_size=FIGURE_FONT_SIZE,
+                                                                figure_title_font_size=FIGURE_TITLE_FONT_SIZE,
+                                                                alert_annotation_font_size=ALERT_ANNOTATION_FONT_SIZE,
+                                                                color_text=COLOR_TEXT,
+                                                                color_surface=COLOR_SURFACE,
+                                                                color_border=COLOR_BORDER,
+                                                            ),
+                                                            config={
+                                                                "displayModeBar": False,
+                                                                "responsive": False,
+                                                            },
+                                                            style={"width": "100%"},
+                                                        )
+                                                    ],
+                                                    style={
+                                                        "background": COLOR_SURFACE,
+                                                        "border": f"1px solid {COLOR_BORDER}",
+                                                        "borderRadius": RADIUS_LG,
+                                                        "padding": "8px",
+                                                        "boxShadow": SHADOW_SOFT,
+                                                    },
+                                                ),
+                                                html.Div(
+                                                    [
+                                                        dcc.Graph(
+                                                            id="ave-valuation-plot",
+                                                            figure=plot_ave_by_valuation(
+                                                                series_data=initial_ave_data.get(
+                                                                    "series"
+                                                                ),
+                                                                title="Actual vs Expected by Valuation Quarter",
+                                                                font_family=FONT_FAMILY,
+                                                                figure_font_size=FIGURE_FONT_SIZE,
+                                                                figure_title_font_size=FIGURE_TITLE_FONT_SIZE,
+                                                                alert_annotation_font_size=ALERT_ANNOTATION_FONT_SIZE,
+                                                                color_text=COLOR_TEXT,
+                                                                color_surface=COLOR_SURFACE,
+                                                                color_border=COLOR_BORDER,
+                                                            ),
+                                                            config={
+                                                                "displayModeBar": False,
+                                                                "responsive": False,
+                                                            },
+                                                            style={"width": "100%"},
+                                                        )
+                                                    ],
+                                                    style={
+                                                        "background": COLOR_SURFACE,
+                                                        "border": f"1px solid {COLOR_BORDER}",
+                                                        "borderRadius": RADIUS_LG,
+                                                        "padding": "8px",
+                                                        "boxShadow": SHADOW_SOFT,
+                                                        "marginTop": "16px",
+                                                    },
+                                                ),
+                                            ],
+                                            id="tab-ave",
                                             style={"display": "none"},
                                         ),
                                         html.Div(

@@ -8,6 +8,7 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 import plotly.graph_objs as go
+from plotly.subplots import make_subplots
 
 from source.reserving import Reserving
 
@@ -307,6 +308,333 @@ def plot_emergence(
     )
 
     return fig
+
+
+def _build_empty_ave_figure(
+    *,
+    title: str,
+    message: str,
+    font_family: str,
+    figure_font_size: int,
+    figure_title_font_size: int,
+    alert_annotation_font_size: int,
+    color_text: str,
+    color_surface: str,
+    color_border: str,
+) -> go.Figure:
+    figure = go.Figure()
+    figure.update_layout(
+        title=title,
+        template="plotly_white",
+        font=dict(color=color_text, size=figure_font_size, family=font_family),
+        title_font=dict(
+            color=color_text,
+            size=figure_title_font_size,
+            family=font_family,
+        ),
+        hoverlabel=dict(
+            bgcolor=color_surface,
+            bordercolor=color_border,
+            font=dict(
+                color=color_text,
+                size=figure_font_size,
+                family=font_family,
+            ),
+        ),
+        annotations=[
+            dict(
+                text=message,
+                x=0.5,
+                y=0.5,
+                xref="paper",
+                yref="paper",
+                showarrow=False,
+                font=dict(
+                    color="red",
+                    size=alert_annotation_font_size,
+                    family=font_family,
+                ),
+            )
+        ],
+        height=520,
+        margin=dict(l=40, r=40, t=60, b=40),
+        uirevision="static",
+    )
+    return figure
+
+
+def _add_ave_traces(
+    fig: go.Figure,
+    *,
+    x_values: list[str],
+    expected: list[float],
+    actual: list[float],
+    diff: list[float],
+) -> None:
+    fig.add_trace(
+        go.Bar(
+            x=x_values,
+            y=expected,
+            name="Expected",
+            marker_color="#5b6b7b",
+            opacity=0.6,
+            zorder=1,
+            offsetgroup="expected",
+            hovertemplate="%{x}<br>Expected: %{y:,.0f}<extra></extra>",
+        ),
+        secondary_y=True,
+    )
+    fig.add_trace(
+        go.Bar(
+            x=x_values,
+            y=actual,
+            name="Actual",
+            marker_color="#2b6cb0",
+            opacity=0.75,
+            zorder=2,
+            offsetgroup="actual",
+            hovertemplate="%{x}<br>Actual: %{y:,.0f}<extra></extra>",
+        ),
+        secondary_y=True,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x_values,
+            y=diff,
+            name="AvE",
+            mode="lines+markers",
+            line=dict(color="#1f2a37", width=2.5),
+            marker=dict(size=9, color="#1f2a37", line=dict(color="#ffffff", width=1.5)),
+            hovertemplate="%{x}<br>AvE: %{y:,.0f}<extra></extra>",
+            cliponaxis=False,
+            zorder=10,
+        ),
+        secondary_y=False,
+    )
+
+
+def _coerce_ave_series(values: list[float] | None) -> list[float]:
+    return [float(value) for value in values or []]
+
+
+def _expand_axis_range(min_value: float, max_value: float) -> tuple[float, float]:
+    min_with_zero = min(float(min_value), 0.0)
+    max_with_zero = max(float(max_value), 0.0)
+    if min_with_zero == max_with_zero:
+        span = abs(max_with_zero) if max_with_zero != 0 else 1.0
+        min_with_zero -= span * 0.1
+        max_with_zero += span * 0.1
+    else:
+        span = max_with_zero - min_with_zero
+        padding = span * 0.08
+        min_with_zero -= padding
+        max_with_zero += padding
+    return min_with_zero, max_with_zero
+
+
+def _aligned_zero_axis_ranges(
+    *,
+    primary_values: list[float],
+    secondary_values: list[float],
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    primary_min, primary_max = _expand_axis_range(
+        min(primary_values, default=0.0),
+        max(primary_values, default=0.0),
+    )
+    secondary_min, secondary_max = _expand_axis_range(
+        min(secondary_values, default=0.0),
+        max(secondary_values, default=0.0),
+    )
+
+    primary_fraction = abs(primary_min) / (primary_max - primary_min)
+    secondary_fraction = abs(secondary_min) / (secondary_max - secondary_min)
+    target_fraction = max(primary_fraction, secondary_fraction)
+
+    if 0 < target_fraction < 1:
+        if primary_fraction < target_fraction:
+            primary_min = (target_fraction * primary_max) / (target_fraction - 1)
+        elif primary_fraction > target_fraction:
+            primary_max = primary_min * (target_fraction - 1) / target_fraction
+
+        if secondary_fraction < target_fraction:
+            secondary_min = (target_fraction * secondary_max) / (target_fraction - 1)
+        elif secondary_fraction > target_fraction:
+            secondary_max = secondary_min * (target_fraction - 1) / target_fraction
+
+    return (primary_min, primary_max), (secondary_min, secondary_max)
+
+
+def _finalize_ave_layout(
+    fig: go.Figure,
+    *,
+    title: str,
+    xaxis_title: str,
+    expected: list[float],
+    actual: list[float],
+    diff: list[float],
+    font_family: str,
+    figure_font_size: int,
+    figure_title_font_size: int,
+    color_text: str,
+    color_surface: str,
+    color_border: str,
+) -> go.Figure:
+    primary_range, secondary_range = _aligned_zero_axis_ranges(
+        primary_values=diff,
+        secondary_values=expected + actual,
+    )
+    fig.update_layout(
+        title=title,
+        template="plotly_white",
+        barmode="group",
+        font=dict(color=color_text, size=figure_font_size, family=font_family),
+        title_font=dict(
+            color=color_text,
+            size=figure_title_font_size,
+            family=font_family,
+        ),
+        hoverlabel=dict(
+            bgcolor=color_surface,
+            bordercolor=color_border,
+            font=dict(
+                color=color_text,
+                size=figure_font_size,
+                family=font_family,
+            ),
+        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        height=520,
+        margin=dict(l=40, r=40, t=72, b=56),
+        uirevision="static",
+        plot_bgcolor=color_surface,
+        paper_bgcolor=color_surface,
+    )
+    fig.update_xaxes(title_text=xaxis_title, gridcolor="#eef2f7")
+    fig.update_yaxes(
+        title_text="AvE (EUR)",
+        secondary_y=False,
+        zeroline=True,
+        zerolinecolor="#cbd5e1",
+        zerolinewidth=1.5,
+        showgrid=True,
+        gridcolor="#e5e7eb",
+        tickformat=",.0f",
+        range=list(primary_range),
+    )
+    fig.update_yaxes(
+        title_text="Actual / Expected (EUR)",
+        secondary_y=True,
+        tickformat=",.0f",
+        range=list(secondary_range),
+        showgrid=False,
+        zeroline=False,
+    )
+    fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0))
+    return fig
+
+
+def plot_ave_by_origin(
+    *,
+    ave_view: dict | None,
+    title: str,
+    font_family: str,
+    figure_font_size: int,
+    figure_title_font_size: int,
+    alert_annotation_font_size: int,
+    color_text: str,
+    color_surface: str,
+    color_border: str,
+) -> go.Figure:
+    if not ave_view or not ave_view.get("origin"):
+        return _build_empty_ave_figure(
+            title=title,
+            message="Actual vs Expected data not available for this valuation.",
+            font_family=font_family,
+            figure_font_size=figure_font_size,
+            figure_title_font_size=figure_title_font_size,
+            alert_annotation_font_size=alert_annotation_font_size,
+            color_text=color_text,
+            color_surface=color_surface,
+            color_border=color_border,
+        )
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    expected = _coerce_ave_series(ave_view.get("expected"))
+    actual = _coerce_ave_series(ave_view.get("actual"))
+    diff = _coerce_ave_series(ave_view.get("diff"))
+    _add_ave_traces(
+        fig,
+        x_values=[str(value) for value in ave_view.get("origin", [])],
+        expected=expected,
+        actual=actual,
+        diff=diff,
+    )
+    return _finalize_ave_layout(
+        fig,
+        title=title,
+        xaxis_title="Underwriting year",
+        expected=expected,
+        actual=actual,
+        diff=diff,
+        font_family=font_family,
+        figure_font_size=figure_font_size,
+        figure_title_font_size=figure_title_font_size,
+        color_text=color_text,
+        color_surface=color_surface,
+        color_border=color_border,
+    )
+
+
+def plot_ave_by_valuation(
+    *,
+    series_data: dict | None,
+    title: str,
+    font_family: str,
+    figure_font_size: int,
+    figure_title_font_size: int,
+    alert_annotation_font_size: int,
+    color_text: str,
+    color_surface: str,
+    color_border: str,
+) -> go.Figure:
+    if not series_data or not series_data.get("valuation"):
+        return _build_empty_ave_figure(
+            title=title,
+            message="Actual vs Expected time series is not available.",
+            font_family=font_family,
+            figure_font_size=figure_font_size,
+            figure_title_font_size=figure_title_font_size,
+            alert_annotation_font_size=alert_annotation_font_size,
+            color_text=color_text,
+            color_surface=color_surface,
+            color_border=color_border,
+        )
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    expected = _coerce_ave_series(series_data.get("expected"))
+    actual = _coerce_ave_series(series_data.get("actual"))
+    diff = _coerce_ave_series(series_data.get("diff"))
+    _add_ave_traces(
+        fig,
+        x_values=[str(value) for value in series_data.get("valuation", [])],
+        expected=expected,
+        actual=actual,
+        diff=diff,
+    )
+    return _finalize_ave_layout(
+        fig,
+        title=title,
+        xaxis_title="Valuation quarter",
+        expected=expected,
+        actual=actual,
+        diff=diff,
+        font_family=font_family,
+        figure_font_size=figure_font_size,
+        figure_title_font_size=figure_title_font_size,
+        color_text=color_text,
+        color_surface=color_surface,
+        color_border=color_border,
+    )
 
 
 def plot_reserving_results_table(
