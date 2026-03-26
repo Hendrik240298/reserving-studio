@@ -487,6 +487,59 @@ class ReservingService:
             (time.perf_counter() - total_started) * 1000,
         )
 
+    def apply_preview_recalculation(
+        self,
+        average: str,
+        drops: list[tuple[str, int]] | None,
+        tail_attachment_age: int | None,
+        tail_projection_months: int,
+        tail_curve: str,
+        fit_period: tuple[int, int | None] | None,
+    ) -> None:
+        total_started = time.perf_counter()
+        step_started = time.perf_counter()
+        self._reserving.set_development(
+            average=average,
+            drop=drops,
+        )
+        logging.info(
+            "Preview step set_development completed in %.0f ms",
+            (time.perf_counter() - step_started) * 1000,
+        )
+        step_started = time.perf_counter()
+        _months_per_dev, extrap_periods, projection_period = (
+            self.derive_tail_projection_settings(
+                reserving=self._reserving,
+                tail_projection_months=tail_projection_months,
+            )
+        )
+        logging.info(
+            "Preview step derive_tail_projection completed in %.0f ms",
+            (time.perf_counter() - step_started) * 1000,
+        )
+        step_started = time.perf_counter()
+        self._reserving.set_tail(
+            curve=tail_curve,
+            extrap_periods=extrap_periods,
+            projection_period=projection_period,
+            attachment_age=tail_attachment_age,
+            fit_period=fit_period,
+        )
+        logging.info(
+            "Preview step set_tail completed in %.0f ms",
+            (time.perf_counter() - step_started) * 1000,
+        )
+        step_started = time.perf_counter()
+        self._reserving.compute_chainladder_preview()
+        logging.info(
+            "Preview step compute_chainladder completed in %.0f ms",
+            (time.perf_counter() - step_started) * 1000,
+        )
+        logging.info(
+            "Preview total completed in %.0f ms",
+            (time.perf_counter() - total_started) * 1000,
+        )
+
     @staticmethod
     def _apply_selected_ultimate_to_results(
         results_df: pd.DataFrame | None,

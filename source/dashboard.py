@@ -414,6 +414,74 @@ class Dashboard:
             "job": job,
         }
 
+    def _run_preview_recalculation(self, job: dict) -> dict:
+        request_id = int(job.get("request_id", 0))
+        temp_reserving = Reserving(self._reserving._triangle)
+        temp_service = ReservingService(
+            reserving=temp_reserving,
+            params_service=self._params_service,
+            cache_service=self._cache_service,
+            default_average=self._default_average,
+            default_tail_curve=self._default_tail_curve,
+            default_bf_apriori=self._default_bf_apriori,
+            fallback_months_per_dev=self._tail_projection_step_months(),
+            segment_key_provider=lambda: str(
+                job.get("segment_key", self._get_segment_key())
+            ),
+            extract_data=lambda: None,
+            get_triangle=lambda: None,
+            get_emergence=lambda: None,
+            get_ave=lambda selected_by_uwy=None: temp_reserving.get_ave_triangle(
+                selected_ultimate_by_uwy=selected_by_uwy
+            ),
+            get_results=lambda: temp_reserving.get_results(),
+            build_triangle_figure=lambda *_args: {},
+            build_emergence_figure=lambda *_args: {},
+            payload_cache={},
+            triangle_cache={},
+            emergence_cache={},
+            ave_cache={},
+        )
+        fit_period = self._params_service.derive_tail_fit_period(
+            job.get("tail_fit_period_selection") or []
+        )
+        temp_service.apply_preview_recalculation(
+            str(job.get("average") or self._default_average),
+            self._params_service.drops_to_tuples(job.get("drop_store") or []),
+            job.get("tail_attachment_age"),
+            int(job.get("tail_projection_months", 0)),
+            str(job.get("tail_curve") or self._default_tail_curve),
+            fit_period,
+        )
+        emergence_pattern = temp_reserving.get_emergence_preview_pattern()
+        triangle_data = temp_reserving.get_triangle_heatmap_preview_data()
+        triangle_figure = self._build_triangle_figure_from_snapshot(
+            triangle_data=triangle_data.get("link_ratios"),
+            incurred_data=triangle_data.get("incurred"),
+            premium_data=triangle_data.get("premium"),
+            reserving=temp_reserving,
+            title="Triangle - Link Ratios",
+            tail_attachment_age=job.get("tail_attachment_age"),
+            tail_fit_period_selection=job.get("tail_fit_period_selection") or [],
+            use_cache=True,
+        )
+        emergence_figure = plot_emergence(
+            emergence_pattern=emergence_pattern,
+            title="Emergence Pattern",
+            font_family=FONT_FAMILY,
+            figure_font_size=FIGURE_FONT_SIZE,
+            figure_title_font_size=FIGURE_TITLE_FONT_SIZE,
+            alert_annotation_font_size=ALERT_ANNOTATION_FONT_SIZE,
+            color_text=COLOR_TEXT,
+            color_surface=COLOR_SURFACE,
+            color_border=COLOR_BORDER,
+        ).to_dict()
+        return {
+            "request_id": request_id,
+            "triangle_figure": triangle_figure,
+            "emergence_figure": emergence_figure,
+        }
+
     def _finalize_results_update(
         self,
         *,
@@ -2190,6 +2258,27 @@ class Dashboard:
                 "params": params,
                 "due_at": time.time() + debounce_seconds,
             }
+            triangle_output = no_update
+            emergence_output = no_update
+            status_payload = {"state": "editing", "request_id": request_id}
+            if context["source"] == "local":
+                try:
+                    preview_result = self._run_preview_recalculation(debounce_request)
+                    triangle_output = {
+                        "figure": preview_result.get("triangle_figure"),
+                        "figure_version": int(request_id),
+                    }
+                    emergence_output = preview_result.get("emergence_figure")
+                except Exception as exc:
+                    logging.error(
+                        f"Failed to build chainladder preview: {exc}",
+                        exc_info=True,
+                    )
+                    status_payload = {
+                        "state": "error",
+                        "request_id": request_id,
+                        "error": str(exc),
+                    }
             logging.info(
                 "[recalc] scheduled background request=%s debounce_ms=%.0f",
                 request_id,
@@ -2200,14 +2289,14 @@ class Dashboard:
             return (
                 no_update,
                 no_update,
-                no_update,
-                no_update,
+                triangle_output,
+                emergence_output,
                 no_update,
                 no_update,
                 no_update,
                 debounce_request,
                 False,
-                {"state": "editing", "request_id": request_id},
+                status_payload,
                 True,
             )
 

@@ -18,8 +18,13 @@ class Reserving:
         self.development = None
         self.tail = None
         self.bf = None
+        self.result = None
+        self.df_results = pd.DataFrame()
+        self._triangle_transformed = None
         self._chainladder_result = None
         self._bornhuetter_result = None
+        self._preview_chainladder_result = None
+        self._preview_triangle_transformed = None
         self._bf_apriori_by_uwy: Optional[dict[str, float]] = None
         self._bf_fallback_apriori: float = DEFAULT_BF_APRIORI
         self._selected_ultimate_by_uwy: dict[str, str] = {}
@@ -451,6 +456,21 @@ class Reserving:
         incurred_idx = list(self.result.named_steps.tail.ldf_.vdims).index("incurred")
         self.result.named_steps.tail.ldf_.values[:, incurred_idx, :, -1] = 1.0
 
+    def compute_chainladder_preview(self):
+        if self.development is None:
+            raise ValueError(
+                "Development estimator not set. Call set_development() first."
+            )
+        if self.tail is None:
+            raise ValueError("Tail estimator not set. Call set_tail() first.")
+
+        chainladder = self.chainladder()
+        self._preview_chainladder_result = chainladder
+        self._preview_triangle_transformed = chainladder.named_steps.dev.fit_transform(
+            self._triangle.get_triangle()
+        )
+        return chainladder
+
     def chainladder(self):
         pipe = cl.Pipeline(
             steps=[
@@ -524,6 +544,59 @@ class Reserving:
 
     def get_results(self):
         return self.df_results.copy()
+
+    def get_chainladder_preview(self):
+        if self._preview_chainladder_result is None:
+            raise ValueError(
+                "Chainladder preview not available. Call compute_chainladder_preview() first."
+            )
+        return self._preview_chainladder_result
+
+    def get_emergence_preview_pattern(self):
+        if self._preview_chainladder_result is None:
+            raise ValueError(
+                "Chainladder preview not available. Call compute_chainladder_preview() first."
+            )
+
+        triangle_df = self._triangle.get_triangle()["incurred"].to_frame()
+        preview_model = self._preview_chainladder_result.named_steps.model
+        ultimate = preview_model.ultimate_["incurred"].to_frame().iloc[:, 0]
+
+        emergence = triangle_df.copy()
+        for uwy in triangle_df.index:
+            emergence.loc[uwy] = triangle_df.loc[uwy] / ultimate.loc[uwy]
+
+        cdf_values = (
+            self._preview_chainladder_result.named_steps.tail.cdf_["incurred"]
+            .to_frame()
+            .iloc[0]
+        )
+        expected_pattern = 1 / cdf_values
+        expected_by_age: dict[int, float] = {}
+        for idx, value in expected_pattern.items():
+            age = self._parse_cdf_label_to_age(idx)
+            if age is None:
+                continue
+            expected_by_age[age] = float(value)
+        expected_series = pd.Series(expected_by_age).sort_index()
+
+        emergence_ages = []
+        for col in emergence.columns:
+            age = self._parse_cdf_label_to_age(col)
+            if age is not None:
+                emergence_ages.append(age)
+        merged_ages = sorted(set(emergence_ages) | set(expected_series.index.tolist()))
+        if not merged_ages:
+            merged_ages = emergence.columns.tolist()
+
+        emergence = emergence.reindex(columns=merged_ages)
+        expected_full = expected_series.reindex(merged_ages)
+        expected = pd.DataFrame(
+            [expected_full.values] * len(emergence),
+            index=emergence.index,
+            columns=emergence.columns,
+        )
+        return pd.concat([emergence, expected], axis=1, keys=["Actual", "Expected"])
 
     def get_ave_triangle(
         self,
@@ -656,6 +729,43 @@ class Reserving:
         link_ratios_with_ldf = pd.concat([link_ratios, ldf_row, tail_row])
 
         # Extract cumulative incurred and premium from triangle
+        triangle_data = self._triangle.get_triangle()
+        incurred_df = triangle_data["incurred"].to_frame()
+        premium_df = triangle_data["Premium_selected"].to_frame()
+
+        return {
+            "link_ratios": link_ratios_with_ldf,
+            "incurred": incurred_df,
+            "premium": premium_df,
+        }
+
+    def get_triangle_heatmap_preview_data(self):
+        if (
+            self._preview_chainladder_result is None
+            or self._preview_triangle_transformed is None
+        ):
+            raise ValueError(
+                "Chainladder preview not available. Call compute_chainladder_preview() first."
+            )
+
+        link_ratios = self._preview_triangle_transformed.link_ratio[
+            "incurred"
+        ].to_frame()
+        ldfs = self._preview_chainladder_result.named_steps.dev.ldf_[
+            "incurred"
+        ].to_frame()
+        tail = self._preview_chainladder_result.named_steps.tail.ldf_[
+            "incurred"
+        ].to_frame()
+
+        ldf_row = ldfs.iloc[0].to_frame().T
+        ldf_row.index = ["LDF"]
+
+        tail_row = tail.iloc[0].to_frame().T
+        tail_row.index = ["Tail"]
+
+        link_ratios_with_ldf = pd.concat([link_ratios, ldf_row, tail_row])
+
         triangle_data = self._triangle.get_triangle()
         incurred_df = triangle_data["incurred"].to_frame()
         premium_df = triangle_data["Premium_selected"].to_frame()
