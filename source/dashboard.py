@@ -199,38 +199,63 @@ class Dashboard:
     ) -> dict:
         if triangle_data is None:
             triangle_data = self.triangle
-        core_cache_key = build_heatmap_core_cache_key(
-            segment_key=self._get_segment_key(),
-            triangle_data=triangle_data,
-            incurred_data=self.incurred,
-            premium_data=self.premium,
-        )
-        core_payload = self._cache_service.get(
-            self._heatmap_core_cache,
-            core_cache_key,
-            copy_mode="none",
-            label="Heatmap core",
-        )
-        if core_payload is None:
-            core_payload = build_heatmap_core(
-                triangle_data=triangle_data,
-                incurred_data=self.incurred,
-                premium_data=self.premium,
-                reserving=self._reserving,
-            )
-            self._cache_service.set(
-                self._heatmap_core_cache,
-                core_cache_key,
-                core_payload,
-                copy_mode="none",
-                label="Heatmap core",
-            )
-
-        figure, _ = plot_triangle_heatmap_clean(
+        return self._build_triangle_figure_from_snapshot(
             triangle_data=triangle_data,
             incurred_data=self.incurred,
             premium_data=self.premium,
             reserving=self._reserving,
+            title=title,
+            tail_attachment_age=tail_attachment_age,
+            tail_fit_period_selection=tail_fit_period_selection,
+            use_cache=True,
+        )
+
+    def _build_triangle_figure_from_snapshot(
+        self,
+        *,
+        triangle_data: Optional[pd.DataFrame],
+        incurred_data: Optional[pd.DataFrame],
+        premium_data: Optional[pd.DataFrame],
+        reserving: Reserving,
+        title: str,
+        tail_attachment_age: Optional[int],
+        tail_fit_period_selection: Optional[List[int]],
+        use_cache: bool,
+    ) -> dict:
+        core_payload = None
+        if use_cache and triangle_data is not None:
+            core_cache_key = build_heatmap_core_cache_key(
+                segment_key=self._get_segment_key(),
+                triangle_data=triangle_data,
+                incurred_data=incurred_data,
+                premium_data=premium_data,
+            )
+            core_payload = self._cache_service.get(
+                self._heatmap_core_cache,
+                core_cache_key,
+                copy_mode="none",
+                label="Heatmap core",
+            )
+            if core_payload is None:
+                core_payload = build_heatmap_core(
+                    triangle_data=triangle_data,
+                    incurred_data=incurred_data,
+                    premium_data=premium_data,
+                    reserving=reserving,
+                )
+                self._cache_service.set(
+                    self._heatmap_core_cache,
+                    core_cache_key,
+                    core_payload,
+                    copy_mode="none",
+                    label="Heatmap core",
+                )
+
+        figure, _ = plot_triangle_heatmap_clean(
+            triangle_data=triangle_data,
+            incurred_data=incurred_data,
+            premium_data=premium_data,
+            reserving=reserving,
             title=title,
             tail_attachment_age=tail_attachment_age,
             tail_fit_period_selection=tail_fit_period_selection,
@@ -344,6 +369,27 @@ class Dashboard:
         )
         emergence_pattern = temp_reserving.get_emergence_pattern()
         triangle_data = temp_reserving.get_triangle_heatmap_data()
+        triangle_figure = self._build_triangle_figure_from_snapshot(
+            triangle_data=triangle_data.get("link_ratios"),
+            incurred_data=triangle_data.get("incurred"),
+            premium_data=triangle_data.get("premium"),
+            reserving=temp_reserving,
+            title="Triangle - Link Ratios",
+            tail_attachment_age=job.get("tail_attachment_age"),
+            tail_fit_period_selection=job.get("tail_fit_period_selection") or [],
+            use_cache=False,
+        )
+        emergence_figure = plot_emergence(
+            emergence_pattern=emergence_pattern,
+            title="Emergence Pattern",
+            font_family=FONT_FAMILY,
+            figure_font_size=FIGURE_FONT_SIZE,
+            figure_title_font_size=FIGURE_TITLE_FONT_SIZE,
+            alert_annotation_font_size=ALERT_ANNOTATION_FONT_SIZE,
+            color_text=COLOR_TEXT,
+            color_surface=COLOR_SURFACE,
+            color_border=COLOR_BORDER,
+        ).to_dict()
         results_payload = temp_service.build_results_payload(
             drop_store=job.get("drop_store") or [],
             average=job.get("average"),
@@ -363,6 +409,8 @@ class Dashboard:
             "premium": triangle_data.get("premium"),
             "results": temp_reserving.get_results(),
             "results_payload": results_payload,
+            "triangle_figure": triangle_figure,
+            "emergence_figure": emergence_figure,
             "job": job,
         }
 
@@ -375,6 +423,8 @@ class Dashboard:
         sync_ready: bool,
         request_id: object,
         model_changed: bool,
+        prefetched_triangle_figure: dict | None = None,
+        prefetched_emergence_figure: dict | None = None,
     ) -> tuple[object, object, object, object, object, object, object]:
         results_table_rows = results_payload.get("results_table_rows", [])
         results_store_payload = results_payload.copy()
@@ -383,17 +433,28 @@ class Dashboard:
         triangle_output = no_update
         emergence_output = no_update
         if model_changed:
-            triangle_figure, emergence_figure = (
-                self._reserving_service.get_or_build_visual_payload(
-                    drop_store=params.get("drop_store") or [],
-                    average=params.get("average"),
-                    tail_attachment_age=params.get("tail_attachment_age"),
-                    tail_projection_months=int(params.get("tail_projection_months", 0)),
-                    tail_curve=params.get("tail_curve"),
-                    tail_fit_period_selection=params.get("tail_fit_period_selection")
-                    or [],
+            if (
+                prefetched_triangle_figure is not None
+                and prefetched_emergence_figure is not None
+            ):
+                triangle_figure = prefetched_triangle_figure
+                emergence_figure = prefetched_emergence_figure
+            else:
+                triangle_figure, emergence_figure = (
+                    self._reserving_service.get_or_build_visual_payload(
+                        drop_store=params.get("drop_store") or [],
+                        average=params.get("average"),
+                        tail_attachment_age=params.get("tail_attachment_age"),
+                        tail_projection_months=int(
+                            params.get("tail_projection_months", 0)
+                        ),
+                        tail_curve=params.get("tail_curve"),
+                        tail_fit_period_selection=params.get(
+                            "tail_fit_period_selection"
+                        )
+                        or [],
+                    )
                 )
-            )
             try:
                 figure_version = int(request_id)
             except (TypeError, ValueError):
@@ -1113,9 +1174,36 @@ class Dashboard:
                 var normalizedDropStore = normalizeDropStore(
                     paramsState && paramsState.drop_store
                 );
+                function normalizeTailFitSelection(items) {
+                    if (!Array.isArray(items)) {
+                        return [];
+                    }
+                    var normalized = [];
+                    for (var k = 0; k < items.length; k += 1) {
+                        var parsed = parseInt(items[k], 10);
+                        if (!Number.isNaN(parsed) && normalized.indexOf(parsed) < 0) {
+                            normalized.push(parsed);
+                        }
+                    }
+                    normalized.sort(function(a, b) { return a - b; });
+                    return normalized;
+                }
+
+                var tailAttachmentAge = paramsState && paramsState.tail_attachment_age != null
+                    ? parseInt(paramsState.tail_attachment_age, 10)
+                    : null;
+                if (Number.isNaN(tailAttachmentAge)) {
+                    tailAttachmentAge = null;
+                }
+                var tailFitSelection = normalizeTailFitSelection(
+                    paramsState && paramsState.tail_fit_period_selection
+                );
+
                 var nextSignature = JSON.stringify({
                     figure_version: figureVersion,
                     drop_store: normalizedDropStore,
+                    tail_attachment_age: tailAttachmentAge,
+                    tail_fit_period_selection: tailFitSelection,
                 });
                 if (currentOverlaySignature === nextSignature) {
                     return [window.dash_clientside.no_update, window.dash_clientside.no_update];
@@ -1174,11 +1262,25 @@ class Dashboard:
                     ];
                 }
 
+                function buildOutlineRect(rowIndex, startColIndex, endColIndex, width) {
+                    return {
+                        type: "rect",
+                        x0: startColIndex - 0.5,
+                        y0: rowIndex - 0.5,
+                        x1: endColIndex + 0.5,
+                        y1: rowIndex + 0.5,
+                        line: { color: "black", width: width || 2 },
+                        fillcolor: "rgba(0,0,0,0)",
+                        xref: "x",
+                        yref: "y"
+                    };
+                }
+
                 var existingShapes = Array.isArray(cloned.layout.shapes)
                     ? cloned.layout.shapes
                     : [];
                 var preservedShapes = existingShapes.filter(function (shape) {
-                    return !shape || shape.type !== "line";
+                    return !shape || (shape.type !== "line" && shape.type !== "rect");
                 });
                 var dropShapes = [];
 
@@ -1209,8 +1311,65 @@ class Dashboard:
                         return;
                     }
 
-                    dropShapes = dropShapes.concat(buildDropLines(rowIndex, colIndex));
+                    var lines = buildDropLines(rowIndex, colIndex);
+                    for (var shapeIndex = 0; shapeIndex < lines.length; shapeIndex += 1) {
+                        lines[shapeIndex].meta = "draft-overlay";
+                        dropShapes.push(lines[shapeIndex]);
+                    }
                 });
+
+                var tailRowIndex = yValues.indexOf("Tail");
+                if (tailRowIndex >= 0 && tailAttachmentAge !== null) {
+                    for (var tailCol = 0; tailCol < xValues.length; tailCol += 1) {
+                        if (parseDevStart(xValues[tailCol]) === tailAttachmentAge) {
+                            var tailShape = buildOutlineRect(tailRowIndex, tailCol, tailCol, 2);
+                            tailShape.meta = "draft-overlay";
+                            dropShapes.push(tailShape);
+                            break;
+                        }
+                    }
+                }
+
+                var ldfRowIndex = yValues.indexOf("LDF");
+                if (ldfRowIndex >= 0 && tailFitSelection.length > 0) {
+                    var startIndex = -1;
+                    var endIndex = -1;
+                    var lowerAge = tailFitSelection[0];
+                    var upperAge = tailFitSelection.length > 1
+                        ? tailFitSelection[tailFitSelection.length - 1]
+                        : null;
+                    for (var ldfCol = 0; ldfCol < xValues.length; ldfCol += 1) {
+                        var devStart = parseDevStart(xValues[ldfCol]);
+                        if (devStart === lowerAge) {
+                            startIndex = ldfCol;
+                        }
+                        if (upperAge !== null && devStart === upperAge) {
+                            endIndex = ldfCol;
+                        }
+                    }
+                    if (startIndex >= 0) {
+                        if (endIndex < 0) {
+                            endIndex = startIndex;
+                        }
+                        var rangeShape = buildOutlineRect(
+                            ldfRowIndex,
+                            Math.min(startIndex, endIndex),
+                            Math.max(startIndex, endIndex),
+                            2
+                        );
+                        rangeShape.meta = "draft-overlay";
+                        dropShapes.push(rangeShape);
+
+                        var startShape = buildOutlineRect(ldfRowIndex, startIndex, startIndex, 3);
+                        startShape.meta = "draft-overlay";
+                        dropShapes.push(startShape);
+                        if (endIndex !== startIndex) {
+                            var endShape = buildOutlineRect(ldfRowIndex, endIndex, endIndex, 3);
+                            endShape.meta = "draft-overlay";
+                            dropShapes.push(endShape);
+                        }
+                    }
+                }
 
                 cloned.layout.shapes = preservedShapes.concat(dropShapes);
                 return [cloned, nextSignature];
@@ -1252,6 +1411,52 @@ class Dashboard:
                 "nav-results": "results",
             }
             return mapping.get(trigger, current_tab)
+
+        @self.app.callback(
+            Output("recalc-status-banner", "children"),
+            Output("recalc-status-banner", "style"),
+            Input("recalc-status-store", "data"),
+            Input("active-tab", "data"),
+        )
+        def _render_recalc_status_banner(status_payload, active_tab):
+            style = {
+                "display": "none",
+                "marginBottom": "14px",
+                "padding": "10px 14px",
+                "border": f"1px solid {COLOR_BORDER}",
+                "background": COLOR_ACCENT_SOFT,
+                "color": COLOR_TEXT,
+                "borderRadius": RADIUS_MD,
+                "fontSize": "13px",
+                "fontWeight": 600,
+            }
+            state = (
+                status_payload.get("state")
+                if isinstance(status_payload, dict)
+                else None
+            )
+            if active_tab == "chainladder":
+                return "", style
+            if state not in {"editing", "queued", "running", "error"}:
+                return "", style
+
+            style["display"] = "block"
+            if state == "editing":
+                return (
+                    "Draft changes are pending. Other tabs update after recalculation finishes.",
+                    style,
+                )
+            if state in {"queued", "running"}:
+                return (
+                    "Showing the last applied result while reserving recalculates in the background.",
+                    style,
+                )
+
+            style["background"] = "#fff4e5"
+            return (
+                "Background recalculation failed. The last applied result is still shown.",
+                style,
+            )
 
         @self.app.callback(
             Output("sidebar-collapsed", "data"),
@@ -1781,6 +1986,8 @@ class Dashboard:
             Output("sync-publish-message", "data"),
             Output("session-save-store", "data"),
             Output("session-save-interval", "disabled"),
+            Output("recalc-debounce-store", "data"),
+            Output("recalc-debounce-interval", "disabled"),
             Output("recalc-status-store", "data"),
             Output("recalc-poll-interval", "disabled"),
             Input("params-store", "data"),
@@ -1790,6 +1997,8 @@ class Dashboard:
         def _update_results(params, current_payload, sync_ready):
             if not params or not isinstance(params, dict):
                 return (
+                    no_update,
+                    no_update,
                     no_update,
                     no_update,
                     no_update,
@@ -1825,6 +2034,8 @@ class Dashboard:
                 total_elapsed_ms = (time.perf_counter() - callback_started) * 1000
                 logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
                 return (
+                    no_update,
+                    no_update,
                     no_update,
                     no_update,
                     no_update,
@@ -1873,6 +2084,8 @@ class Dashboard:
                         no_update,
                         no_update,
                         no_update,
+                        no_update,
+                        no_update,
                         {"state": "error", "request_id": request_id, "error": str(exc)},
                         True,
                     )
@@ -1888,7 +2101,13 @@ class Dashboard:
                 )
                 total_elapsed_ms = (time.perf_counter() - callback_started) * 1000
                 logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
-                return (*outputs, {"state": "idle", "request_id": request_id}, True)
+                return (
+                    *outputs,
+                    None,
+                    True,
+                    {"state": "idle", "request_id": request_id},
+                    True,
+                )
 
             if not model_changed:
                 if not bool(sync_ready) and context["source"] != "sync":
@@ -1931,6 +2150,8 @@ class Dashboard:
                         no_update,
                         no_update,
                         no_update,
+                        no_update,
+                        no_update,
                         {"state": "error", "request_id": request_id, "error": str(exc)},
                         True,
                     )
@@ -1946,27 +2167,33 @@ class Dashboard:
                 )
                 total_elapsed_ms = (time.perf_counter() - callback_started) * 1000
                 logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
-                return (*outputs, {"state": "idle", "request_id": request_id}, True)
+                return (
+                    *outputs,
+                    None,
+                    True,
+                    {"state": "idle", "request_id": request_id},
+                    True,
+                )
 
-            queue_status = self._background_recalc_service.submit(
-                {
-                    "request_id": int(request_id),
-                    "segment_key": self._get_segment_key(),
-                    "drop_store": context["drop_store"],
-                    "average": context["average"],
-                    "tail_attachment_age": context["tail_attachment_age"],
-                    "tail_projection_months": context["tail_projection_months"],
-                    "tail_curve": context["tail_curve"],
-                    "tail_fit_period_selection": context["tail_fit_period_selection"],
-                    "bf_apriori_by_uwy": context["bf_apriori_by_uwy"],
-                    "selected_ultimate_by_uwy": context["selected_ultimate_by_uwy"],
-                    "params": params,
-                }
-            )
+            debounce_seconds = 0.4 if context["source"] == "local" else 0.0
+            debounce_request = {
+                "request_id": int(request_id),
+                "segment_key": self._get_segment_key(),
+                "drop_store": context["drop_store"],
+                "average": context["average"],
+                "tail_attachment_age": context["tail_attachment_age"],
+                "tail_projection_months": context["tail_projection_months"],
+                "tail_curve": context["tail_curve"],
+                "tail_fit_period_selection": context["tail_fit_period_selection"],
+                "bf_apriori_by_uwy": context["bf_apriori_by_uwy"],
+                "selected_ultimate_by_uwy": context["selected_ultimate_by_uwy"],
+                "params": params,
+                "due_at": time.time() + debounce_seconds,
+            }
             logging.info(
-                "[recalc] queued background request=%s state=%s",
+                "[recalc] scheduled background request=%s debounce_ms=%.0f",
                 request_id,
-                queue_status.get("state"),
+                debounce_seconds * 1000,
             )
             total_elapsed_ms = (time.perf_counter() - callback_started) * 1000
             logging.info("Callback total completed in %.0f ms", total_elapsed_ms)
@@ -1978,9 +2205,39 @@ class Dashboard:
                 no_update,
                 no_update,
                 no_update,
-                queue_status,
+                debounce_request,
                 False,
+                {"state": "editing", "request_id": request_id},
+                True,
             )
+
+        @self.app.callback(
+            Output("recalc-debounce-store", "data", allow_duplicate=True),
+            Output("recalc-debounce-interval", "disabled", allow_duplicate=True),
+            Output("recalc-status-store", "data", allow_duplicate=True),
+            Output("recalc-poll-interval", "disabled", allow_duplicate=True),
+            Input("recalc-debounce-interval", "n_intervals"),
+            State("recalc-debounce-store", "data"),
+            prevent_initial_call=True,
+        )
+        def _queue_debounced_recalc(_n_intervals, debounce_request):
+            if not isinstance(debounce_request, dict):
+                return None, True, no_update, True
+
+            try:
+                due_at = float(debounce_request.get("due_at", 0.0))
+            except (TypeError, ValueError):
+                due_at = 0.0
+            if time.time() < due_at:
+                return no_update, False, no_update, True
+
+            queue_status = self._background_recalc_service.submit(debounce_request)
+            logging.info(
+                "[recalc] queued background request=%s state=%s",
+                debounce_request.get("request_id"),
+                queue_status.get("state"),
+            )
+            return None, True, queue_status, False
 
         @self.app.callback(
             Output("results-store", "data", allow_duplicate=True),
@@ -1990,6 +2247,8 @@ class Dashboard:
             Output("sync-publish-message", "data", allow_duplicate=True),
             Output("session-save-store", "data", allow_duplicate=True),
             Output("session-save-interval", "disabled", allow_duplicate=True),
+            Output("recalc-debounce-store", "data", allow_duplicate=True),
+            Output("recalc-debounce-interval", "disabled", allow_duplicate=True),
             Output("recalc-status-store", "data", allow_duplicate=True),
             Output("recalc-poll-interval", "disabled", allow_duplicate=True),
             Input("recalc-poll-interval", "n_intervals"),
@@ -2009,6 +2268,8 @@ class Dashboard:
                     no_update,
                     no_update,
                     no_update,
+                    no_update,
+                    no_update,
                     poll_state,
                     False,
                 )
@@ -2021,11 +2282,15 @@ class Dashboard:
                     no_update,
                     no_update,
                     no_update,
+                    no_update,
+                    no_update,
                     poll_state,
                     True,
                 )
             if state != "completed":
                 return (
+                    no_update,
+                    no_update,
                     no_update,
                     no_update,
                     no_update,
@@ -2059,8 +2324,16 @@ class Dashboard:
                 sync_ready=bool(sync_ready),
                 request_id=request_id,
                 model_changed=True,
+                prefetched_triangle_figure=job_result.get("triangle_figure"),
+                prefetched_emergence_figure=job_result.get("emergence_figure"),
             )
-            return (*outputs, {"state": "idle", "request_id": request_id}, True)
+            return (
+                *outputs,
+                None,
+                True,
+                {"state": "idle", "request_id": request_id},
+                True,
+            )
 
         @self.app.callback(
             Output("session-save-store", "data", allow_duplicate=True),
@@ -2479,7 +2752,20 @@ class Dashboard:
         initial_bf_apriori_rows = self._params_service.build_bf_apriori_rows(
             self._default_bf_apriori_rows
         )
-        initial_ave_data = self._reserving_service.build_empty_ave_payload()
+        initial_results_cache_key = initial_results_store.get("cache_key")
+        try:
+            if initial_results_cache_key:
+                initial_ave_data = self._reserving_service.get_or_build_ave_payload(
+                    results_cache_key=str(initial_results_cache_key),
+                    selected_ultimate_by_uwy=self._params_service.build_selected_ultimate_by_uwy(
+                        initial_results_store.get("selected_ultimate_by_uwy")
+                    ),
+                )
+            else:
+                initial_ave_data = self._reserving_service.build_empty_ave_payload()
+        except Exception:
+            logging.exception("Failed to prebuild AvE payload for initial layout")
+            initial_ave_data = self._reserving_service.build_empty_ave_payload()
         initial_ave_valuation = initial_ave_data.get("default_valuation")
         initial_ave_view = initial_ave_data.get("origin_views", {}).get(
             initial_ave_valuation,
@@ -2514,10 +2800,17 @@ class Dashboard:
                 dcc.Store(id="sync-ready", data=False),
                 dcc.Store(id="sync-publish-message", data=None),
                 dcc.Store(id="session-save-store", data=None),
+                dcc.Store(id="recalc-debounce-store", data=None),
                 dcc.Store(id="recalc-status-store", data={"state": "idle"}),
                 dcc.Interval(
                     id="session-save-interval",
                     interval=250,
+                    disabled=True,
+                    n_intervals=0,
+                ),
+                dcc.Interval(
+                    id="recalc-debounce-interval",
+                    interval=100,
                     disabled=True,
                     n_intervals=0,
                 ),
@@ -2570,6 +2863,20 @@ class Dashboard:
                         ),
                         html.Div(
                             [
+                                html.Div(
+                                    id="recalc-status-banner",
+                                    style={
+                                        "display": "none",
+                                        "marginBottom": "14px",
+                                        "padding": "10px 14px",
+                                        "border": f"1px solid {COLOR_BORDER}",
+                                        "background": COLOR_ACCENT_SOFT,
+                                        "color": COLOR_TEXT,
+                                        "borderRadius": RADIUS_MD,
+                                        "fontSize": "13px",
+                                        "fontWeight": 600,
+                                    },
+                                ),
                                 html.Div(
                                     [
                                         html.Div(
