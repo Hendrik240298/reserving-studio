@@ -23,6 +23,8 @@ class Reserving:
         self._triangle_transformed = None
         self._chainladder_result = None
         self._bornhuetter_result = None
+        self._preview_dev = None
+        self._preview_tail = None
         self._preview_chainladder_result = None
         self._preview_triangle_transformed = None
         self._bf_apriori_by_uwy: Optional[dict[str, float]] = None
@@ -471,6 +473,24 @@ class Reserving:
         )
         return chainladder
 
+    def compute_triangle_preview(self):
+        if self.development is None:
+            raise ValueError(
+                "Development estimator not set. Call set_development() first."
+            )
+        if self.tail is None:
+            raise ValueError("Tail estimator not set. Call set_tail() first.")
+
+        transformed = self.development.fit_transform(self._triangle.get_triangle())
+        tail = self.tail.fit(transformed)
+        incurred_idx = list(tail.ldf_.vdims).index("incurred")
+        tail.ldf_.values[:, incurred_idx, :, -1] = 1.0
+
+        self._preview_dev = self.development
+        self._preview_tail = tail
+        self._preview_triangle_transformed = transformed
+        return transformed, tail
+
     def chainladder(self):
         pipe = cl.Pipeline(
             steps=[
@@ -741,22 +761,19 @@ class Reserving:
 
     def get_triangle_heatmap_preview_data(self):
         if (
-            self._preview_chainladder_result is None
+            self._preview_dev is None
+            or self._preview_tail is None
             or self._preview_triangle_transformed is None
         ):
             raise ValueError(
-                "Chainladder preview not available. Call compute_chainladder_preview() first."
+                "Triangle preview not available. Call compute_triangle_preview() first."
             )
 
         link_ratios = self._preview_triangle_transformed.link_ratio[
             "incurred"
         ].to_frame()
-        ldfs = self._preview_chainladder_result.named_steps.dev.ldf_[
-            "incurred"
-        ].to_frame()
-        tail = self._preview_chainladder_result.named_steps.tail.ldf_[
-            "incurred"
-        ].to_frame()
+        ldfs = self._preview_dev.ldf_["incurred"].to_frame()
+        tail = self._preview_tail.ldf_["incurred"].to_frame()
 
         ldf_row = ldfs.iloc[0].to_frame().T
         ldf_row.index = ["LDF"]
