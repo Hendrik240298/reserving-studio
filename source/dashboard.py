@@ -272,6 +272,29 @@ class Dashboard:
         )
         return figure.to_dict()
 
+    def _build_triangle_preview_payload(
+        self,
+        *,
+        triangle_data: Optional[pd.DataFrame],
+        incurred_data: Optional[pd.DataFrame],
+        premium_data: Optional[pd.DataFrame],
+        reserving: Reserving,
+        request_id: int,
+    ) -> dict:
+        if triangle_data is None:
+            triangle_data = self.triangle
+        core_payload = build_heatmap_core(
+            triangle_data=triangle_data,
+            incurred_data=incurred_data,
+            premium_data=premium_data,
+            reserving=reserving,
+        )
+        return {
+            "request_id": request_id,
+            "z_data": core_payload["z_data"].tolist(),
+            "text_values": core_payload["text_values"].tolist(),
+        }
+
     def _load_latest_session_payload(self) -> dict:
         segment_key = self._get_segment_key()
         live_state = _LIVE_SESSION_STATE_BY_SEGMENT.get(segment_key)
@@ -522,19 +545,16 @@ class Dashboard:
             fit_period,
         )
         triangle_data = temp_reserving.get_triangle_heatmap_preview_data()
-        triangle_figure = self._build_triangle_figure_from_snapshot(
+        triangle_preview = self._build_triangle_preview_payload(
             triangle_data=triangle_data.get("link_ratios"),
             incurred_data=triangle_data.get("incurred"),
             premium_data=triangle_data.get("premium"),
             reserving=temp_reserving,
-            title="Triangle - Link Ratios",
-            tail_attachment_age=job.get("tail_attachment_age"),
-            tail_fit_period_selection=job.get("tail_fit_period_selection") or [],
-            use_cache=True,
+            request_id=request_id,
         )
         return {
             "request_id": request_id,
-            "triangle_figure": triangle_figure,
+            "triangle_preview": triangle_preview,
         }
 
     def _finalize_results_update(
@@ -548,7 +568,7 @@ class Dashboard:
         model_changed: bool,
         prefetched_triangle_figure: dict | None = None,
         prefetched_emergence_figure: dict | None = None,
-    ) -> tuple[object, object, object, object, object, object, object]:
+    ) -> tuple[object, object, object, object, object, object, object, object]:
         results_table_rows = results_payload.get("results_table_rows", [])
         results_store_payload = results_payload.copy()
         results_store_payload.pop("results_table_rows", None)
@@ -616,6 +636,7 @@ class Dashboard:
                 results_store_payload,
                 results_table_rows,
                 triangle_output,
+                no_update,
                 emergence_output,
                 no_update,
                 no_update,
@@ -636,6 +657,7 @@ class Dashboard:
             results_store_payload,
             results_table_rows,
             triangle_output,
+            no_update,
             emergence_output,
             publish_message if publish_message is not None else no_update,
             save_request,
@@ -1248,7 +1270,7 @@ class Dashboard:
 
         clientside_callback(
             """
-            function(paramsState, basePayload, currentOverlaySignature) {
+            function(paramsState, basePayload, previewPayload, currentOverlaySignature) {
                 if (!basePayload || typeof basePayload !== "object") {
                     return [window.dash_clientside.no_update, window.dash_clientside.no_update];
                 }
@@ -1346,6 +1368,50 @@ class Dashboard:
                 }
                 if (!heatmap || !Array.isArray(heatmap.x) || !Array.isArray(heatmap.y)) {
                     return window.dash_clientside.no_update;
+                }
+
+                var previewRequestId = previewPayload && previewPayload.request_id != null
+                    ? String(previewPayload.request_id)
+                    : null;
+                var paramsRequestId = paramsState && paramsState.request_id != null
+                    ? String(paramsState.request_id)
+                    : null;
+                if (
+                    previewPayload
+                    && previewRequestId
+                    && paramsRequestId
+                    && previewRequestId === paramsRequestId
+                    && Array.isArray(previewPayload.z_data)
+                    && Array.isArray(previewPayload.text_values)
+                ) {
+                    var zRows = previewPayload.z_data;
+                    var textRows = previewPayload.text_values;
+                    var rowCount = Array.isArray(textRows) ? textRows.length : 0;
+                    var colCount = rowCount > 0 && Array.isArray(textRows[0]) ? textRows[0].length : 0;
+                    if (rowCount > 0 && colCount > 0) {
+                        var zWithHeaders = [];
+                        var textWithHeaders = [];
+                        zWithHeaders.push([]);
+                        textWithHeaders.push([]);
+                        zWithHeaders[0].push(-0.2);
+                        textWithHeaders[0].push("<b>UWY</b>");
+                        for (var headerCol = 0; headerCol < colCount; headerCol += 1) {
+                            zWithHeaders[0].push(-0.2);
+                            textWithHeaders[0].push("<b>" + String(heatmap.x[headerCol + 1]) + "</b>");
+                        }
+                        for (var rowIndexPreview = 0; rowIndexPreview < rowCount; rowIndexPreview += 1) {
+                            var zRow = [-0.2];
+                            var textRow = ["<b>" + String(heatmap.y[rowIndexPreview + 1]) + "</b>"];
+                            for (var colIndexPreview = 0; colIndexPreview < colCount; colIndexPreview += 1) {
+                                zRow.push(zRows[rowIndexPreview][colIndexPreview]);
+                                textRow.push(textRows[rowIndexPreview][colIndexPreview]);
+                            }
+                            zWithHeaders.push(zRow);
+                            textWithHeaders.push(textRow);
+                        }
+                        heatmap.z = zWithHeaders;
+                        heatmap.text = textWithHeaders;
+                    }
                 }
 
                 var xValues = heatmap.x.map(function (value) { return String(value); });
@@ -1502,6 +1568,7 @@ class Dashboard:
             Output("triangle-overlay-signature", "data"),
             Input("params-store", "data"),
             Input("triangle-base-figure", "data"),
+            Input("triangle-preview-store", "data"),
             State("triangle-overlay-signature", "data"),
         )
 
@@ -2105,6 +2172,7 @@ class Dashboard:
             Output("results-store", "data"),
             Output("results-table-store", "data"),
             Output("triangle-base-figure", "data"),
+            Output("triangle-preview-store", "data"),
             Output("emergence-plot", "figure"),
             Output("sync-publish-message", "data"),
             Output("session-save-store", "data"),
@@ -2120,6 +2188,7 @@ class Dashboard:
         def _update_results(params, current_payload, sync_ready):
             if not params or not isinstance(params, dict):
                 return (
+                    no_update,
                     no_update,
                     no_update,
                     no_update,
@@ -2167,6 +2236,7 @@ class Dashboard:
                     no_update,
                     no_update,
                     no_update,
+                    no_update,
                     True,
                 )
 
@@ -2200,6 +2270,7 @@ class Dashboard:
                         exc_info=True,
                     )
                     return (
+                        no_update,
                         no_update,
                         no_update,
                         no_update,
@@ -2275,6 +2346,7 @@ class Dashboard:
                         no_update,
                         no_update,
                         no_update,
+                        no_update,
                         {"state": "error", "request_id": request_id, "error": str(exc)},
                         True,
                     )
@@ -2314,6 +2386,7 @@ class Dashboard:
                 "due_at": time.time() + debounce_seconds,
             }
             triangle_output = no_update
+            triangle_preview_output = no_update
             emergence_output = no_update
             status_payload = {"state": "editing", "request_id": request_id}
             if context["source"] == "local":
@@ -2321,10 +2394,7 @@ class Dashboard:
                     preview_result = self._run_triangle_preview_recalculation(
                         debounce_request
                     )
-                    triangle_output = {
-                        "figure": preview_result.get("triangle_figure"),
-                        "figure_version": int(request_id),
-                    }
+                    triangle_preview_output = preview_result.get("triangle_preview")
                 except Exception as exc:
                     logging.error(
                         f"Failed to build chainladder preview: {exc}",
@@ -2346,6 +2416,7 @@ class Dashboard:
                 no_update,
                 no_update,
                 triangle_output,
+                triangle_preview_output,
                 emergence_output,
                 no_update,
                 no_update,
@@ -2388,6 +2459,7 @@ class Dashboard:
             Output("results-store", "data", allow_duplicate=True),
             Output("results-table-store", "data", allow_duplicate=True),
             Output("triangle-base-figure", "data", allow_duplicate=True),
+            Output("triangle-preview-store", "data", allow_duplicate=True),
             Output("emergence-plot", "figure", allow_duplicate=True),
             Output("sync-publish-message", "data", allow_duplicate=True),
             Output("session-save-store", "data", allow_duplicate=True),
@@ -2415,6 +2487,7 @@ class Dashboard:
                     no_update,
                     no_update,
                     no_update,
+                    no_update,
                     poll_state,
                     False,
                 )
@@ -2429,11 +2502,13 @@ class Dashboard:
                     no_update,
                     no_update,
                     no_update,
+                    no_update,
                     poll_state,
                     True,
                 )
             if state != "completed":
                 return (
+                    no_update,
                     no_update,
                     no_update,
                     no_update,
@@ -2926,6 +3001,7 @@ class Dashboard:
                     data=initial_results_rows,
                 ),
                 dcc.Store(id="ave-data-store", data=initial_ave_data),
+                dcc.Store(id="triangle-preview-store", data=None),
                 dcc.Store(
                     id="triangle-base-figure",
                     data={
