@@ -12,6 +12,10 @@
 - `chainladder-python/docs/` contains Jupyter Book docs and notebooks.
 - `source/` contains local reserving workflow modules.
 - `Plan.md` is the main project plan and should be consulted before making changes.
+- `AI_README.md` documents current AI capabilities and limits for reserving, diagnostics, and scenario testing.
+- `AI_CONTEXT.md` documents AI-specific terminology, notation, and prompt rules such as how to interpret "current quarter" and supported metric aliases.
+- `AI_PLAYBOOKS.md` documents preferred AI workflows by task type such as movement review, scenario recommendation, reserve change explanation, and data exploration.
+- `AI_EXAMPLES.md` documents few-shot examples of preferred AI tool usage and answer patterns.
 
 ## Project plan (must-read)
 - `Plan.md` is the heart of this repository; keep work aligned to its phases and scope.
@@ -177,3 +181,12 @@
 - No Cursor rules found in `.cursor/rules/` or `.cursorrules`.
 - No Copilot instructions found in `.github/copilot-instructions.md`.
 - If you add tooling or workflow changes, update `AGENTS.md`.
+
+## AI capabilities
+- Consult `AI_README.md` when working on the AI assistant, chat tools, diagnostics flows, or scenario testing behavior.
+- Consult `AI_CONTEXT.md` for AI terminology and notation rules that should be loaded into the assistant context.
+- Consult `AI_PLAYBOOKS.md` for preferred AI workflows and playbook selection rules.
+- Consult `AI_EXAMPLES.md` for few-shot examples that should shape assistant tool usage and answer structure.
+- The current AI should use the existing `source.reserving.Reserving` class and its supported configuration inputs.
+- The current AI can create distinct reserving scenarios by changing supported parameters such as Chainladder drops, tail settings, BF apriori, and final method selection, then run diagnostics on each scenario.
+- The current AI should not claim to generate brand-new reserving algorithms unless that capability is explicitly implemented in code.

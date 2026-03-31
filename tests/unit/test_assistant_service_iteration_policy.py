@@ -13,8 +13,10 @@ from ai.assistant_service import AssistantService
 class _FakeClient:
     def __init__(self, responses):
         self._responses = list(responses)
+        self.last_messages = None
 
     def chat_completion(self, **_kwargs):
+        self.last_messages = _kwargs.get("messages")
         return self._responses.pop(0)
 
 
@@ -69,7 +71,7 @@ class _FakeTools:
         return {"session_id": "s-1"}
 
 
-def test_answer_forces_iteration_before_final_output() -> None:
+def test_answer_does_not_force_iteration_before_final_output() -> None:
     responses = [
         {
             "choices": [
@@ -93,35 +95,7 @@ def test_answer_forces_iteration_before_final_output() -> None:
             "choices": [
                 {
                     "message": {
-                        "content": "I will run iterative scenario analysis next.",
-                        "tool_calls": [],
-                    }
-                }
-            ]
-        },
-        {
-            "choices": [
-                {
-                    "message": {
-                        "content": "",
-                        "tool_calls": [
-                            {
-                                "id": "call-2",
-                                "function": {
-                                    "name": "tool_iterate_diagnostics",
-                                    "arguments": '{"session_id": "s-1", "include_baseline": true}',
-                                },
-                            }
-                        ],
-                    }
-                }
-            ]
-        },
-        {
-            "choices": [
-                {
-                    "message": {
-                        "content": "Final commentary after iteration.",
+                        "content": "Final commentary after diagnostics.",
                         "tool_calls": [],
                     }
                 }
@@ -139,7 +113,7 @@ def test_answer_forces_iteration_before_final_output() -> None:
 
     tool_names = [name for name, _ in fake_tools.calls]
     assert "tool_run_diagnostics" in tool_names
-    assert "tool_iterate_diagnostics" in tool_names
+    assert "tool_iterate_diagnostics" not in tool_names
     assert "Final commentary" in result
 
 
@@ -154,3 +128,195 @@ def test_answer_returns_graceful_message_when_provider_fails_after_diagnostics()
     result = service.answer(user_prompt="Run diagnostics", max_steps=2)
 
     assert "temporarily unavailable" in result.lower()
+
+
+def test_answer_includes_ai_context_prompt() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ok",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+
+    client = _FakeClient(responses)
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", client)
+    setattr(service, "_tools", _FakeTools())
+    service._observability_enabled = False
+
+    result = service.answer(user_prompt="What does current quarter mean?")
+
+    assert result == "ok"
+    system_messages = [
+        item.get("content", "")
+        for item in (client.last_messages or [])
+        if item.get("role") == "system"
+    ]
+    assert any("current quarter" in content.lower() for content in system_messages)
+    assert any("latest diagonal" in content.lower() for content in system_messages)
+    assert any("movement review" in content.lower() for content in system_messages)
+    assert any(
+        "claims movement this quarter" in content.lower() for content in system_messages
+    )
+
+
+def test_movement_question_does_not_force_iteration() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "function": {
+                                    "name": "tool_run_diagnostics",
+                                    "arguments": '{"session_id": "s-1"}',
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "There are unusual incurred movements this quarter.",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        },
+    ]
+
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", _FakeClient(responses))
+    fake_tools = _FakeTools()
+    setattr(service, "_tools", fake_tools)
+    service._observability_enabled = False
+
+    result = service.answer(
+        user_prompt="Are there unusual and unexpected incurred claims movements this quarter?"
+    )
+
+    tool_names = [name for name, _ in fake_tools.calls]
+    assert "tool_run_diagnostics" in tool_names
+    assert "tool_iterate_diagnostics" not in tool_names
+    assert "unusual incurred movements" in result.lower()
+
+
+def test_recommendation_question_includes_iteration_hint() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ok",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+
+    client = _FakeClient(responses)
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", client)
+    setattr(service, "_tools", _FakeTools())
+    service._observability_enabled = False
+
+    result = service.answer(user_prompt="What scenario do you recommend?")
+
+    assert result == "ok"
+    system_messages = [
+        item.get("content", "")
+        for item in (client.last_messages or [])
+        if item.get("role") == "system"
+    ]
+    assert any(
+        "asking for recommendations" in content.lower() for content in system_messages
+    )
+    assert any(
+        "selected playbook: scenario recommendation" in content.lower()
+        for content in system_messages
+    )
+
+
+def test_claims_movement_question_includes_incurred_latest_diagonal_hint() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ok",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+
+    client = _FakeClient(responses)
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", client)
+    setattr(service, "_tools", _FakeTools())
+    service._observability_enabled = False
+
+    result = service.answer(
+        user_prompt="Are there unusual and unexpected claims movements this quarter?"
+    )
+
+    assert result == "ok"
+    system_messages = [
+        item.get("content", "")
+        for item in (client.last_messages or [])
+        if item.get("role") == "system"
+    ]
+    merged = "\n".join(system_messages).lower()
+    assert "claims without a modifier" in merged
+    assert "treat that as incurred" in merged
+    assert "latest diagonal" in merged
+    assert "selected playbook: movement review" in merged
+
+
+def test_claims_movement_question_prefetches_incurred_and_a2a_evidence() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ok",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", _FakeClient(responses))
+    fake_tools = _FakeTools()
+    setattr(service, "_tools", fake_tools)
+    service._observability_enabled = False
+
+    result = service.run_turn(
+        user_prompt="Are there unusual and unexpected claims movements this quarter?",
+        session_context={"segment": "seg", "session_id": "s-1"},
+    )
+
+    assert result["content"] == "ok"
+    tool_names = [name for name, _ in fake_tools.calls]
+    assert tool_names[:3] == [
+        "tool_get_data_view_summary",
+        "tool_get_data_view_summary",
+        "tool_run_ldf_consistency_diagnostics",
+    ]

@@ -8,7 +8,8 @@ from pathlib import Path
 import chainladder as cl
 import pandas as pd
 
-from ai.assistant_service import AssistantService
+from ai.api_tools import ReservingApiTools
+from ai.chat_api_client import AIChatApiClient
 from ai.env_loader import load_dotenv
 
 
@@ -90,26 +91,23 @@ def main() -> None:
 
     premium_rows = _load_rows_from_csv(args.premium_csv)
 
-    assistant = AssistantService(api_base_url=args.api_base_url)
-    workflow = assistant.bootstrap_workflow(
+    api_tools = ReservingApiTools(base_url=args.api_base_url)
+    workflow = api_tools.create_workflow(
         segment=args.segment,
         claims_rows=claims_rows,
         premium_rows=premium_rows,
         granularity=args.granularity,
     )
-
-    session_id = workflow["session_id"]
-    enriched_prompt = (
-        f"Session initialized with session_id={session_id}, segment={args.segment}. "
-        f"Use tool_get_session first, run diagnostics, run iterative diagnostics search, "
-        f"then recommend drops, BF apriori, and tail fit choices with evidence. "
-        f"Original request: {args.prompt}"
+    chat_client = AIChatApiClient(base_url=args.api_base_url)
+    chat = chat_client.create_chat(
+        segment=args.segment,
+        reserving_session_id=workflow["session_id"],
     )
-    answer = assistant.answer(user_prompt=enriched_prompt)
+    answer = chat_client.send_message(chat_id=chat["chat_id"], content=args.prompt)
 
     print(json.dumps(workflow, indent=2, default=str))
     print("\n---\n")
-    print(answer)
+    print(answer.get("assistant_message", ""))
 
 
 if __name__ == "__main__":

@@ -752,6 +752,147 @@ class Dashboard:
             drops.append((str(origin), dev_value))
         return drops
 
+    def _sidebar_presentation(
+        self,
+        *,
+        active_tab: str,
+        collapsed: bool,
+    ) -> tuple[
+        dict,
+        dict,
+        dict,
+        dict,
+        dict,
+        dict,
+        dict,
+        dict,
+        str,
+        str,
+        str,
+        str,
+        str,
+        str,
+        dict,
+    ]:
+        is_collapsed = bool(collapsed)
+        sidebar_style = {
+            "width": SIDEBAR_COLLAPSED_WIDTH
+            if is_collapsed
+            else SIDEBAR_EXPANDED_WIDTH,
+            "transition": "width 0.2s ease",
+            "background": "#f2f5f9",
+            "padding": "0" if is_collapsed else "20px 16px",
+            "display": "flex",
+            "flexDirection": "column",
+            "justifyContent": "flex-start",
+            "borderRight": "none" if is_collapsed else f"1px solid {COLOR_BORDER}",
+            "position": "relative",
+            "minHeight": "100vh",
+            "height": "100vh",
+            "alignSelf": "flex-start",
+            "fontFamily": FONT_FAMILY,
+            "overflow": "visible",
+        }
+        title_style = {
+            "display": "none" if is_collapsed else "block",
+            "textAlign": "left",
+            "marginBottom": "20px",
+            "color": COLOR_TEXT,
+            "letterSpacing": "0.3px",
+            "fontSize": "18px",
+            "fontWeight": 700,
+            "fontFamily": '"JetBrainsMono Nerd Font", "FiraCode Nerd Font", "Hack Nerd Font", monospace',
+        }
+        nav_stack_style = {
+            "display": "none" if is_collapsed else "flex",
+            "flexDirection": "column",
+            "gap": "8px",
+        }
+        base_button_style = {
+            "width": "100%",
+            "textAlign": "left",
+            "padding": "10px 12px",
+            "border": "1px solid transparent",
+            "borderRadius": RADIUS_MD,
+            "background": "transparent",
+            "cursor": "pointer",
+            "fontSize": "14px",
+            "marginBottom": "8px",
+            "color": COLOR_TEXT,
+            "fontFamily": FONT_FAMILY,
+            "whiteSpace": "nowrap",
+        }
+        active_style = {
+            **base_button_style,
+            "background": COLOR_SURFACE,
+            "border": f"1px solid {COLOR_BORDER}",
+            "fontWeight": 600,
+            "boxShadow": "0 2px 8px rgba(15, 23, 42, 0.06)",
+        }
+        inactive_style = {
+            **base_button_style,
+            "color": COLOR_MUTED,
+        }
+        collapsed_button_style = {
+            "display": "none",
+        }
+        labels_full = {
+            "data": "Data",
+            "chainladder": "Chainladder",
+            "bornhuetter_ferguson": "Bornhuetter-Ferguson",
+            "results": "Results",
+            "ai_review": "AI Review",
+        }
+        labels = labels_full if not is_collapsed else {}
+        toggle_label = ">" if is_collapsed else "<"
+        toggle_style = {
+            "width": "20px",
+            "height": "20px",
+            "borderRadius": "50%",
+            "border": f"1px solid {COLOR_BORDER}",
+            "background": COLOR_SURFACE,
+            "cursor": "pointer",
+            "display": "flex",
+            "alignItems": "center",
+            "justifyContent": "center",
+            "position": "absolute",
+            "right": "-10px",
+            "top": "50%",
+            "transform": "translateY(-50%)",
+            "boxShadow": "0 6px 16px rgba(15, 23, 42, 0.12)",
+            "padding": "0",
+            "color": COLOR_MUTED,
+        }
+        return (
+            sidebar_style,
+            title_style,
+            nav_stack_style,
+            collapsed_button_style
+            if is_collapsed
+            else (active_style if active_tab == "data" else inactive_style),
+            collapsed_button_style
+            if is_collapsed
+            else (active_style if active_tab == "chainladder" else inactive_style),
+            collapsed_button_style
+            if is_collapsed
+            else (
+                active_style if active_tab == "bornhuetter_ferguson" else inactive_style
+            ),
+            collapsed_button_style
+            if is_collapsed
+            else (active_style if active_tab == "results" else inactive_style),
+            collapsed_button_style
+            if is_collapsed
+            else (active_style if active_tab == "ai_review" else inactive_style),
+            labels.get("data", ""),
+            labels.get("chainladder", ""),
+            labels.get("bornhuetter_ferguson", ""),
+            labels.get("results", ""),
+            labels.get("ai_review", ""),
+            toggle_label,
+            toggle_style,
+        )
+
     def _get_uwy_labels(self) -> List[str]:
         triangle = self._reserving._triangle.get_triangle("incurred")["incurred"]
         labels: List[str] = []
@@ -1035,125 +1176,9 @@ class Dashboard:
             Input("sidebar-collapsed", "data"),
         )
         def _style_sidebar(active_tab, collapsed):
-            is_collapsed = bool(collapsed)
-            sidebar_style = {
-                "width": SIDEBAR_COLLAPSED_WIDTH
-                if is_collapsed
-                else SIDEBAR_EXPANDED_WIDTH,
-                "transition": "width 0.2s ease",
-                "background": "#f2f5f9",
-                "padding": "0" if is_collapsed else "20px 16px",
-                "display": "flex",
-                "flexDirection": "column",
-                "justifyContent": "flex-start",
-                "borderRight": "none" if is_collapsed else f"1px solid {COLOR_BORDER}",
-                "position": "relative",
-                "minHeight": "100vh",
-                "height": "100vh",
-                "alignSelf": "flex-start",
-                "fontFamily": FONT_FAMILY,
-                "overflow": "visible",
-            }
-            title_style = {
-                "display": "none" if is_collapsed else "block",
-                "textAlign": "left",
-                "marginBottom": "20px",
-                "color": COLOR_TEXT,
-                "letterSpacing": "0.3px",
-                "fontSize": "18px",
-                "fontWeight": 700,
-                "fontFamily": '"JetBrainsMono Nerd Font", "FiraCode Nerd Font", "Hack Nerd Font", monospace',
-            }
-            nav_stack_style = {
-                "display": "none" if is_collapsed else "flex",
-                "flexDirection": "column",
-                "gap": "8px",
-            }
-            base_button_style = {
-                "width": "100%",
-                "textAlign": "left",
-                "padding": "10px 12px",
-                "border": "1px solid transparent",
-                "borderRadius": RADIUS_MD,
-                "background": "transparent",
-                "cursor": "pointer",
-                "fontSize": "14px",
-                "marginBottom": "8px",
-                "color": COLOR_TEXT,
-                "fontFamily": FONT_FAMILY,
-                "whiteSpace": "nowrap",
-            }
-            active_style = {
-                **base_button_style,
-                "background": COLOR_SURFACE,
-                "border": f"1px solid {COLOR_BORDER}",
-                "fontWeight": 600,
-                "boxShadow": "0 2px 8px rgba(15, 23, 42, 0.06)",
-            }
-            inactive_style = {
-                **base_button_style,
-                "color": COLOR_MUTED,
-            }
-            collapsed_button_style = {
-                "display": "none",
-            }
-            labels_full = {
-                "data": "Data",
-                "chainladder": "Chainladder",
-                "bornhuetter_ferguson": "Bornhuetter-Ferguson",
-                "results": "Results",
-                "ai_review": "AI Review",
-            }
-            labels = labels_full if not is_collapsed else {}
-            toggle_label = ">" if is_collapsed else "<"
-            toggle_style = {
-                "width": "20px",
-                "height": "20px",
-                "borderRadius": "50%",
-                "border": f"1px solid {COLOR_BORDER}",
-                "background": COLOR_SURFACE,
-                "cursor": "pointer",
-                "display": "flex",
-                "alignItems": "center",
-                "justifyContent": "center",
-                "position": "absolute",
-                "right": "-10px",
-                "top": "50%",
-                "transform": "translateY(-50%)",
-                "boxShadow": "0 6px 16px rgba(15, 23, 42, 0.12)",
-                "padding": "0",
-                "color": COLOR_MUTED,
-            }
-            return (
-                sidebar_style,
-                title_style,
-                nav_stack_style,
-                collapsed_button_style
-                if is_collapsed
-                else (active_style if active_tab == "data" else inactive_style),
-                collapsed_button_style
-                if is_collapsed
-                else (active_style if active_tab == "chainladder" else inactive_style),
-                collapsed_button_style
-                if is_collapsed
-                else (
-                    active_style
-                    if active_tab == "bornhuetter_ferguson"
-                    else inactive_style
-                ),
-                collapsed_button_style
-                if is_collapsed
-                else (active_style if active_tab == "results" else inactive_style),
-                collapsed_button_style
-                if is_collapsed
-                else (active_style if active_tab == "ai_review" else inactive_style),
-                labels.get("data", ""),
-                labels.get("chainladder", ""),
-                labels.get("bornhuetter_ferguson", ""),
-                labels.get("results", ""),
-                labels.get("ai_review", ""),
-                toggle_label,
-                toggle_style,
+            return self._sidebar_presentation(
+                active_tab=active_tab or "data",
+                collapsed=bool(collapsed),
             )
 
         @self.app.callback(
@@ -2488,6 +2513,23 @@ class Dashboard:
         initial_bf_apriori_rows = self._params_service.build_bf_apriori_rows(
             self._default_bf_apriori_rows
         )
+        (
+            initial_sidebar_style,
+            initial_title_style,
+            initial_nav_stack_style,
+            initial_nav_data_style,
+            initial_nav_chainladder_style,
+            initial_nav_bf_style,
+            initial_nav_results_style,
+            initial_nav_ai_style,
+            initial_nav_data_label,
+            initial_nav_chainladder_label,
+            initial_nav_bf_label,
+            initial_nav_results_label,
+            initial_nav_ai_label,
+            initial_sidebar_toggle_label,
+            initial_sidebar_toggle_style,
+        ) = self._sidebar_presentation(active_tab="data", collapsed=False)
         return html.Div(
             [
                 dcc.Location(id="page-location", refresh=False),
@@ -2526,32 +2568,53 @@ class Dashboard:
                                 html.Div(
                                     "reserving-studio",
                                     id="sidebar-title",
-                                    style={
-                                        "fontWeight": 700,
-                                        "fontSize": "18px",
-                                        "marginBottom": "20px",
-                                        "textAlign": "left",
-                                        "color": COLOR_TEXT,
-                                        "letterSpacing": "0.3px",
-                                        "fontFamily": '"JetBrainsMono Nerd Font", "FiraCode Nerd Font", "Hack Nerd Font", monospace',
-                                    },
+                                    style=initial_title_style,
                                 ),
                                 html.Div(
                                     [
-                                        html.Button(id="nav-data", n_clicks=0),
-                                        html.Button(id="nav-chainladder", n_clicks=0),
-                                        html.Button(id="nav-bf", n_clicks=0),
-                                        html.Button(id="nav-results", n_clicks=0),
-                                        html.Button(id="nav-ai", n_clicks=0),
+                                        html.Button(
+                                            initial_nav_data_label,
+                                            id="nav-data",
+                                            n_clicks=0,
+                                            style=initial_nav_data_style,
+                                        ),
+                                        html.Button(
+                                            initial_nav_chainladder_label,
+                                            id="nav-chainladder",
+                                            n_clicks=0,
+                                            style=initial_nav_chainladder_style,
+                                        ),
+                                        html.Button(
+                                            initial_nav_bf_label,
+                                            id="nav-bf",
+                                            n_clicks=0,
+                                            style=initial_nav_bf_style,
+                                        ),
+                                        html.Button(
+                                            initial_nav_results_label,
+                                            id="nav-results",
+                                            n_clicks=0,
+                                            style=initial_nav_results_style,
+                                        ),
+                                        html.Button(
+                                            initial_nav_ai_label,
+                                            id="nav-ai",
+                                            n_clicks=0,
+                                            style=initial_nav_ai_style,
+                                        ),
                                     ],
                                     id="nav-stack",
+                                    style=initial_nav_stack_style,
                                 ),
                                 html.Button(
+                                    initial_sidebar_toggle_label,
                                     id="sidebar-toggle",
                                     n_clicks=0,
+                                    style=initial_sidebar_toggle_style,
                                 ),
                             ],
                             id="sidebar",
+                            style=initial_sidebar_style,
                         ),
                         html.Div(
                             [

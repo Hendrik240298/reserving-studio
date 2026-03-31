@@ -18,7 +18,10 @@ class OpenRouterClient:
             "OPENROUTER_BASE_URL",
             "https://openrouter.ai/api/v1",
         ).rstrip("/")
-        self._model = os.environ.get("AI_MODEL", "minimax/minimax-m2.5")
+        self._model = os.environ.get(
+            "AI_MODEL",
+            "google/gemini-3-flash-preview",
+        )
         self._fallback_model = os.environ.get("AI_FALLBACK_MODEL")
         self._max_retries = int(os.environ.get("AI_PROVIDER_MAX_RETRIES", "2"))
         self._retry_base_delay_seconds = float(

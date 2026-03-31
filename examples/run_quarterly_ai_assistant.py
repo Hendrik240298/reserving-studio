@@ -10,6 +10,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from ai.env_loader import load_dotenv
+from ai.assistant_service import AssistantService
+from ai.chat_service import AIChatService
+from source.api.adapters.reserving_adapter import InMemoryReservingBackend
+from source.api.schemas import WorkflowFromDataframesRequest
 from source.ai_dashboard import launch_ai_dashboard
 from source.app import build_workflow_from_dataframes
 from source.config_manager import ConfigManager
@@ -35,8 +39,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--port",
         type=int,
-        default=8050,
-        help="Dash UI port (default: 8050).",
+        default=8052,
+        help="Dash UI port (default: 8052).",
     )
     return parser.parse_args()
 
@@ -52,32 +56,36 @@ def main() -> None:
 
     config = _load_config()
     claims_df, premium_df = load_inputs_from_config(config, repo_root=REPO_ROOT)
-
-    if args.print_cli_commentary:
-        from ai.assistant_service import AssistantService
-
-        assistant = AssistantService(api_base_url="http://127.0.0.1:8000")
-        workflow = assistant.bootstrap_workflow(
+    backend = InMemoryReservingBackend()
+    workflow = backend.create_workflow_from_dataframes(
+        WorkflowFromDataframesRequest(
             segment=config.get_segment(),
             claims_rows=claims_df.to_dict(orient="records"),
             premium_rows=premium_df.to_dict(orient="records"),
             granularity=config.get_granularity(),
         )
-        session_id = workflow["session_id"]
-        prompt = (
-            f"Session initialized with session_id={session_id}, segment={config.get_segment()}. "
-            "Run tool_get_session, tool_run_diagnostics, tool_iterate_diagnostics "
-            "(include_baseline=true, max_scenarios=20), and tool_get_results before finalizing. "
-            "Produce detailed reserving commentary with sections: Executive summary, key findings, "
-            "governance and escalation, scenario trade-offs, and recommended actions. "
-            "Include explicit evidence IDs for every material claim and include uncertainty statements "
-            "where confidence is reduced."
+    )
+    chat_service = AIChatService(
+        assistant_factory=lambda: AssistantService.from_backend(backend=backend)
+    )
+    chat = chat_service.create_chat(
+        segment=config.get_segment(),
+        reserving_session_id=workflow.session_id,
+    )
+
+    if args.print_cli_commentary:
+        response = chat_service.send_message(
+            chat.chat_id,
+            (
+                "Run diagnostics, iterate meaningful reserving scenarios, and provide detailed commentary "
+                "with sections: Executive summary, key findings, governance and escalation, scenario trade-offs, "
+                "and recommended actions. Include evidence references where available and explain uncertainty."
+            ),
         )
-        answer = assistant.answer(user_prompt=prompt)
         print("Workflow initialized:")
-        print(workflow)
+        print(workflow.model_dump(mode="json"))
         print("\nAssistant commentary:\n")
-        print(answer)
+        print(response.get("assistant_message", ""))
 
     print(f"\nStarting standalone AI Dash UI on http://127.0.0.1:{args.port}\n")
     reserving = build_workflow_from_dataframes(
@@ -85,7 +93,13 @@ def main() -> None:
         premium_df,
         config=config,
     )
-    launch_ai_dashboard(reserving, config=config, port=args.port)
+    launch_ai_dashboard(
+        reserving,
+        config=config,
+        chat_service=chat_service,
+        chat_id=chat.chat_id,
+        port=args.port,
+    )
 
 
 if __name__ == "__main__":

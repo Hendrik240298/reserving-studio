@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
+from typing import Any
 
 from dash import Dash, Input, Output, State, dcc, html, dash_table, no_update
 
-from source.ai_review import AIReviewService
+from ai.chat_service import AIChatService
 from source.config_manager import ConfigManager
 from source.reserving import Reserving
 
@@ -22,6 +22,7 @@ COLOR_ACCENT_SOFT = "#e8f1fb"
 SHADOW_SOFT = "0 8px 24px rgba(15, 23, 42, 0.06)"
 RADIUS_LG = "14px"
 RADIUS_MD = "10px"
+TURTUARY_AVATAR_SRC = "/assets/turtuary.png"
 
 
 class AIDashboard:
@@ -30,9 +31,12 @@ class AIDashboard:
         reserving: Reserving,
         *,
         config: ConfigManager | None = None,
+        chat_service: AIChatService | None = None,
+        chat_id: str | None = None,
     ) -> None:
         self._config = config
-        self._review_service = AIReviewService(reserving, config=config)
+        self._chat_service = chat_service
+        self._chat_id = chat_id
         assets_folder = Path(__file__).resolve().parent.parent / "assets"
         self.app = Dash(
             __name__,
@@ -46,123 +50,272 @@ class AIDashboard:
 
     def _register_callbacks(self) -> None:
         @self.app.callback(
-            Output("ai-review-store", "data"),
+            Output("ai-sidebar-open", "data"),
+            Output("ai-sidebar", "style"),
+            Output("ai-sidebar-toggle", "children"),
+            Input("ai-sidebar-toggle", "n_clicks"),
+            State("ai-sidebar-open", "data"),
+            prevent_initial_call=True,
+        )
+        def _toggle_sidebar(_n_clicks, is_open):
+            open_state = not bool(is_open)
+            return (
+                open_state,
+                self._sidebar_style(open_state),
+                "Hide Sidebar" if open_state else "Show Sidebar",
+            )
+
+        @self.app.callback(
             Output("ai-chat-history-store", "data"),
+            Output("ai-chat-tool-events-store", "data"),
+            Output("ai-chat-scenario-ledger-store", "data"),
             Output("ai-chat-transcript", "children"),
-            Output("ai-summary-text", "children"),
-            Output("ai-governance-card", "children"),
-            Output("ai-uncertainty-card", "children"),
-            Output("ai-best-scenario-card", "children"),
-            Output("ai-scenario-matrix", "data"),
-            Output("ai-evidence-trace", "data"),
+            Output("ai-analysis-trace", "data"),
+            Output("ai-chat-evidence-trace", "data"),
+            Output("ai-scenario-ledger", "data"),
             Input("ai-refresh-review", "n_clicks"),
         )
         def _refresh_review(_n_clicks):
-            review_data = self._review_service.build_review_payload()
-            history = [
-                {"role": "assistant", "content": review_data.get("ai_commentary", "")}
-            ]
+            history = self._initial_chat_history()
+            tool_events = self._initial_tool_events()
+            scenario_ledger = self._initial_scenario_ledger()
             return (
-                review_data,
                 history,
-                AIReviewService.render_chat_transcript(history),
-                review_data.get("ai_commentary", ""),
-                self._governance_card(review_data),
-                self._uncertainty_card(review_data),
-                self._best_scenario_card(review_data),
-                review_data.get("scenario_matrix", []),
-                review_data.get("evidence_trace", []),
+                tool_events,
+                scenario_ledger,
+                self._render_chat_messages(history),
+                self._tool_event_rows(tool_events),
+                self._chat_evidence_rows(tool_events),
+                self._scenario_ledger_rows(scenario_ledger),
             )
 
         @self.app.callback(
             Output("ai-chat-history-store", "data", allow_duplicate=True),
+            Output("ai-chat-tool-events-store", "data", allow_duplicate=True),
+            Output("ai-chat-scenario-ledger-store", "data", allow_duplicate=True),
             Output("ai-chat-transcript", "children", allow_duplicate=True),
             Output("ai-chat-input", "value"),
+            Output("ai-chat-status", "children"),
+            Output("ai-analysis-trace", "data", allow_duplicate=True),
+            Output("ai-chat-evidence-trace", "data", allow_duplicate=True),
+            Output("ai-scenario-ledger", "data", allow_duplicate=True),
+            Output("ai-chat-poll", "disabled", allow_duplicate=True),
             Input("ai-chat-send", "n_clicks"),
             State("ai-chat-input", "value"),
             State("ai-chat-history-store", "data"),
-            State("ai-review-store", "data"),
             prevent_initial_call=True,
         )
-        def _chat(_n_clicks, prompt, history, review_data):
+        def _chat(_n_clicks, prompt, history):
             prompt_text = str(prompt or "").strip()
             if not prompt_text:
-                return no_update, no_update, no_update
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                )
+            if self._chat_service is None or not self._chat_id:
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    "AI chat backend is not configured.",
+                    no_update,
+                    no_update,
+                    no_update,
+                    True,
+                )
             rows = history if isinstance(history, list) else []
-            normalized = [item for item in rows if isinstance(item, dict)]
-            normalized.append({"role": "user", "content": prompt_text})
-            answer = AIReviewService.answer_chat_prompt(prompt_text, review_data)
-            normalized.append({"role": "assistant", "content": answer})
-            return normalized, AIReviewService.render_chat_transcript(normalized), ""
+            normalized = [dict(item) for item in rows if isinstance(item, dict)]
+            try:
+                response = self._chat_service.send_message(self._chat_id, prompt_text)
+            except Exception as error:
+                normalized.append({"role": "user", "content": prompt_text})
+                normalized.append(
+                    {
+                        "role": "assistant",
+                        "content": f"AI assistant error: {error}",
+                    }
+                )
+                return (
+                    normalized,
+                    self._initial_tool_events(),
+                    self._initial_scenario_ledger(),
+                    self._render_chat_messages(normalized),
+                    "",
+                    "AI response failed.",
+                    self._tool_event_rows(self._initial_tool_events()),
+                    self._chat_evidence_rows(self._initial_tool_events()),
+                    self._scenario_ledger_rows(self._initial_scenario_ledger()),
+                    True,
+                )
+            messages = response.get("messages")
+            if not isinstance(messages, list):
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    "",
+                    "AI response did not contain a transcript.",
+                    no_update,
+                    no_update,
+                    no_update,
+                    True,
+                )
+            tool_events = response.get("tool_events")
+            scenario_ledger = response.get("scenario_ledger")
+            normalized_tool_events = (
+                [dict(item) for item in tool_events if isinstance(item, dict)]
+                if isinstance(tool_events, list)
+                else []
+            )
+            normalized_scenario_ledger = (
+                [dict(item) for item in scenario_ledger if isinstance(item, dict)]
+                if isinstance(scenario_ledger, list)
+                else []
+            )
+            status = (
+                "AI fallback summary used." if response.get("fallback_used") else ""
+            )
+            return (
+                messages,
+                normalized_tool_events,
+                normalized_scenario_ledger,
+                self._render_chat_messages(messages),
+                "",
+                status,
+                self._tool_event_rows(normalized_tool_events),
+                self._chat_evidence_rows(normalized_tool_events),
+                self._scenario_ledger_rows(normalized_scenario_ledger),
+                not bool(response.get("streaming")),
+            )
 
         @self.app.callback(
-            Output("ai-review-store", "data", allow_duplicate=True),
-            Output("ai-decision-status", "children"),
-            Input("ai-save-decision", "n_clicks"),
-            State("ai-decision", "value"),
-            State("ai-approver", "value"),
-            State("ai-rationale", "value"),
-            State("ai-review-store", "data"),
+            Output("ai-chat-history-store", "data", allow_duplicate=True),
+            Output("ai-chat-tool-events-store", "data", allow_duplicate=True),
+            Output("ai-chat-scenario-ledger-store", "data", allow_duplicate=True),
+            Output("ai-chat-transcript", "children", allow_duplicate=True),
+            Output("ai-chat-status", "children", allow_duplicate=True),
+            Output("ai-analysis-trace", "data", allow_duplicate=True),
+            Output("ai-chat-evidence-trace", "data", allow_duplicate=True),
+            Output("ai-scenario-ledger", "data", allow_duplicate=True),
+            Output("ai-chat-poll", "disabled", allow_duplicate=True),
+            Input("ai-chat-poll", "n_intervals"),
             prevent_initial_call=True,
         )
-        def _save_decision(_n_clicks, decision, approver, rationale, review_data):
-            if not isinstance(review_data, dict):
-                return no_update, "Run review first."
-            updated = dict(review_data)
-            updated["ai_override"] = {
-                "decision": str(decision or "pending"),
-                "approver": str(approver or "").strip(),
-                "rationale": str(rationale or "").strip(),
-            }
-            self._review_service.persist_review(updated)
-            return updated, "Decision saved."
-
-        @self.app.callback(
-            Output("ai-decision-download", "data"),
-            Input("ai-export-decision", "n_clicks"),
-            State("ai-review-store", "data"),
-            prevent_initial_call=True,
-        )
-        def _export_decision(_n_clicks, review_data):
-            if not isinstance(review_data, dict):
-                return no_update
-            packet = AIReviewService.build_decision_packet(review_data)
-            segment = str(review_data.get("segment", "segment"))
-            return {
-                "content": json.dumps(packet, indent=2, default=str),
-                "filename": f"{segment}-ai-decision-packet.json",
-                "type": "application/json",
-            }
+        def _poll_chat(_n_intervals):
+            if self._chat_service is None or not self._chat_id:
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    True,
+                )
+            response = self._chat_service.build_chat_response(self._chat_id)
+            messages = response.get("messages")
+            tool_events = response.get("tool_events")
+            scenario_ledger = response.get("scenario_ledger")
+            if not isinstance(messages, list):
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    True,
+                )
+            normalized_tool_events = (
+                [dict(item) for item in tool_events if isinstance(item, dict)]
+                if isinstance(tool_events, list)
+                else []
+            )
+            normalized_scenario_ledger = (
+                [dict(item) for item in scenario_ledger if isinstance(item, dict)]
+                if isinstance(scenario_ledger, list)
+                else []
+            )
+            status = (
+                "AI fallback summary used." if response.get("fallback_used") else ""
+            )
+            return (
+                messages,
+                normalized_tool_events,
+                normalized_scenario_ledger,
+                self._render_chat_messages(messages),
+                status,
+                self._tool_event_rows(normalized_tool_events),
+                self._chat_evidence_rows(normalized_tool_events),
+                self._scenario_ledger_rows(normalized_scenario_ledger),
+                not bool(response.get("streaming")),
+            )
 
     def _create_layout(self):
-        review_data = self._review_service.build_review_payload()
-        history = [
-            {"role": "assistant", "content": review_data.get("ai_commentary", "")}
-        ]
+        history = self._initial_chat_history()
         return html.Div(
             [
-                dcc.Store(id="ai-review-store", data=review_data),
+                dcc.Store(id="ai-sidebar-open", data=False),
                 dcc.Store(id="ai-chat-history-store", data=history),
-                dcc.Download(id="ai-decision-download"),
+                dcc.Store(
+                    id="ai-chat-tool-events-store", data=self._initial_tool_events()
+                ),
+                dcc.Store(
+                    id="ai-chat-scenario-ledger-store",
+                    data=self._initial_scenario_ledger(),
+                ),
+                dcc.Interval(
+                    id="ai-chat-poll", interval=1000, n_intervals=0, disabled=True
+                ),
                 html.Div(
                     [
                         html.Div(
                             [
                                 html.Div(
-                                    "Reserving Studio AI Review",
+                                    "Reserving Studio AI",
                                     style={"fontSize": "28px", "fontWeight": 700},
                                 ),
                                 html.Div(
-                                    "Single-page actuarial review workspace for scenario comparison, evidence trace, and sign-off.",
+                                    "Chat-first actuarial workspace with evidence and traceability attached to the conversation.",
                                     style={"color": COLOR_MUTED, "marginTop": "6px"},
                                 ),
                             ]
                         ),
-                        html.Button(
-                            "Refresh Review",
-                            id="ai-refresh-review",
-                            n_clicks=0,
-                            style=self._primary_button_style(),
+                        html.Div(
+                            [
+                                html.Button(
+                                    "Show Sidebar",
+                                    id="ai-sidebar-toggle",
+                                    n_clicks=0,
+                                    style=self._secondary_button_style(),
+                                ),
+                                html.Button(
+                                    "Refresh Chat",
+                                    id="ai-refresh-review",
+                                    n_clicks=0,
+                                    style=self._primary_button_style(),
+                                ),
+                            ],
+                            style={
+                                "display": "flex",
+                                "gap": "10px",
+                                "flexWrap": "wrap",
+                            },
                         ),
                     ],
                     style={
@@ -171,32 +324,8 @@ class AIDashboard:
                         "alignItems": "center",
                         "gap": "16px",
                         "flexWrap": "wrap",
-                        "marginBottom": "18px",
-                    },
-                ),
-                html.Div(
-                    [
-                        self._card(
-                            "Governance",
-                            self._governance_card(review_data),
-                            "ai-governance-card",
-                        ),
-                        self._card(
-                            "Uncertainty",
-                            self._uncertainty_card(review_data),
-                            "ai-uncertainty-card",
-                        ),
-                        self._card(
-                            "Best Scenario",
-                            self._best_scenario_card(review_data),
-                            "ai-best-scenario-card",
-                        ),
-                    ],
-                    style={
-                        "display": "grid",
-                        "gridTemplateColumns": "repeat(auto-fit, minmax(240px, 1fr))",
-                        "gap": "14px",
-                        "marginBottom": "18px",
+                        "marginBottom": "14px",
+                        "flex": "0 0 auto",
                     },
                 ),
                 html.Div(
@@ -204,233 +333,647 @@ class AIDashboard:
                         html.Div(
                             [
                                 self._panel(
-                                    "Chat",
-                                    [
-                                        dcc.Textarea(
-                                            id="ai-chat-input",
-                                            placeholder="Ask about governance, uncertainty, scenarios, or evidence...",
-                                            style={
-                                                "width": "100%",
-                                                "minHeight": "74px",
-                                                "border": f"1px solid {COLOR_BORDER}",
-                                                "borderRadius": RADIUS_MD,
-                                                "padding": "10px",
-                                                "fontFamily": FONT_FAMILY,
-                                            },
-                                        ),
-                                        html.Button(
-                                            "Send",
-                                            id="ai-chat-send",
-                                            n_clicks=0,
-                                            style={
-                                                **self._primary_button_style(),
-                                                "marginTop": "10px",
-                                            },
-                                        ),
-                                        dcc.Markdown(
-                                            AIReviewService.render_chat_transcript(
-                                                history
-                                            ),
-                                            id="ai-chat-transcript",
-                                            style={
-                                                "marginTop": "12px",
-                                                "minHeight": "220px",
-                                                "padding": "12px",
-                                                "border": f"1px solid {COLOR_BORDER}",
-                                                "borderRadius": RADIUS_MD,
-                                                "background": "#fbfcfe",
-                                            },
-                                        ),
-                                    ],
-                                ),
-                                self._panel(
-                                    "Commentary",
+                                    "Actuarial Chat",
                                     [
                                         html.Div(
-                                            review_data.get("ai_commentary", ""),
-                                            id="ai-summary-text",
-                                            style={"lineHeight": "1.6"},
-                                        )
+                                            "Ask about deterioration, method changes, scenario alternatives, uncertainty, or evidence and the assistant will answer using reserving API calls.",
+                                            style={
+                                                "color": COLOR_MUTED,
+                                                "fontSize": "13px",
+                                                "marginBottom": "10px",
+                                            },
+                                        ),
+                                        html.Div(
+                                            self._render_chat_messages(history),
+                                            id="ai-chat-transcript",
+                                            style={
+                                                "flex": "1 1 auto",
+                                                "minHeight": "0",
+                                                "overflowY": "auto",
+                                                "padding": "8px 4px 18px 4px",
+                                                "display": "flex",
+                                                "flexDirection": "column",
+                                                "gap": "22px",
+                                                "background": "transparent",
+                                            },
+                                        ),
+                                        html.Div(
+                                            [
+                                                dcc.Textarea(
+                                                    id="ai-chat-input",
+                                                    placeholder="Ask the reserving assistant a question...",
+                                                    style={
+                                                        "flex": "1 1 auto",
+                                                        "minHeight": "72px",
+                                                        "maxHeight": "160px",
+                                                        "border": "none",
+                                                        "outline": "none",
+                                                        "padding": "14px 2px 0 2px",
+                                                        "fontFamily": FONT_FAMILY,
+                                                        "fontSize": "16px",
+                                                        "resize": "none",
+                                                        "background": "transparent",
+                                                        "color": COLOR_TEXT,
+                                                    },
+                                                ),
+                                                html.Button(
+                                                    ">",
+                                                    id="ai-chat-send",
+                                                    n_clicks=0,
+                                                    style={
+                                                        "width": "46px",
+                                                        "height": "46px",
+                                                        "borderRadius": "23px",
+                                                        "border": "none",
+                                                        "background": COLOR_ACCENT,
+                                                        "color": "#ffffff",
+                                                        "fontSize": "28px",
+                                                        "fontWeight": 700,
+                                                        "cursor": "pointer",
+                                                        "flex": "0 0 auto",
+                                                    },
+                                                ),
+                                            ],
+                                            style={
+                                                "display": "flex",
+                                                "alignItems": "flex-end",
+                                                "gap": "12px",
+                                                "padding": "12px 14px",
+                                                "border": "1px solid #d9dee8",
+                                                "borderRadius": "28px",
+                                                "background": "#ffffff",
+                                                "boxShadow": SHADOW_SOFT,
+                                            },
+                                        ),
+                                        html.Div(
+                                            "",
+                                            id="ai-chat-status",
+                                            style={
+                                                "color": COLOR_MUTED,
+                                                "fontSize": "13px",
+                                                "padding": "0 6px",
+                                            },
+                                        ),
                                     ],
+                                    extra_style={
+                                        "display": "flex",
+                                        "flexDirection": "column",
+                                        "height": "100%",
+                                        "minHeight": "0",
+                                    },
                                 ),
                             ],
-                            style={"display": "grid", "gap": "14px"},
+                            style={
+                                "minWidth": "0",
+                                "flex": "1 1 auto",
+                                "height": "100%",
+                                "overflow": "hidden",
+                            },
                         ),
                         html.Div(
                             [
-                                self._panel(
-                                    "Scenario Matrix",
+                                html.Div(
                                     [
-                                        dash_table.DataTable(
-                                            id="ai-scenario-matrix",
-                                            columns=[
-                                                {
-                                                    "name": "Scenario",
-                                                    "id": "scenario_id",
-                                                },
-                                                {"name": "Score", "id": "score"},
-                                                {
-                                                    "name": "Tier",
-                                                    "id": "governance_tier",
-                                                },
-                                                {
-                                                    "name": "Transform",
-                                                    "id": "transform",
-                                                },
-                                                {
-                                                    "name": "Evidence",
-                                                    "id": "evidence_refs",
-                                                },
-                                            ],
-                                            data=review_data.get("scenario_matrix", []),
-                                            style_table={"overflowX": "auto"},
-                                            style_cell=self._table_cell_style(),
-                                            style_header=self._table_header_style(),
-                                        )
+                                        html.Div(
+                                            "Evidence And Traceability",
+                                            style={
+                                                "fontSize": "18px",
+                                                "fontWeight": 700,
+                                            },
+                                        ),
+                                        html.Div(
+                                            "Open the sections below when you want the evidence cited in chat or the tool and scenario history behind the conversation.",
+                                            style={
+                                                "color": COLOR_MUTED,
+                                                "fontSize": "13px",
+                                                "marginTop": "8px",
+                                            },
+                                        ),
                                     ],
+                                    style={"marginBottom": "14px"},
                                 ),
-                                self._panel(
-                                    "Evidence Trace",
+                                html.Details(
                                     [
-                                        dash_table.DataTable(
-                                            id="ai-evidence-trace",
-                                            columns=[
-                                                {"name": "Kind", "id": "kind"},
-                                                {
-                                                    "name": "Evidence ID",
-                                                    "id": "evidence_id",
-                                                },
-                                                {"name": "Code", "id": "code"},
-                                                {"name": "Severity", "id": "severity"},
-                                                {"name": "Metric", "id": "metric"},
-                                                {"name": "Value", "id": "value"},
-                                            ],
-                                            data=review_data.get("evidence_trace", []),
-                                            style_table={"overflowX": "auto"},
-                                            style_cell=self._table_cell_style(),
-                                            style_header=self._table_header_style(),
-                                        )
+                                        html.Summary(
+                                            "Chat Evidence References",
+                                            style={
+                                                "cursor": "pointer",
+                                                "fontWeight": 600,
+                                            },
+                                        ),
+                                        html.Div(
+                                            [
+                                                html.Div(
+                                                    "Evidence IDs and plain-English explanations cited by the assistant during chat.",
+                                                    style={
+                                                        "color": COLOR_MUTED,
+                                                        "fontSize": "13px",
+                                                        "margin": "12px 0",
+                                                    },
+                                                ),
+                                                dash_table.DataTable(
+                                                    id="ai-chat-evidence-trace",
+                                                    columns=[
+                                                        {
+                                                            "name": "Evidence ID",
+                                                            "id": "evidence_id",
+                                                        },
+                                                        {"name": "Code", "id": "code"},
+                                                        {
+                                                            "name": "Metric",
+                                                            "id": "metric_id",
+                                                        },
+                                                        {
+                                                            "name": "Value",
+                                                            "id": "value",
+                                                        },
+                                                        {
+                                                            "name": "Meaning",
+                                                            "id": "plain_explanation",
+                                                        },
+                                                    ],
+                                                    data=self._chat_evidence_rows(
+                                                        self._initial_tool_events()
+                                                    ),
+                                                    style_table={"overflowX": "auto"},
+                                                    style_cell=self._table_cell_style(),
+                                                    style_header=self._table_header_style(),
+                                                ),
+                                            ]
+                                        ),
                                     ],
+                                    style={
+                                        "background": COLOR_SURFACE,
+                                        "border": f"1px solid {COLOR_BORDER}",
+                                        "borderRadius": RADIUS_LG,
+                                        "padding": "14px",
+                                        "boxShadow": SHADOW_SOFT,
+                                        "overflowX": "auto",
+                                    },
+                                ),
+                                html.Details(
+                                    [
+                                        html.Summary(
+                                            "Traceability",
+                                            style={
+                                                "cursor": "pointer",
+                                                "fontWeight": 600,
+                                            },
+                                        ),
+                                        html.Div(
+                                            [
+                                                html.Div(
+                                                    "Tool calls and scenario tests remain available for audit, but stay out of the way during normal chat use.",
+                                                    style={
+                                                        "color": COLOR_MUTED,
+                                                        "fontSize": "13px",
+                                                        "margin": "12px 0",
+                                                    },
+                                                ),
+                                                html.Div(
+                                                    [
+                                                        self._panel(
+                                                            "AI Analysis Trace",
+                                                            [
+                                                                dash_table.DataTable(
+                                                                    id="ai-analysis-trace",
+                                                                    columns=[
+                                                                        {
+                                                                            "name": "Tool",
+                                                                            "id": "tool",
+                                                                        },
+                                                                        {
+                                                                            "name": "Focus",
+                                                                            "id": "focus",
+                                                                        },
+                                                                        {
+                                                                            "name": "Summary",
+                                                                            "id": "summary",
+                                                                        },
+                                                                    ],
+                                                                    data=self._tool_event_rows(
+                                                                        self._initial_tool_events()
+                                                                    ),
+                                                                    style_table={
+                                                                        "overflowX": "auto"
+                                                                    },
+                                                                    style_cell=self._table_cell_style(),
+                                                                    style_header=self._table_header_style(),
+                                                                )
+                                                            ],
+                                                        ),
+                                                        self._panel(
+                                                            "Scenario Ledger",
+                                                            [
+                                                                dash_table.DataTable(
+                                                                    id="ai-scenario-ledger",
+                                                                    columns=[
+                                                                        {
+                                                                            "name": "Scenario",
+                                                                            "id": "scenario_id",
+                                                                        },
+                                                                        {
+                                                                            "name": "Score",
+                                                                            "id": "score",
+                                                                        },
+                                                                        {
+                                                                            "name": "Tier",
+                                                                            "id": "tier",
+                                                                        },
+                                                                        {
+                                                                            "name": "Transform",
+                                                                            "id": "transform",
+                                                                        },
+                                                                        {
+                                                                            "name": "Summary",
+                                                                            "id": "summary",
+                                                                        },
+                                                                    ],
+                                                                    data=self._scenario_ledger_rows(
+                                                                        self._initial_scenario_ledger()
+                                                                    ),
+                                                                    style_table={
+                                                                        "overflowX": "auto"
+                                                                    },
+                                                                    style_cell=self._table_cell_style(),
+                                                                    style_header=self._table_header_style(),
+                                                                )
+                                                            ],
+                                                        ),
+                                                    ],
+                                                    style={
+                                                        "display": "grid",
+                                                        "gap": "14px",
+                                                    },
+                                                ),
+                                            ]
+                                        ),
+                                    ],
+                                    style={
+                                        "background": COLOR_SURFACE,
+                                        "border": f"1px solid {COLOR_BORDER}",
+                                        "borderRadius": RADIUS_LG,
+                                        "padding": "14px",
+                                        "boxShadow": SHADOW_SOFT,
+                                        "overflowX": "auto",
+                                    },
                                 ),
                             ],
-                            style={"display": "grid", "gap": "14px"},
+                            id="ai-sidebar",
+                            style=self._sidebar_style(False),
                         ),
                     ],
                     style={
-                        "display": "grid",
-                        "gridTemplateColumns": "minmax(320px, 1.05fr) minmax(360px, 1fr)",
+                        "display": "flex",
                         "gap": "14px",
-                        "alignItems": "start",
+                        "alignItems": "stretch",
+                        "flex": "1 1 auto",
+                        "minHeight": "0",
+                        "overflow": "hidden",
                     },
                 ),
-                self._panel(
-                    "Override and Sign-off",
-                    [
-                        dcc.Dropdown(
-                            id="ai-decision",
-                            options=[
-                                {"label": "Approve", "value": "approve"},
-                                {
-                                    "label": "Approve with conditions",
-                                    "value": "approve_with_conditions",
-                                },
-                                {"label": "Escalate", "value": "escalate"},
-                                {"label": "Reject", "value": "reject"},
-                            ],
-                            value="approve_with_conditions",
-                            clearable=False,
-                            style={"maxWidth": "340px", "marginBottom": "10px"},
-                        ),
-                        dcc.Input(
-                            id="ai-approver",
-                            type="text",
-                            placeholder="Approver name",
-                            style={
-                                "width": "340px",
-                                "padding": "10px",
-                                "border": f"1px solid {COLOR_BORDER}",
-                                "borderRadius": RADIUS_MD,
-                                "marginBottom": "10px",
-                            },
-                        ),
-                        dcc.Textarea(
-                            id="ai-rationale",
-                            placeholder="Document rationale, conditions, and sign-off notes...",
-                            style={
-                                "width": "100%",
-                                "minHeight": "110px",
-                                "padding": "10px",
-                                "border": f"1px solid {COLOR_BORDER}",
-                                "borderRadius": RADIUS_MD,
-                            },
-                        ),
+            ],
+            style={
+                "padding": "14px 16px 12px 16px",
+                "background": COLOR_BG,
+                "height": "calc(100dvh - 6px)",
+                "fontFamily": FONT_FAMILY,
+                "color": COLOR_TEXT,
+                "display": "flex",
+                "flexDirection": "column",
+                "overflow": "hidden",
+                "boxSizing": "border-box",
+            },
+        )
+
+    def _initial_chat_history(self) -> list[dict[str, Any]]:
+        if self._chat_service is not None and self._chat_id:
+            session = self._chat_service.get_chat(self._chat_id)
+            if session is not None:
+                return [dict(item) for item in session.messages]
+        return []
+
+    def _initial_tool_events(self) -> list[dict[str, Any]]:
+        if self._chat_service is not None and self._chat_id:
+            session = self._chat_service.get_chat(self._chat_id)
+            if session is not None:
+                return [dict(item) for item in session.tool_events]
+        return []
+
+    def _initial_scenario_ledger(self) -> list[dict[str, Any]]:
+        if self._chat_service is not None and self._chat_id:
+            session = self._chat_service.get_chat(self._chat_id)
+            if session is not None:
+                return [dict(item) for item in session.scenario_ledger]
+        return []
+
+    def _render_chat_messages(self, history: list[dict[str, Any]]) -> list:
+        items = [item for item in history if isinstance(item, dict)]
+        rendered: list = [self._intro_chat_message()]
+        if not items:
+            return rendered
+
+        for item in items:
+            role = str(item.get("role", "assistant")).strip().lower()
+            content = str(item.get("content", "")).strip()
+            is_streaming = bool(item.get("streaming", False))
+            if not content and not is_streaming:
+                continue
+            is_user = role == "user"
+            bubble_body: list[Any]
+            if is_streaming and not content and not is_user:
+                bubble_body = [
+                    html.Div(
+                        [
+                            html.Span(className="ai-thinking-dot"),
+                            html.Span(className="ai-thinking-dot"),
+                            html.Span(className="ai-thinking-dot"),
+                        ],
+                        className="ai-thinking-indicator",
+                    )
+                ]
+            else:
+                bubble_body = [
+                    dcc.Markdown(
+                        content,
+                        style={
+                            "lineHeight": "1.65",
+                            "margin": "0",
+                            "fontSize": "16px",
+                        },
+                    )
+                ]
+                if is_streaming and not is_user:
+                    bubble_body.append(
                         html.Div(
                             [
-                                html.Button(
-                                    "Save Decision",
-                                    id="ai-save-decision",
-                                    n_clicks=0,
-                                    style=self._primary_button_style(),
+                                html.Span(className="ai-thinking-dot"),
+                                html.Span(className="ai-thinking-dot"),
+                                html.Span(className="ai-thinking-dot"),
+                            ],
+                            className="ai-thinking-indicator",
+                            style={"marginTop": "10px"},
+                        )
+                    )
+            rendered.append(
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                html.Img(
+                                    src=TURTUARY_AVATAR_SRC,
+                                    alt="Turtuary avatar",
+                                    style={
+                                        "width": "52px",
+                                        "height": "52px",
+                                        "borderRadius": "26px",
+                                        "objectFit": "cover",
+                                        "flex": "0 0 auto",
+                                        "border": f"1px solid {COLOR_BORDER}",
+                                        "background": "#f1f5f9",
+                                        "display": "none" if is_user else "block",
+                                    },
                                 ),
-                                html.Button(
-                                    "Export Decision Packet",
-                                    id="ai-export-decision",
-                                    n_clicks=0,
-                                    style=self._secondary_button_style(),
-                                ),
-                                html.Span(
-                                    "",
-                                    id="ai-decision-status",
-                                    style={"color": COLOR_MUTED, "fontSize": "13px"},
+                                html.Div(
+                                    [
+                                        html.Div(
+                                            "You" if is_user else "Turtuary",
+                                            style={
+                                                "fontSize": "12px",
+                                                "fontWeight": 700,
+                                                "color": COLOR_MUTED,
+                                                "marginBottom": "6px",
+                                            },
+                                        ),
+                                        *bubble_body,
+                                    ],
+                                    style={"minWidth": "0", "flex": "1 1 auto"},
                                 ),
                             ],
                             style={
                                 "display": "flex",
-                                "gap": "10px",
-                                "alignItems": "center",
-                                "flexWrap": "wrap",
-                                "marginTop": "12px",
+                                "gap": "12px",
+                                "alignItems": "flex-start",
                             },
                         ),
                     ],
-                    extra_style={"marginTop": "18px"},
+                    style={
+                        "alignSelf": "flex-end" if is_user else "flex-start",
+                        "maxWidth": "78%",
+                        "padding": "14px 18px",
+                        "borderRadius": "22px",
+                        "background": "#eef4fb" if is_user else "#ffffff",
+                        "color": COLOR_TEXT,
+                        "border": f"1px solid {COLOR_BORDER}",
+                        "boxShadow": SHADOW_SOFT,
+                    },
+                )
+            )
+        return rendered
+
+    @staticmethod
+    def _intro_chat_message():
+        return html.Div(
+            [
+                html.Div(
+                    [
+                        html.Img(
+                            src=TURTUARY_AVATAR_SRC,
+                            alt="Turtuary avatar",
+                            style={
+                                "width": "52px",
+                                "height": "52px",
+                                "borderRadius": "26px",
+                                "objectFit": "cover",
+                                "flex": "0 0 auto",
+                                "border": f"1px solid {COLOR_BORDER}",
+                                "background": "#f1f5f9",
+                            },
+                        ),
+                        html.Div(
+                            [
+                                html.Div(
+                                    "Turtuary",
+                                    style={
+                                        "fontSize": "12px",
+                                        "fontWeight": 700,
+                                        "color": COLOR_MUTED,
+                                        "marginBottom": "6px",
+                                    },
+                                ),
+                                html.Div(
+                                    "Hi, I'm Turtuary. Ask me a reserving question and I'll inspect diagnostics, compare scenarios, and explain the evidence step by step.",
+                                    style={"lineHeight": "1.6"},
+                                ),
+                            ],
+                            style={"minWidth": "0"},
+                        ),
+                    ],
+                    style={
+                        "display": "flex",
+                        "gap": "12px",
+                        "alignItems": "flex-start",
+                    },
                 ),
             ],
             style={
-                "padding": "20px",
-                "background": COLOR_BG,
-                "minHeight": "100vh",
-                "fontFamily": FONT_FAMILY,
-                "color": COLOR_TEXT,
+                "alignSelf": "flex-start",
+                "maxWidth": "78%",
+                "padding": "14px 18px",
+                "background": "#ffffff",
+                "border": f"1px solid {COLOR_BORDER}",
+                "borderRadius": "22px",
+                "boxShadow": SHADOW_SOFT,
             },
         )
 
     @staticmethod
-    def _card(title: str, content: str, element_id: str):
-        return html.Div(
-            [
-                html.Div(
-                    title,
-                    style={
-                        "fontSize": "12px",
-                        "color": COLOR_MUTED,
-                        "marginBottom": "6px",
-                    },
-                ),
-                html.Div(
-                    content,
-                    id=element_id,
-                    style={"fontSize": "14px", "fontWeight": 600, "lineHeight": "1.5"},
-                ),
-            ],
-            style={
-                "background": COLOR_SURFACE,
-                "border": f"1px solid {COLOR_BORDER}",
-                "borderRadius": RADIUS_LG,
-                "padding": "14px",
-                "boxShadow": SHADOW_SOFT,
-            },
-        )
+    def _tool_event_rows(tool_events: list[dict[str, Any]]) -> list[dict[str, str]]:
+        rows: list[dict[str, str]] = []
+        for item in reversed(tool_events[-12:]):
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).replace("tool_", "")
+            arguments = (
+                item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
+            )
+            result_summary = (
+                item.get("result_summary")
+                if isinstance(item.get("result_summary"), dict)
+                else {}
+            )
+            focus = (
+                arguments.get("scenario_id")
+                or arguments.get("uwy")
+                or arguments.get("segment")
+                or arguments.get("session_id")
+                or ""
+            )
+            summary_bits: list[str] = []
+            for key in (
+                "finding_count",
+                "recommendation_count",
+                "scenario_count",
+                "result_row_count",
+            ):
+                value = result_summary.get(key)
+                if value is not None:
+                    summary_bits.append(f"{key}={value}")
+            metrics = result_summary.get("iteration_metrics")
+            if isinstance(metrics, dict) and metrics.get("best_scenario_id"):
+                summary_bits.append(f"best={metrics.get('best_scenario_id')}")
+            gov = result_summary.get("governance")
+            if isinstance(gov, dict) and gov.get("tier"):
+                summary_bits.append(f"tier={gov.get('tier')}")
+            rows.append(
+                {
+                    "tool": name,
+                    "focus": str(focus),
+                    "summary": "; ".join(summary_bits) or "detail lookup",
+                }
+            )
+        if not rows:
+            return [
+                {
+                    "tool": "No chat analysis yet",
+                    "focus": "",
+                    "summary": "Ask the assistant a question to start diagnostics, scenario testing, and evidence lookups.",
+                }
+            ]
+        return rows
+
+    @staticmethod
+    def _chat_evidence_rows(tool_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in reversed(tool_events):
+            if not isinstance(item, dict):
+                continue
+            result_summary = (
+                item.get("result_summary")
+                if isinstance(item.get("result_summary"), dict)
+                else {}
+            )
+            for key in ("top_findings", "top_recommendations"):
+                entries = result_summary.get(key)
+                if not isinstance(entries, list):
+                    continue
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    evidence_id = str(entry.get("evidence_id", "")).strip()
+                    row_key = (
+                        evidence_id or f"{entry.get('code')}|{entry.get('metric_id')}"
+                    )
+                    if row_key in seen:
+                        continue
+                    seen.add(row_key)
+                    rows.append(
+                        {
+                            "evidence_id": evidence_id,
+                            "code": entry.get("code"),
+                            "metric_id": entry.get("metric_id"),
+                            "value": entry.get("value"),
+                            "plain_explanation": entry.get("plain_explanation")
+                            or entry.get("message"),
+                        }
+                    )
+            matches = result_summary.get("matches")
+            if not isinstance(matches, list):
+                continue
+            for match in matches:
+                if not isinstance(match, dict):
+                    continue
+                evidence = (
+                    match.get("evidence")
+                    if isinstance(match.get("evidence"), dict)
+                    else {}
+                )
+                evidence_id = str(evidence.get("evidence_id", "")).strip()
+                row_key = (
+                    evidence_id or f"{match.get('code')}|{evidence.get('metric_id')}"
+                )
+                if row_key in seen:
+                    continue
+                seen.add(row_key)
+                rows.append(
+                    {
+                        "evidence_id": evidence_id,
+                        "code": match.get("code"),
+                        "metric_id": evidence.get("metric_id"),
+                        "value": evidence.get("value"),
+                        "plain_explanation": match.get("plain_explanation")
+                        or match.get("message"),
+                    }
+                )
+        if not rows:
+            return [
+                {
+                    "evidence_id": "No chat evidence yet",
+                    "code": "",
+                    "metric_id": "",
+                    "value": "",
+                    "plain_explanation": "When the assistant references diagnostics or scenario evidence in chat, the IDs and plain-English explanations will appear here.",
+                }
+            ]
+        return rows[:20]
+
+    @staticmethod
+    def _scenario_ledger_rows(
+        scenario_ledger: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        rows = [dict(item) for item in scenario_ledger if isinstance(item, dict)]
+        if rows:
+            return rows
+        return [
+            {
+                "scenario_id": "No chat scenarios tested yet",
+                "score": "",
+                "tier": "",
+                "transform": "",
+                "summary": "Scenario searches and bespoke scenario tests launched from the chat will accumulate here.",
+            }
+        ]
 
     @staticmethod
     def _panel(title: str, children: list, extra_style: dict | None = None):
@@ -440,6 +983,7 @@ class AIDashboard:
             "borderRadius": RADIUS_LG,
             "padding": "14px",
             "boxShadow": SHADOW_SOFT,
+            "overflowX": "auto",
         }
         if isinstance(extra_style, dict):
             style.update(extra_style)
@@ -448,33 +992,26 @@ class AIDashboard:
         )
 
     @staticmethod
-    def _governance_card(review_data: dict) -> str:
-        return AIReviewService.summarize_governance(
-            review_data.get("governance", {}),
-            review_data.get("uncertainty", {}),
-        )
-
-    @staticmethod
-    def _uncertainty_card(review_data: dict) -> str:
-        uncertainty = review_data.get("uncertainty", {})
-        baseline = (
-            uncertainty.get("baseline", {}) if isinstance(uncertainty, dict) else {}
-        )
-        bootstrap = (
-            uncertainty.get("bootstrap", {}) if isinstance(uncertainty, dict) else {}
-        )
-        return (
-            f"Process CV={baseline.get('total_process_cv')}; "
-            f"P50={bootstrap.get('p50')}; P90={bootstrap.get('p90')}"
-        )
-
-    @staticmethod
-    def _best_scenario_card(review_data: dict) -> str:
-        scenario_matrix = review_data.get("scenario_matrix", [])
-        if not isinstance(scenario_matrix, list) or not scenario_matrix:
-            return "No scenarios available."
-        top = scenario_matrix[0]
-        return f"{top.get('scenario_id')} | score={top.get('score')} | tier={top.get('governance_tier')}"
+    def _sidebar_style(is_open: bool) -> dict[str, str]:
+        return {
+            "width": "720px" if is_open else "0px",
+            "minWidth": "720px" if is_open else "0px",
+            "overflowX": "hidden",
+            "overflowY": "auto",
+            "transition": "width 0.2s ease, min-width 0.2s ease",
+            "flex": "0 0 auto",
+            "display": "grid" if is_open else "none",
+            "gap": "14px",
+            "gridAutoRows": "min-content",
+            "alignContent": "start",
+            "background": COLOR_SURFACE,
+            "border": f"1px solid {COLOR_BORDER}",
+            "borderRadius": RADIUS_LG,
+            "padding": "14px",
+            "boxShadow": SHADOW_SOFT,
+            "height": "100%",
+            "minHeight": "0",
+        }
 
     @staticmethod
     def _primary_button_style() -> dict[str, str]:
@@ -521,7 +1058,7 @@ class AIDashboard:
             "textAlign": "left",
         }
 
-    def show(self, debug: bool = False, port: int = 8050) -> None:
+    def show(self, debug: bool = False, port: int = 8052) -> None:
         self.app.layout = self._create_layout
         logging.info("Starting AI dashboard on http://127.0.0.1:%s", port)
         self.app.run(debug=debug, port=port, use_reloader=False)
@@ -531,9 +1068,16 @@ def launch_ai_dashboard(
     reserving: Reserving,
     *,
     config: ConfigManager | None = None,
+    chat_service: AIChatService | None = None,
+    chat_id: str | None = None,
     debug: bool = False,
-    port: int = 8050,
+    port: int = 8052,
 ) -> AIDashboard:
-    dashboard = AIDashboard(reserving, config=config)
+    dashboard = AIDashboard(
+        reserving,
+        config=config,
+        chat_service=chat_service,
+        chat_id=chat_id,
+    )
     dashboard.show(debug=debug, port=port)
     return dashboard

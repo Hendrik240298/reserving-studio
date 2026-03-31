@@ -1,13 +1,23 @@
 from __future__ import annotations
 
-from datetime import date, datetime
-import json
-import logging
-import os
-import time
 from typing import Any
-from urllib import request
-from urllib.error import HTTPError
+
+from source.api.schemas import (
+    DataCompareRequest,
+    DataViewRequest,
+    DerivedDropScenarioRequest,
+    DiagnosticsIterateRequest,
+    DiagnosticsRequest,
+    HighestA2ADropRequest,
+    LateEmergenceRequest,
+    LinkRatioRankRequest,
+    LdfConsistencyRequest,
+    MovementDiagnosticsRequest,
+    RecalculateRequest,
+    ReserveChangeRequest,
+    TailEvaluationRequest,
+    WorkflowFromDataframesRequest,
+)
 
 from ai.tool_payloads import (
     build_tool_specs,
@@ -33,14 +43,12 @@ from ai.tool_payloads import (
 )
 
 
-class ReservingApiTools:
-    def __init__(self, *, base_url: str) -> None:
-        self._base_url = base_url.rstrip("/")
-        self._observability_enabled = os.environ.get(
-            "AI_OBSERVABILITY", "1"
-        ).strip().lower() not in {"0", "false", "off"}
-        self._logger = logging.getLogger(__name__)
-        self._tool_specs = build_tool_specs()
+class BackendReservingTools:
+    def __init__(
+        self, *, backend: Any, tool_specs: list[dict[str, Any]] | None = None
+    ) -> None:
+        self._backend = backend
+        self._tool_specs = tool_specs or build_tool_specs()
         self._raw_cache: dict[str, dict[str, Any]] = {
             "session": {},
             "diagnostics": {},
@@ -62,10 +70,31 @@ class ReservingApiTools:
     def tool_specs(self) -> list[dict[str, Any]]:
         return list(self._tool_specs)
 
+    def create_workflow(
+        self,
+        *,
+        segment: str,
+        claims_rows: list[dict[str, Any]],
+        premium_rows: list[dict[str, Any]],
+        granularity: str | None = None,
+    ) -> dict[str, Any]:
+        response = self._backend.create_workflow_from_dataframes(
+            WorkflowFromDataframesRequest(
+                segment=segment,
+                claims_rows=claims_rows,
+                premium_rows=premium_rows,
+                granularity=granularity,
+            )
+        )
+        return response.model_dump(mode="json")
+
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if name == "tool_get_session_summary":
             segment = str(arguments["segment"])
-            payload = self.request_json("GET", f"/v1/sessions/{segment}")
+            response = self._backend.get_session(segment)
+            if response is None:
+                raise LookupError(f"Segment session not found: {segment}")
+            payload = response.model_dump(mode="json")
             session_id = str(payload.get("session_id", ""))
             self._raw_cache["session"][segment] = payload
             if session_id:
@@ -75,11 +104,10 @@ class ReservingApiTools:
             sanitized_arguments, input_adjustments = (
                 _sanitize_recalculate_like_arguments(arguments)
             )
-            payload = self.request_json(
-                "POST",
-                "/v1/tail/evaluate",
-                sanitized_arguments,
+            response = self._backend.evaluate_tail_fit(
+                TailEvaluationRequest(**sanitized_arguments)
             )
+            payload = response.model_dump(mode="json")
             if input_adjustments:
                 payload["input_adjustments"] = input_adjustments
             session_id = str(payload.get("session_id", ""))
@@ -87,113 +115,94 @@ class ReservingApiTools:
                 self._raw_cache["tail_evaluation"][session_id] = payload
             return summarize_tail_evaluation_payload(payload)
         if name == "tool_run_diagnostics_summary":
-            payload = self.request_json(
-                "POST",
-                "/v1/diagnostics/run",
-                {
-                    "session_id": arguments["session_id"],
-                    "diagnostic_profile": arguments.get("diagnostic_profile"),
-                    "include_recommendations": bool(
-                        arguments.get("include_recommendations", True)
-                    ),
-                },
-            )
+            response = self._backend.run_diagnostics(DiagnosticsRequest(**arguments))
+            payload = response.model_dump(mode="json")
             session_id = str(payload.get("session_id", ""))
             if session_id:
                 self._raw_cache["diagnostics"][session_id] = payload
             return summarize_diagnostics_payload(payload)
         if name == "tool_iterate_diagnostics_summary":
-            payload = self.request_json(
-                "POST",
-                "/v1/diagnostics/iterate",
-                {
-                    "session_id": arguments["session_id"],
-                    "max_scenarios": int(arguments.get("max_scenarios", 24)),
-                    "include_baseline": bool(arguments.get("include_baseline", True)),
-                },
+            response = self._backend.iterate_diagnostics(
+                DiagnosticsIterateRequest(**arguments)
             )
+            payload = response.model_dump(mode="json")
             session_id = str(payload.get("session_id", ""))
             if session_id:
                 self._raw_cache["iteration"][session_id] = payload
             return summarize_iteration_payload(payload)
         if name == "tool_get_results_summary":
             session_id = str(arguments["session_id"])
-            payload = self.request_json("GET", f"/v1/results/{session_id}")
+            response = self._backend.get_results(session_id)
+            if response is None:
+                raise LookupError(f"Session results not found: {session_id}")
+            payload = response.model_dump(mode="json")
             self._raw_cache["results"][session_id] = payload
             return summarize_results_payload(payload)
         if name in {"tool_get_data_view_summary", "tool_get_data_view"}:
             session_id = str(arguments["session_id"])
-            payload = self.request_json(
-                "POST",
-                "/v1/data/view",
-                {
-                    "session_id": session_id,
-                    "query": {
+            response = self._backend.get_data_view(
+                DataViewRequest(
+                    session_id=session_id,
+                    query={
                         "metric": arguments.get("metric", "incurred"),
                         "view": arguments.get("view", "cumulative"),
                         "denominator": arguments.get("denominator"),
                         "denominator_view": arguments.get("denominator_view"),
                     },
-                    "include_summary": True,
-                },
+                    include_summary=True,
+                )
             )
+            payload = response.model_dump(mode="json")
             self._raw_cache["data_view"][session_id] = payload
             if name == "tool_get_data_view":
                 return payload
             return summarize_data_view_payload(payload)
         if name == "tool_compare_data_views":
             session_id = str(arguments["session_id"])
-            payload = self.request_json(
-                "POST",
-                "/v1/data/compare",
-                {
-                    "session_id": session_id,
-                    "left": {
+            response = self._backend.compare_data_views(
+                DataCompareRequest(
+                    session_id=session_id,
+                    left={
                         "metric": arguments.get("left_metric", "incurred"),
                         "view": arguments.get("left_view", "cumulative"),
                         "denominator": arguments.get("left_denominator"),
                         "denominator_view": arguments.get("left_denominator_view"),
                     },
-                    "right": {
+                    right={
                         "metric": arguments.get("right_metric", "incurred"),
                         "view": arguments.get("right_view", "cumulative"),
                         "denominator": arguments.get("right_denominator"),
                         "denominator_view": arguments.get("right_denominator_view"),
                     },
-                    "comparison_mode": arguments.get("comparison_mode", "difference"),
-                },
+                    comparison_mode=str(arguments.get("comparison_mode", "difference")),
+                )
             )
+            payload = response.model_dump(mode="json")
             self._raw_cache["data_view"][session_id] = payload
             return summarize_data_compare_payload(payload)
         if name == "tool_run_movement_diagnostics":
-            payload = self.request_json(
-                "POST",
-                "/v1/diagnostics/movement",
-                {"session_id": arguments["session_id"]},
+            response = self._backend.run_movement_diagnostics(
+                MovementDiagnosticsRequest(**arguments)
             )
+            payload = response.model_dump(mode="json")
             session_id = str(payload.get("session_id", ""))
             if session_id:
                 self._raw_cache["movement"][session_id] = payload
             return summarize_movement_diagnostics_payload(payload)
         if name == "tool_run_ldf_consistency_diagnostics":
-            payload = self.request_json(
-                "POST",
-                "/v1/diagnostics/ldf-consistency",
-                {"session_id": arguments["session_id"]},
+            response = self._backend.run_ldf_consistency(
+                LdfConsistencyRequest(**arguments)
             )
+            payload = response.model_dump(mode="json")
             session_id = str(payload.get("session_id", ""))
             if session_id:
                 self._raw_cache["ldf_consistency"][session_id] = payload
             return summarize_ldf_consistency_payload(payload)
         if name == "tool_project_late_emergence_benchmark":
-            payload = self.request_json(
-                "POST",
-                "/v1/diagnostics/late-emergence",
-                {
-                    "session_id": arguments["session_id"],
-                    "uwy": arguments.get("uwy"),
-                },
+            response = self._backend.project_late_emergence(
+                LateEmergenceRequest(**arguments)
             )
+            payload = response.model_dump(mode="json")
             session_id = str(payload.get("session_id", ""))
             if session_id:
                 self._raw_cache["late_emergence"][session_id] = payload
@@ -202,11 +211,10 @@ class ReservingApiTools:
             sanitized_arguments, input_adjustments = (
                 _sanitize_recalculate_like_arguments(arguments)
             )
-            payload = self.request_json(
-                "POST",
-                "/v1/reserving/explain-change",
-                sanitized_arguments,
+            response = self._backend.explain_reserve_change(
+                ReserveChangeRequest(**sanitized_arguments)
             )
+            payload = response.model_dump(mode="json")
             if input_adjustments:
                 payload["input_adjustments"] = input_adjustments
             session_id = str(payload.get("session_id", ""))
@@ -214,39 +222,26 @@ class ReservingApiTools:
                 self._raw_cache["reserve_change"][session_id] = payload
             return summarize_reserve_change_payload(payload)
         if name == "tool_run_highest_a2a_drop_scenario":
-            payload = self.request_json(
-                "POST",
-                "/v1/reserving/highest-a2a-drop",
-                arguments,
+            response = self._backend.run_highest_a2a_drop_scenario(
+                HighestA2ADropRequest(**arguments)
             )
+            payload = response.model_dump(mode="json")
             session_id = str(payload.get("session_id", ""))
             if session_id:
                 self._raw_cache["highest_a2a_drop"][session_id] = payload
             return summarize_highest_a2a_drop_payload(payload)
         if name == "tool_rank_link_ratios":
-            payload = self.request_json(
-                "POST",
-                "/v1/link-ratios/rank",
-                {
-                    "session_id": arguments["session_id"],
-                    "selection_mode": arguments.get("selection_mode", "max"),
-                    "scope": arguments.get("scope", "per_development_period"),
-                    "limit": arguments.get("limit", 5),
-                    "threshold_operator": arguments.get("threshold_operator"),
-                    "threshold_value": arguments.get("threshold_value"),
-                },
-            )
+            response = self._backend.rank_link_ratios(LinkRatioRankRequest(**arguments))
+            payload = response.model_dump(mode="json")
             session_id = str(payload.get("session_id", ""))
             if session_id:
                 self._raw_cache["link_ratio_rank"][session_id] = payload
             return summarize_link_ratio_rank_payload(payload)
         if name == "tool_run_derived_drop_scenario":
-            payload = self.request_json(
-                "POST",
-                "/v1/reserving/derived-drop-scenario",
-                {
-                    "session_id": arguments["session_id"],
-                    "rule": {
+            response = self._backend.run_derived_drop_scenario(
+                DerivedDropScenarioRequest(
+                    session_id=str(arguments["session_id"]),
+                    rule={
                         "source": arguments.get("source", "link_ratios"),
                         "selection_mode": arguments.get("selection_mode", "max"),
                         "scope": arguments.get("scope", "per_development_period"),
@@ -257,9 +252,10 @@ class ReservingApiTools:
                         "threshold_operator": arguments.get("threshold_operator"),
                         "threshold_value": arguments.get("threshold_value"),
                     },
-                    "rules": arguments.get("rules") or [],
-                },
+                    rules=arguments.get("rules") or [],
+                )
             )
+            payload = response.model_dump(mode="json")
             session_id = str(payload.get("session_id", ""))
             if session_id:
                 self._raw_cache["derived_drop"][session_id] = payload
@@ -295,11 +291,10 @@ class ReservingApiTools:
             sanitized_arguments, input_adjustments = (
                 _sanitize_recalculate_like_arguments(arguments)
             )
-            payload = self.request_json(
-                "POST",
-                "/v1/reserving/recalculate",
-                sanitized_arguments,
+            response = self._backend.recalculate(
+                RecalculateRequest(**sanitized_arguments)
             )
+            payload = response.model_dump(mode="json")
             if input_adjustments:
                 payload["input_adjustments"] = input_adjustments
             session_id = str(payload.get("session_id", ""))
@@ -307,66 +302,6 @@ class ReservingApiTools:
                 self._raw_cache["recalculate"][session_id] = payload
             return summarize_recalculate_payload(payload)
         raise ValueError(f"Unsupported tool: {name}")
-
-    def create_workflow(
-        self,
-        *,
-        segment: str,
-        claims_rows: list[dict[str, Any]],
-        premium_rows: list[dict[str, Any]],
-        granularity: str | None = None,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "segment": segment,
-            "claims_rows": claims_rows,
-            "premium_rows": premium_rows,
-        }
-        if granularity:
-            payload["granularity"] = granularity
-        return self.request_json("POST", "/v1/workflows/from-dataframes", payload)
-
-    def request_json(
-        self,
-        method: str,
-        path: str,
-        body: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        started = time.perf_counter()
-        encoded_body: bytes | None = None
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if body is not None:
-            encoded_body = json.dumps(body, default=_json_default).encode("utf-8")
-        req = request.Request(
-            url=f"{self._base_url}{path}",
-            method=method,
-            data=encoded_body,
-            headers=headers,
-        )
-        try:
-            with request.urlopen(req, timeout=120) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-                if self._observability_enabled:
-                    self._logger.info(
-                        "[OBS] api.request method=%s path=%s status=%s duration_ms=%s",
-                        method,
-                        path,
-                        response.status,
-                        int((time.perf_counter() - started) * 1000),
-                    )
-                return payload
-        except HTTPError as error:
-            response_body = error.read().decode("utf-8", errors="replace")
-            if self._observability_enabled:
-                self._logger.error(
-                    "[OBS] api.request_failed method=%s path=%s status=%s duration_ms=%s",
-                    method,
-                    path,
-                    error.code,
-                    int((time.perf_counter() - started) * 1000),
-                )
-            raise RuntimeError(
-                f"API request failed ({error.code}) {path}: {response_body}"
-            ) from error
 
 
 def _optional_str(value: object) -> str | None:
@@ -465,21 +400,3 @@ def _normalize_selected_method(value: object) -> str | None:
     if normalized in {"chainladder", "bornhuetter_ferguson"}:
         return normalized
     return None
-
-
-def _json_default(value: Any) -> Any:
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    isoformat = getattr(value, "isoformat", None)
-    if callable(isoformat):
-        try:
-            return isoformat()
-        except Exception:
-            pass
-    item = getattr(value, "item", None)
-    if callable(item):
-        try:
-            return item()
-        except Exception:
-            pass
-    return str(value)

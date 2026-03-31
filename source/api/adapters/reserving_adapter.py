@@ -13,10 +13,17 @@ import time
 from typing import Any, Literal, cast
 import uuid
 
+import numpy as np
 import pandas as pd
 
 from source.app import build_workflow_from_dataframes, load_config
 from source.api.schemas import (
+    DataCompareRequest,
+    DataCompareResponse,
+    DataViewRequest,
+    DataViewResponse,
+    DerivedDropScenarioRequest,
+    DerivedDropScenarioResponse,
     DiagnosticFinding,
     DiagnosticRecommendation,
     DiagnosticEvidence,
@@ -24,9 +31,23 @@ from source.api.schemas import (
     DiagnosticsIterateResponse,
     DiagnosticsRequest,
     DiagnosticsResponse,
+    HighestA2ADropRequest,
+    HighestA2ADropResponse,
+    LateEmergenceRequest,
+    LateEmergenceResponse,
+    LinkRatioRankRequest,
+    LinkRatioRankResponse,
+    LdfConsistencyRequest,
+    LdfConsistencyResponse,
+    MovementDiagnosticsRequest,
+    MovementDiagnosticsResponse,
     ParamsStore,
     RecalculateRequest,
     RecalculateResponse,
+    ReserveChangeRequest,
+    ReserveChangeResponse,
+    TailEvaluationRequest,
+    TailEvaluationResponse,
     ResultsResponse,
     RunMetadata,
     ScenarioEvaluation,
@@ -39,7 +60,13 @@ from source.api.schemas import (
 )
 from source.config_manager import ConfigManager
 from source.reserving import Reserving
+from source.services.data_view_service import (
+    DataViewQuery as ServiceDataViewQuery,
+    DataViewService,
+    serialize_dataframe,
+)
 from source.services.diagnostics_service import DiagnosticsService
+from source.services.movement_diagnostics_service import MovementDiagnosticsService
 from source.services.uncertainty_service import UncertaintyService
 
 
@@ -211,9 +238,10 @@ class InMemoryReservingBackend:
             months_per_dev = self._infer_months_per_dev(context.reserving)
             extrap_periods = tail_projection_months // months_per_dev
             projection_period = extrap_periods * months_per_dev
+            normalized_average = Reserving._normalize_average(payload.average)
 
             context.reserving.set_development(
-                average=payload.average,
+                average=normalized_average,
                 drop=drops,
                 drop_valuation=drop_valuation,
             )
@@ -241,7 +269,7 @@ class InMemoryReservingBackend:
                 tail_attachment_age=payload.tail.attachment_age,
                 tail_projection_months=tail_projection_months,
                 tail_fit_period_selection=payload.tail.fit_period,
-                average=payload.average,
+                average=normalized_average,
                 tail_curve=payload.tail.curve,
                 bf_apriori_by_uwy=dict(payload.bf_apriori),
                 selected_ultimate_by_uwy=dict(payload.selected_ultimate_by_uwy),
@@ -492,6 +520,417 @@ class InMemoryReservingBackend:
                 session_id=context.session_id, results=context.last_results_payload
             )
 
+    def get_data_view(self, payload: DataViewRequest) -> DataViewResponse:
+        with self._lock:
+            context = self._get_context_by_session_id(payload.session_id)
+            if context is None:
+                raise LookupError(f"Session not found: {payload.session_id}")
+            service = DataViewService(context.reserving)
+            query = self._service_query(payload.query)
+            frame = service.get_data_view(query)
+            return DataViewResponse(
+                session_id=context.session_id,
+                query=payload.query.model_dump(mode="json"),
+                data=serialize_dataframe(frame),
+                summary=service.summarize_view(query)
+                if payload.include_summary
+                else {},
+            )
+
+    def compare_data_views(self, payload: DataCompareRequest) -> DataCompareResponse:
+        with self._lock:
+            context = self._get_context_by_session_id(payload.session_id)
+            if context is None:
+                raise LookupError(f"Session not found: {payload.session_id}")
+            service = DataViewService(context.reserving)
+            frame, summary = service.compare_views(
+                self._service_query(payload.left),
+                self._service_query(payload.right),
+                comparison_mode=payload.comparison_mode,
+            )
+            return DataCompareResponse(
+                session_id=context.session_id,
+                comparison_mode=summary.get("comparison_mode", payload.comparison_mode),
+                data=serialize_dataframe(frame),
+                summary=summary,
+            )
+
+    def run_movement_diagnostics(
+        self,
+        payload: MovementDiagnosticsRequest,
+    ) -> MovementDiagnosticsResponse:
+        with self._lock:
+            context = self._get_context_by_session_id(payload.session_id)
+            if context is None:
+                raise LookupError(f"Session not found: {payload.session_id}")
+            response = MovementDiagnosticsService(context.reserving).run()
+            return MovementDiagnosticsResponse(
+                session_id=context.session_id,
+                findings=response.get("findings", []),
+                summary=response.get("summary", {}),
+            )
+
+    def run_ldf_consistency(
+        self,
+        payload: LdfConsistencyRequest,
+    ) -> LdfConsistencyResponse:
+        with self._lock:
+            context = self._get_context_by_session_id(payload.session_id)
+            if context is None:
+                raise LookupError(f"Session not found: {payload.session_id}")
+            response = MovementDiagnosticsService(
+                context.reserving
+            ).run_ldf_consistency()
+            return LdfConsistencyResponse(
+                session_id=context.session_id,
+                findings=response.get("findings", []),
+                summary=response.get("summary", {}),
+            )
+
+    def project_late_emergence(
+        self,
+        payload: LateEmergenceRequest,
+    ) -> LateEmergenceResponse:
+        with self._lock:
+            context = self._get_context_by_session_id(payload.session_id)
+            if context is None:
+                raise LookupError(f"Session not found: {payload.session_id}")
+            response = MovementDiagnosticsService(
+                context.reserving
+            ).run_late_emergence_benchmark(uwy=payload.uwy)
+            return LateEmergenceResponse(
+                session_id=context.session_id,
+                rows=response.get("rows", []),
+                summary=response.get("summary", {}),
+            )
+
+    def explain_reserve_change(
+        self,
+        payload: ReserveChangeRequest,
+    ) -> ReserveChangeResponse:
+        with self._lock:
+            context = self._get_context_by_session_id(payload.session_id)
+            if context is None:
+                raise LookupError(f"Session not found: {payload.session_id}")
+
+            baseline_params = self._params_from_store(context)
+            candidate_params = self._clone_params(payload.model_dump(mode="json"))
+            candidate_params.pop("session_id", None)
+
+            baseline_eval = self._scenario_totals_for_params(
+                context=context, params=baseline_params
+            )
+            step_rows: list[dict[str, Any]] = []
+
+            current = self._clone_params(baseline_params)
+            development_keys = ["average", "drop", "drop_valuation"]
+            for key in development_keys:
+                current[key] = candidate_params.get(key, current.get(key))
+            dev_eval = self._scenario_totals_for_params(context=context, params=current)
+            step_rows.append(
+                self._build_attribution_row(
+                    component="development",
+                    previous=baseline_eval,
+                    current=dev_eval,
+                )
+            )
+
+            current["tail"] = dict(
+                candidate_params.get("tail", current.get("tail", {}))
+            )
+            tail_eval = self._scenario_totals_for_params(
+                context=context, params=current
+            )
+            step_rows.append(
+                self._build_attribution_row(
+                    component="tail",
+                    previous=dev_eval,
+                    current=tail_eval,
+                )
+            )
+
+            current["bf_apriori"] = dict(candidate_params.get("bf_apriori", {}))
+            bf_eval = self._scenario_totals_for_params(context=context, params=current)
+            step_rows.append(
+                self._build_attribution_row(
+                    component="bf_apriori",
+                    previous=tail_eval,
+                    current=bf_eval,
+                )
+            )
+
+            current["final_ultimate"] = candidate_params.get(
+                "final_ultimate",
+                current.get("final_ultimate", "chainladder"),
+            )
+            current["selected_ultimate_by_uwy"] = dict(
+                candidate_params.get("selected_ultimate_by_uwy", {})
+            )
+            candidate_eval = self._scenario_totals_for_params(
+                context=context, params=current
+            )
+            step_rows.append(
+                self._build_attribution_row(
+                    component="selection",
+                    previous=bf_eval,
+                    current=candidate_eval,
+                )
+            )
+
+            self._apply_params_to_reserving(context, baseline_params)
+            context.last_results_payload = self._build_results_payload(
+                context.reserving
+            )
+
+            return ReserveChangeResponse(
+                session_id=context.session_id,
+                baseline=baseline_eval,
+                candidate=candidate_eval,
+                attribution={
+                    "baseline_vs_candidate_delta": round(
+                        float(candidate_eval.get("total_ibnr", 0.0))
+                        - float(baseline_eval.get("total_ibnr", 0.0)),
+                        6,
+                    ),
+                    "steps": step_rows,
+                },
+                rows=step_rows,
+            )
+
+    def run_highest_a2a_drop_scenario(
+        self,
+        payload: HighestA2ADropRequest,
+    ) -> HighestA2ADropResponse:
+        derived = self.run_derived_drop_scenario(
+            DerivedDropScenarioRequest(
+                session_id=payload.session_id,
+                rule={
+                    "source": "link_ratios",
+                    "selection_mode": "max",
+                    "scope": "per_development_period",
+                    "limit": 200,
+                    "include_existing_drops": True,
+                },
+            )
+        )
+        return HighestA2ADropResponse(
+            session_id=derived.session_id,
+            drop=derived.drop,
+            top_factors=derived.selected_rows,
+            baseline=derived.baseline,
+            candidate=derived.candidate,
+            scenario=derived.scenario,
+        )
+
+    def rank_link_ratios(
+        self,
+        payload: LinkRatioRankRequest,
+    ) -> LinkRatioRankResponse:
+        with self._lock:
+            context = self._get_context_by_session_id(payload.session_id)
+            if context is None:
+                raise LookupError(f"Session not found: {payload.session_id}")
+            rows = self._rank_link_ratio_rows(
+                context,
+                selection_mode=payload.selection_mode,
+                scope=payload.scope,
+                limit=payload.limit,
+                threshold_operator=payload.threshold_operator,
+                threshold_value=payload.threshold_value,
+            )
+            return LinkRatioRankResponse(
+                session_id=context.session_id,
+                selection_mode=payload.selection_mode,
+                scope=payload.scope,
+                rows=rows,
+                summary={
+                    "row_count": len(rows),
+                    "top_rows": rows[:5],
+                },
+            )
+
+    def run_derived_drop_scenario(
+        self,
+        payload: DerivedDropScenarioRequest,
+    ) -> DerivedDropScenarioResponse:
+        with self._lock:
+            context = self._get_context_by_session_id(payload.session_id)
+            if context is None:
+                raise LookupError(f"Session not found: {payload.session_id}")
+
+            baseline_params = self._params_from_store(context)
+            baseline_eval = self._evaluate_scenario(
+                context=context,
+                scenario_id="baseline",
+                params=self._clone_params(baseline_params),
+                summary="Current configuration",
+                parent_scenario_id=None,
+                transform="baseline",
+                rationale_evidence_ids=[],
+            )
+            candidate_params = self._clone_params(baseline_params)
+            rules = list(payload.rules or [])
+            if not rules:
+                rules = [payload.rule]
+            rows: list[dict[str, Any]] = []
+            drop_pairs: list[tuple[str, int]] = []
+            seen_pairs: set[tuple[str, int]] = set()
+            for rule in rules:
+                rule_rows = self._selected_link_ratio_rows(
+                    context,
+                    selection_mode=rule.selection_mode,
+                    scope=rule.scope,
+                    limit=rule.limit,
+                    threshold_operator=rule.threshold_operator,
+                    threshold_value=rule.threshold_value,
+                )
+                for item in rule_rows:
+                    pair = (str(item["origin"]), int(item["development_period"]))
+                    if pair in seen_pairs:
+                        continue
+                    seen_pairs.add(pair)
+                    rows.append(item)
+                    drop_pairs.append(pair)
+            existing_drop_pairs: set[tuple[str, int]] = set()
+            include_existing_drops = any(rule.include_existing_drops for rule in rules)
+            if include_existing_drops:
+                existing_drop_pairs = {
+                    (str(item[0]), int(item[1]))
+                    for item in candidate_params.get("drop", [])
+                }
+            for origin, age in drop_pairs:
+                existing_drop_pairs.add((origin, age))
+            candidate_params["drop"] = [
+                list(item) for item in sorted(existing_drop_pairs)
+            ]
+
+            candidate_eval = self._evaluate_scenario(
+                context=context,
+                scenario_id=self._scenario_id_from_rules(rules),
+                params=candidate_params,
+                summary=self._scenario_summary_from_rules(rules),
+                parent_scenario_id="baseline",
+                transform=self._scenario_transform_from_rules(rules),
+                rationale_evidence_ids=[],
+            )
+
+            self._apply_params_to_reserving(context, baseline_params)
+            context.last_results_payload = self._build_results_payload(
+                context.reserving
+            )
+
+            return DerivedDropScenarioResponse(
+                session_id=context.session_id,
+                rule={
+                    "primary": payload.rule.model_dump(mode="json"),
+                    "rules": [rule.model_dump(mode="json") for rule in rules],
+                },
+                drop=[list(item) for item in drop_pairs],
+                selected_rows=rows,
+                baseline=baseline_eval.model_dump(mode="json"),
+                candidate=candidate_eval.model_dump(mode="json"),
+                scenario={
+                    "scenario_id": candidate_eval.scenario_id,
+                    "summary": candidate_eval.summary,
+                    "score_delta": round(candidate_eval.score - baseline_eval.score, 4),
+                    "drop_count": len(candidate_params.get("drop", [])),
+                    "parameters": candidate_params,
+                },
+            )
+
+    def evaluate_tail_fit(
+        self,
+        payload: TailEvaluationRequest,
+    ) -> TailEvaluationResponse:
+        with self._lock:
+            context = self._get_context_by_session_id(payload.session_id)
+            if context is None:
+                raise LookupError(f"Session not found: {payload.session_id}")
+
+            params = self._clone_params(payload.model_dump(mode="json"))
+            params.pop("session_id", None)
+            baseline_params = self._params_from_store(context)
+
+            self._apply_params_to_reserving(context, params)
+            heatmap_data = context.reserving.get_triangle_heatmap_data()
+            link_ratios_raw = heatmap_data.get("link_ratios")
+            if not isinstance(link_ratios_raw, pd.DataFrame) or link_ratios_raw.empty:
+                raise ValueError("Tail evaluation requires link ratio data")
+
+            observed_row = link_ratios_raw.loc[
+                link_ratios_raw.index.astype(str) == "LDF"
+            ]
+            fitted_row = link_ratios_raw.loc[
+                link_ratios_raw.index.astype(str) == "Tail"
+            ]
+            if observed_row.empty or fitted_row.empty:
+                raise ValueError("Tail evaluation requires both LDF and Tail rows")
+
+            fit_period = self._normalize_fit_period(payload.tail.fit_period)
+            residuals: list[dict[str, Any]] = []
+            observed_points: list[dict[str, Any]] = []
+            fitted_points: list[dict[str, Any]] = []
+            observed_values: list[float] = []
+            fitted_values: list[float] = []
+            for col in link_ratios_raw.columns:
+                age = Reserving._parse_cdf_label_to_age(col)
+                if age is None:
+                    continue
+                if fit_period is not None:
+                    start, end = fit_period
+                    if age < start:
+                        continue
+                    if end is not None and age > end:
+                        continue
+                observed = self._to_optional_float(observed_row.iloc[0].get(col))
+                fitted = self._to_optional_float(fitted_row.iloc[0].get(col))
+                if observed is None or fitted is None:
+                    continue
+                observed_values.append(observed)
+                fitted_values.append(fitted)
+                observed_points.append({"age": age, "ldf": round(observed, 6)})
+                fitted_points.append({"age": age, "ldf": round(fitted, 6)})
+                residuals.append(
+                    {
+                        "age": age,
+                        "observed_ldf": round(observed, 6),
+                        "fitted_ldf": round(fitted, 6),
+                        "error": round(fitted - observed, 6),
+                    }
+                )
+
+            r2 = None
+            rmse = None
+            if observed_values:
+                observed_series = np.array(observed_values, dtype=float)
+                fitted_series = np.array(fitted_values, dtype=float)
+                rmse = float(np.sqrt(np.mean((fitted_series - observed_series) ** 2)))
+                centered = observed_series - observed_series.mean()
+                denom = float(np.sum(centered**2))
+                if denom > 0:
+                    r2 = float(
+                        1.0 - np.sum((observed_series - fitted_series) ** 2) / denom
+                    )
+
+            self._apply_params_to_reserving(context, baseline_params)
+            context.last_results_payload = self._build_results_payload(
+                context.reserving
+            )
+
+            return TailEvaluationResponse(
+                session_id=context.session_id,
+                tail_curve=Reserving._normalize_tail_curve(payload.tail.curve),
+                fit_period=list(payload.tail.fit_period),
+                attachment_age=payload.tail.attachment_age,
+                projection_period=payload.tail.projection_period,
+                r2=round(r2, 6) if r2 is not None else None,
+                rmse=round(rmse, 6) if rmse is not None else None,
+                point_count=len(observed_points),
+                residuals=residuals,
+                observed_ldf=observed_points,
+                fitted_tail_ldf=fitted_points,
+            )
+
     def _build_results_payload(self, reserving: Reserving) -> dict:
         results_df = reserving.get_results()
         try:
@@ -523,6 +962,69 @@ class InMemoryReservingBackend:
             "last_updated": datetime.now(timezone.utc)
             .isoformat()
             .replace("+00:00", "Z"),
+        }
+
+    @staticmethod
+    def _service_query(query) -> ServiceDataViewQuery:
+        return ServiceDataViewQuery(
+            metric=str(query.metric),
+            view=str(query.view),
+            denominator=query.denominator,
+            denominator_view=query.denominator_view,
+        )
+
+    def _scenario_totals_for_params(
+        self,
+        *,
+        context: SessionContext,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        self._apply_params_to_reserving(context, params)
+        results_df = context.reserving.get_results()
+        total_ultimate = float(results_df["ultimate"].sum()) if len(results_df) else 0.0
+        total_incurred = float(results_df["incurred"].sum()) if len(results_df) else 0.0
+        total_ibnr = total_ultimate - total_incurred
+        by_uwy = []
+        for idx, row in results_df.iterrows():
+            uwy = getattr(idx, "year", None)
+            label = str(uwy) if uwy is not None else str(idx)[:4]
+            by_uwy.append(
+                {
+                    "uwy": label,
+                    "ultimate": round(float(row.get("ultimate", 0.0) or 0.0), 6),
+                    "ibnr": round(
+                        float(row.get("ultimate", 0.0) or 0.0)
+                        - float(row.get("incurred", 0.0) or 0.0),
+                        6,
+                    ),
+                    "selected_method": str(row.get("selected_method", "chainladder")),
+                }
+            )
+        return {
+            "parameters": self._clone_params(params),
+            "total_ultimate": round(total_ultimate, 6),
+            "total_incurred": round(total_incurred, 6),
+            "total_ibnr": round(total_ibnr, 6),
+            "rows": by_uwy,
+        }
+
+    @staticmethod
+    def _build_attribution_row(
+        *,
+        component: str,
+        previous: dict[str, Any],
+        current: dict[str, Any],
+    ) -> dict[str, Any]:
+        delta = round(
+            float(current.get("total_ibnr", 0.0))
+            - float(previous.get("total_ibnr", 0.0)),
+            6,
+        )
+        return {
+            "component": component,
+            "previous_total_ibnr": previous.get("total_ibnr"),
+            "current_total_ibnr": current.get("total_ibnr"),
+            "delta_ibnr": delta,
         }
 
     @staticmethod
@@ -683,7 +1185,10 @@ class InMemoryReservingBackend:
         return self._sessions_by_id.get(session_id)
 
     def _apply_params_to_reserving(self, context: SessionContext, params: dict) -> None:
-        drops = self._normalize_drop_pairs(params.get("drop", []))
+        drops = self._filter_valid_drop_pairs(
+            context,
+            self._normalize_drop_pairs(params.get("drop", [])),
+        )
         drop_valuation = self._normalize_drop_valuation(
             params.get("drop_valuation", [])
         )
@@ -695,7 +1200,7 @@ class InMemoryReservingBackend:
         projection_period = extrap_periods * months_per_dev
 
         context.reserving.set_development(
-            average=str(params.get("average", "volume")),
+            average=Reserving._normalize_average(params.get("average", "volume")),
             drop=drops,
             drop_valuation=drop_valuation,
         )
@@ -723,6 +1228,46 @@ class InMemoryReservingBackend:
             ),
             selected_ultimate_by_uwy=dict(params.get("selected_ultimate_by_uwy", {})),
         )
+
+    def _filter_valid_drop_pairs(
+        self,
+        context: SessionContext,
+        drops: list[tuple[str, int]] | None,
+    ) -> list[tuple[str, int]] | None:
+        if not drops:
+            return None
+        try:
+            heatmap_data = context.reserving.get_triangle_heatmap_data()
+            link_ratios_raw = heatmap_data.get("link_ratios")
+        except Exception:
+            return drops
+        if not isinstance(link_ratios_raw, pd.DataFrame) or link_ratios_raw.empty:
+            return drops
+
+        valid_origins = {
+            self._origin_label(origin)
+            for origin in link_ratios_raw.index
+            if str(origin) not in {"LDF", "Tail"}
+        }
+        valid_periods = {
+            age
+            for age in (
+                Reserving._parse_cdf_label_to_age(col)
+                for col in link_ratios_raw.columns
+            )
+            if age is not None
+        }
+        filtered: list[tuple[str, int]] = []
+        seen: set[tuple[str, int]] = set()
+        for origin, age in drops:
+            pair = (str(origin), int(age))
+            if pair in seen:
+                continue
+            if pair[0] not in valid_origins or pair[1] not in valid_periods:
+                continue
+            seen.add(pair)
+            filtered.append(pair)
+        return filtered or None
 
     def _evaluate_scenario(
         self,
@@ -801,6 +1346,175 @@ class InMemoryReservingBackend:
             uncertainty=uncertainty,
             run_metadata=run_metadata,
         )
+
+    def _highest_a2a_drop_candidates(
+        self,
+        context: SessionContext,
+    ) -> tuple[list[dict[str, Any]], list[tuple[str, int]]]:
+        rows = self._selected_link_ratio_rows(
+            context,
+            selection_mode="max",
+            scope="per_development_period",
+            limit=200,
+        )
+        return rows, [
+            (str(item["origin"]), int(item["development_period"])) for item in rows
+        ]
+
+    def _rank_link_ratio_rows(
+        self,
+        context: SessionContext,
+        *,
+        selection_mode: str,
+        scope: str,
+        limit: int,
+        threshold_operator: str | None = None,
+        threshold_value: float | None = None,
+    ) -> list[dict[str, Any]]:
+        return self._selected_link_ratio_rows(
+            context,
+            selection_mode=selection_mode,
+            scope=scope,
+            limit=limit,
+            threshold_operator=threshold_operator,
+            threshold_value=threshold_value,
+        )
+
+    def _selected_link_ratio_rows(
+        self,
+        context: SessionContext,
+        *,
+        selection_mode: str,
+        scope: str,
+        limit: int,
+        threshold_operator: str | None = None,
+        threshold_value: float | None = None,
+    ) -> list[dict[str, Any]]:
+        heatmap_data = context.reserving.get_triangle_heatmap_data()
+        link_ratios_raw = heatmap_data.get("link_ratios")
+        if not isinstance(link_ratios_raw, pd.DataFrame) or link_ratios_raw.empty:
+            return []
+        link_ratios = link_ratios_raw.apply(pd.to_numeric, errors="coerce")
+        triangle_only = link_ratios.loc[
+            ~link_ratios.index.astype(str).isin(["LDF", "Tail"])
+        ]
+        if triangle_only.empty:
+            return []
+
+        mode = str(selection_mode).strip().lower()
+        scope_value = str(scope).strip().lower()
+        if mode not in {"max", "min"}:
+            raise ValueError(f"Unsupported selection_mode '{selection_mode}'")
+        if scope_value not in {"per_development_period", "global"}:
+            raise ValueError(f"Unsupported scope '{scope}'")
+        if threshold_operator is not None and threshold_operator not in {
+            "lt",
+            "lte",
+            "gt",
+            "gte",
+        }:
+            raise ValueError(f"Unsupported threshold_operator '{threshold_operator}'")
+
+        rows: list[dict[str, Any]] = []
+        for col in triangle_only.columns:
+            column = triangle_only[col].dropna()
+            if column.empty:
+                continue
+            development_period = Reserving._parse_cdf_label_to_age(col)
+            if development_period is None:
+                continue
+            filtered = column
+            if threshold_operator is not None and threshold_value is not None:
+                filtered = self._apply_threshold_filter(
+                    column,
+                    operator=threshold_operator,
+                    threshold_value=float(threshold_value),
+                )
+            if filtered.empty:
+                continue
+            ordered = filtered.sort_values(ascending=(mode == "min"))
+            if scope_value == "per_development_period":
+                ordered = ordered.iloc[:1]
+            for origin, value in ordered.items():
+                rows.append(
+                    {
+                        "development_period": development_period,
+                        "origin": self._origin_label(origin),
+                        "a2a": round(float(value), 6),
+                    }
+                )
+
+        if scope_value == "global":
+            rows.sort(key=lambda item: float(item["a2a"]), reverse=(mode == "max"))
+            return rows[:limit]
+        rows.sort(key=lambda item: int(item["development_period"]))
+        return rows[:limit]
+
+    @staticmethod
+    def _scenario_id_from_rule(rule) -> str:
+        return f"derived_drop_{rule.selection_mode}_{rule.scope}"
+
+    @staticmethod
+    def _scenario_id_from_rules(rules) -> str:
+        if len(rules) == 1:
+            return InMemoryReservingBackend._scenario_id_from_rule(rules[0])
+        return "derived_drop_multi_rule"
+
+    @staticmethod
+    def _scenario_summary_from_rule(rule) -> str:
+        direction = "highest" if rule.selection_mode == "max" else "lowest"
+        threshold_text = ""
+        if rule.threshold_operator and rule.threshold_value is not None:
+            threshold_text = (
+                f" among factors {rule.threshold_operator} {rule.threshold_value:g}"
+            )
+        scope = (
+            "in each development period"
+            if rule.scope == "per_development_period"
+            else f"globally (top {rule.limit})"
+        )
+        return f"Drop the {direction} observed a2a factor {scope}{threshold_text}"
+
+    @staticmethod
+    def _scenario_summary_from_rules(rules) -> str:
+        if len(rules) == 1:
+            return InMemoryReservingBackend._scenario_summary_from_rule(rules[0])
+        parts = [
+            InMemoryReservingBackend._scenario_summary_from_rule(rule) for rule in rules
+        ]
+        return "; then combine rules: " + " | ".join(parts)
+
+    @staticmethod
+    def _scenario_transform_from_rule(rule) -> str:
+        return f"drop_link_ratios_{rule.selection_mode}_{rule.scope}"
+
+    @staticmethod
+    def _scenario_transform_from_rules(rules) -> str:
+        if len(rules) == 1:
+            return InMemoryReservingBackend._scenario_transform_from_rule(rules[0])
+        return "drop_link_ratios_multi_rule"
+
+    @staticmethod
+    def _apply_threshold_filter(
+        column: pd.Series,
+        *,
+        operator: str,
+        threshold_value: float,
+    ) -> pd.Series:
+        if operator == "lt":
+            return column[column < threshold_value]
+        if operator == "lte":
+            return column[column <= threshold_value]
+        if operator == "gt":
+            return column[column > threshold_value]
+        return column[column >= threshold_value]
+
+    @staticmethod
+    def _origin_label(origin: object) -> str:
+        if hasattr(origin, "year"):
+            return str(origin.year)
+        text = str(origin)
+        return text[:4] if len(text) >= 4 and text[:4].isdigit() else text
 
     def _build_scenario_candidates(
         self,
@@ -1490,7 +2204,7 @@ class InMemoryReservingBackend:
     @staticmethod
     def _params_from_store(context: SessionContext) -> dict:
         return {
-            "average": context.params_store.average,
+            "average": Reserving._normalize_average(context.params_store.average),
             "drop": [list(item) for item in context.params_store.drop_store],
             "drop_valuation": [],
             "tail": {
@@ -1509,7 +2223,7 @@ class InMemoryReservingBackend:
     @staticmethod
     def _clone_params(params: dict) -> dict:
         cloned = {
-            "average": str(params.get("average", "volume")),
+            "average": Reserving._normalize_average(params.get("average", "volume")),
             "drop": [list(item) for item in params.get("drop", [])],
             "drop_valuation": [list(item) for item in params.get("drop_valuation", [])],
             "tail": {

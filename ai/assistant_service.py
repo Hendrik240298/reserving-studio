@@ -3,35 +3,82 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 import re
+import time
 from typing import Any
 
 from ai.api_tools import ReservingApiTools
+from ai.backend_tools import BackendReservingTools
 from ai.openrouter_client import OpenRouterClient
+from ai.tool_payloads import build_memory_snapshot, build_tool_specs, render_memory_hint
 
 
 logger = logging.getLogger(__name__)
 
 
+def _load_prompt_file(filename: str) -> str:
+    prompt_path = Path(__file__).resolve().parents[1] / filename
+    if not prompt_path.exists():
+        return ""
+    try:
+        return prompt_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 SYSTEM_PROMPT = (
-    "You are an actuarial reserving diagnostics assistant. "
+    "You are Turtuary, an actuarial reserving diagnostics assistant. "
+    "You are calm, helpful, and a little personable without being gimmicky. "
+    "You can introduce yourself as Turtuary when it is natural, but keep answers professionally useful for actuaries. "
     "Always prefer tool calls over assumptions. "
+    "Use compact summary tools first, then use detail tools only when specific evidence is needed. "
+    "For data-view tools, only use these metric names: incurred, paid, outstanding, premium. "
+    "If the user says 'claims' without a modifier, interpret that as incurred. "
+    "Map common user phrases onto those exact names: 'incurred claims' -> incurred, 'paid claims' -> paid, 'outstanding claims' -> outstanding, 'earned premium' or 'gross written premium' -> premium. "
+    "For data-view tools, only use these view names: cumulative or incremental. "
+    "For tail curve methods, only use these supported method names: exponential, inverse_power, weibull. Treat 'power' or 'power_curve' as inverse_power. "
+    "If the user specifies a notation preference, terminology preference, or unit preference, follow it consistently for the rest of the conversation unless they change it again. "
+    "If the user asks about movements 'this quarter' or 'current quarter', interpret that as the latest valuation period / latest diagonal. "
+    "For questions about claims movements this quarter, inspect incurred incremental latest-diagonal movement first, not premium first. "
     "Ground all material statements in tool outputs. "
-    "Include checks for latest diagonal actual-vs-expected emergence and incurred-on-premium development at matched ages. "
-    "When available, run iterative scenario analysis using tool_iterate_diagnostics "
-    "before final recommendations on drops, tail fitting, and BF apriori. "
-    "Include uncertainty interpretation (MSEP/error, bootstrap quantiles, tail instability/model averaging) when available. "
+    "Decide for yourself whether scenario iteration is needed. "
+    "Use scenario iteration when the user is asking for recommendations, best alternatives, scenario comparisons, or changes to drops, tail fitting, BF apriori, or final selection. "
+    "Do not use scenario iteration for simple observational questions unless it materially helps answer the user. "
+    "Do not present a scenario, parameter set, or tail setting as a recommendation unless it has been tested in the tools during the current conversation or is explicitly reported as untested. "
+    "Explain statistical jargon like z-scores in plain English when you use it. "
+    "If you cite an evidence ID, explain what that evidence refers to and only cite IDs that are present in the tool results you saw. "
+    "Include uncertainty interpretation when available. "
     "If evidence is missing, say so explicitly."
 )
 
+AI_CONTEXT_PROMPT = _load_prompt_file("AI_CONTEXT.md")
+AI_PLAYBOOKS_PROMPT = _load_prompt_file("AI_PLAYBOOKS.md")
+AI_EXAMPLES_PROMPT = _load_prompt_file("AI_EXAMPLES.md")
+
+RECENT_HISTORY_LIMIT = 6
+
 
 class AssistantService:
-    def __init__(self, *, api_base_url: str) -> None:
+    def __init__(self, *, tool_executor: Any) -> None:
         self._client = OpenRouterClient()
-        self._tools = ReservingApiTools(base_url=api_base_url)
+        self._tools = tool_executor
         self._observability_enabled = os.environ.get(
             "AI_OBSERVABILITY", "1"
         ).strip().lower() not in {"0", "false", "off"}
+
+    @classmethod
+    def from_api_base_url(cls, *, api_base_url: str) -> "AssistantService":
+        return cls(tool_executor=ReservingApiTools(base_url=api_base_url))
+
+    @classmethod
+    def from_backend(cls, *, backend: Any) -> "AssistantService":
+        return cls(
+            tool_executor=BackendReservingTools(
+                backend=backend,
+                tool_specs=build_tool_specs(),
+            )
+        )
 
     def bootstrap_workflow(
         self,
@@ -49,10 +96,75 @@ class AssistantService:
         )
 
     def answer(self, *, user_prompt: str, max_steps: int = 14) -> str:
+        return self.run_turn(user_prompt=user_prompt, max_steps=max_steps)["content"]
+
+    def run_turn(
+        self,
+        *,
+        user_prompt: str,
+        conversation_history: list[dict[str, str]] | None = None,
+        session_context: dict[str, Any] | None = None,
+        working_memory: dict[str, Any] | None = None,
+        event_callback: Any | None = None,
+        max_steps: int = 14,
+    ) -> dict[str, Any]:
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
         ]
+        if AI_CONTEXT_PROMPT:
+            messages.append({"role": "system", "content": AI_CONTEXT_PROMPT})
+        if AI_PLAYBOOKS_PROMPT:
+            messages.append({"role": "system", "content": AI_PLAYBOOKS_PROMPT})
+        if AI_EXAMPLES_PROMPT:
+            messages.append({"role": "system", "content": AI_EXAMPLES_PROMPT})
+        intent_hint = self._build_intent_hint(user_prompt)
+        if intent_hint:
+            messages.append({"role": "system", "content": intent_hint})
+        playbook_hint = self._build_playbook_hint(user_prompt)
+        if playbook_hint:
+            messages.append({"role": "system", "content": playbook_hint})
+        session_hint = self._build_session_context_hint(session_context)
+        if session_hint:
+            messages.append({"role": "system", "content": session_hint})
+        memory_hint = render_memory_hint(working_memory)
+        if memory_hint:
+            messages.append({"role": "system", "content": memory_hint})
+        recent_history = (conversation_history or [])[-RECENT_HISTORY_LIMIT:]
+        for item in recent_history:
+            role = str(item.get("role", "")).strip().lower()
+            content = str(item.get("content", "")).strip()
+            if role not in {"user", "assistant"} or not content:
+                continue
+            messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": user_prompt})
+        tool_outputs: dict[str, dict[str, Any]] = {}
+        tool_events: list[dict[str, Any]] = []
+        memory_state = build_memory_snapshot(
+            session_summary=(working_memory or {}).get("session_summary")
+            if isinstance(working_memory, dict)
+            else None,
+            diagnostics_summary=(working_memory or {}).get("diagnostics_summary")
+            if isinstance(working_memory, dict)
+            else None,
+            iteration_summary=(working_memory or {}).get("iteration_summary")
+            if isinstance(working_memory, dict)
+            else None,
+            results_summary=(working_memory or {}).get("results_summary")
+            if isinstance(working_memory, dict)
+            else None,
+            data_view_summary=(working_memory or {}).get("data_view_summary")
+            if isinstance(working_memory, dict)
+            else None,
+            movement_summary=(working_memory or {}).get("movement_summary")
+            if isinstance(working_memory, dict)
+            else None,
+            reserve_change_summary=(working_memory or {}).get("reserve_change_summary")
+            if isinstance(working_memory, dict)
+            else None,
+            existing_scenario_ledger=(working_memory or {}).get("scenario_ledger")
+            if isinstance(working_memory, dict)
+            else None,
+        )
         tool_specs = self._tools.tool_specs
         guardrail_state: dict[str, bool] = {
             "portfolio_shift_unconfirmed": False,
@@ -65,8 +177,17 @@ class AssistantService:
             "session_id": None,
             "ran_diagnostics": False,
             "ran_iteration": False,
-            "forced_iteration_prompt": False,
         }
+        self._prime_context_for_prompt(
+            user_prompt=user_prompt,
+            session_context=session_context,
+            messages=messages,
+            tool_outputs=tool_outputs,
+            tool_events=tool_events,
+            memory_state=memory_state,
+            workflow_state=workflow_state,
+            event_callback=event_callback,
+        )
 
         for _ in range(max_steps):
             if self._observability_enabled:
@@ -74,6 +195,7 @@ class AssistantService:
                     "[OBS] ai.step request_openrouter messages=%s", len(messages)
                 )
             try:
+                self._emit_event(event_callback, "status", {"message": "Thinking"})
                 response = self._client.chat_completion(
                     messages=messages,
                     tools=tool_specs,
@@ -84,16 +206,57 @@ class AssistantService:
             except RuntimeError as error:
                 if workflow_state.get("ran_diagnostics"):
                     session_id = workflow_state.get("session_id")
+                    fallback = self._build_deterministic_fallback_commentary(
+                        session_id=session_id if isinstance(session_id, str) else None,
+                        diagnostics=tool_outputs.get("tool_run_diagnostics_summary"),
+                        iteration=tool_outputs.get("tool_iterate_diagnostics_summary"),
+                        results=tool_outputs.get("tool_get_results_summary"),
+                    )
+                    if fallback:
+                        self._emit_streamed_content(event_callback, fallback)
+                        return {
+                            "content": fallback,
+                            "fallback_used": True,
+                            "session_id": session_id,
+                            "tool_events": tool_events,
+                            "memory_snapshot": memory_state,
+                        }
                     suffix = (
                         f" session_id={session_id}"
                         if isinstance(session_id, str)
                         else ""
                     )
-                    return (
-                        "Model provider is temporarily unavailable after deterministic tool execution. "
-                        "Diagnostics and scenario evaluation completed successfully; "
-                        "retry to generate narrative commentary." + suffix
+                    return {
+                        "content": (
+                            "Model provider is temporarily unavailable after deterministic tool execution. "
+                            "Diagnostics and scenario evaluation completed successfully; "
+                            "retry to generate narrative commentary." + suffix
+                        ),
+                        "fallback_used": True,
+                        "session_id": session_id,
+                        "tool_events": tool_events,
+                        "memory_snapshot": memory_state,
+                    }
+                provider_error = str(error).strip()
+                if provider_error:
+                    provider_error = f" ({provider_error})"
+                friendly = (
+                    "The AI model provider timed out before it could start tool-backed analysis. "
+                    "No reserving diagnostics or scenario tests were run. Please retry."
+                )
+                if "timed out" not in str(error).lower():
+                    friendly = (
+                        "The AI model provider is temporarily unavailable before analysis could start. "
+                        "No reserving diagnostics or scenario tests were run. Please retry."
                     )
+                self._emit_streamed_content(event_callback, friendly)
+                return {
+                    "content": friendly + provider_error,
+                    "fallback_used": True,
+                    "session_id": workflow_state.get("session_id"),
+                    "tool_events": tool_events,
+                    "memory_snapshot": memory_state,
+                }
                 raise error
             choice = response["choices"][0]["message"]
             tool_calls = choice.get("tool_calls") or []
@@ -101,28 +264,19 @@ class AssistantService:
                 logger.info("[OBS] ai.step tool_calls=%s", len(tool_calls))
 
             if not tool_calls:
-                if (
-                    workflow_state.get("ran_diagnostics")
-                    and not workflow_state.get("ran_iteration")
-                    and workflow_state.get("session_id")
-                    and not workflow_state.get("forced_iteration_prompt")
-                ):
-                    workflow_state["forced_iteration_prompt"] = True
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "Before finalizing recommendations, run tool_iterate_diagnostics "
-                                f"for session_id={workflow_state['session_id']} with include_baseline=true. "
-                                "Then summarize robust scenario tradeoffs with evidence."
-                            ),
-                        }
-                    )
-                    continue
-
                 content = choice.get("content")
                 if isinstance(content, str):
-                    return self._apply_narrative_guardrails(content, guardrail_state)
+                    self._emit_streamed_content(event_callback, content)
+                    return {
+                        "content": self._apply_narrative_guardrails(
+                            content,
+                            guardrail_state,
+                        ),
+                        "fallback_used": False,
+                        "session_id": workflow_state.get("session_id"),
+                        "tool_events": tool_events,
+                        "memory_snapshot": memory_state,
+                    }
                 if isinstance(content, list):
                     parts = [
                         part.get("text", "")
@@ -130,8 +284,24 @@ class AssistantService:
                         if isinstance(part, dict)
                     ]
                     merged = "\n".join(part for part in parts if part)
-                    return self._apply_narrative_guardrails(merged, guardrail_state)
-                return "No response content was produced by the model."
+                    self._emit_streamed_content(event_callback, merged)
+                    return {
+                        "content": self._apply_narrative_guardrails(
+                            merged,
+                            guardrail_state,
+                        ),
+                        "fallback_used": False,
+                        "session_id": workflow_state.get("session_id"),
+                        "tool_events": tool_events,
+                        "memory_snapshot": memory_state,
+                    }
+                return {
+                    "content": "No response content was produced by the model.",
+                    "fallback_used": False,
+                    "session_id": workflow_state.get("session_id"),
+                    "tool_events": tool_events,
+                    "memory_snapshot": memory_state,
+                }
 
             messages.append(
                 {
@@ -157,8 +327,31 @@ class AssistantService:
                         function_name,
                         self._short_json(args),
                     )
+                self._emit_event(
+                    event_callback,
+                    "status",
+                    {"message": self._tool_status_label(function_name, args)},
+                )
 
                 tool_result = self._tools.call_tool(function_name, args)
+                tool_outputs[function_name] = tool_result
+                memory_state = self._update_memory_state(
+                    memory_state,
+                    function_name=function_name,
+                    tool_result=tool_result,
+                )
+                tool_events.append(
+                    {
+                        "name": function_name,
+                        "arguments": args,
+                        "result_summary": tool_result,
+                    }
+                )
+                self._emit_event(
+                    event_callback,
+                    "tool_event",
+                    tool_events[-1],
+                )
                 self._update_workflow_state(
                     workflow_state=workflow_state,
                     function_name=function_name,
@@ -177,14 +370,422 @@ class AssistantService:
                         "role": "tool",
                         "tool_call_id": call["id"],
                         "name": function_name,
-                        "content": json.dumps(tool_result),
+                        "content": json.dumps(tool_result, ensure_ascii=True),
                     }
                 )
 
+        return {
+            "content": (
+                "Tool-call step limit reached before the assistant produced a final answer. "
+                "Please retry with a narrower question."
+            ),
+            "fallback_used": False,
+            "session_id": workflow_state.get("session_id"),
+            "tool_events": tool_events,
+            "memory_snapshot": memory_state,
+        }
+
+    @staticmethod
+    def _build_session_context_hint(session_context: dict[str, Any] | None) -> str:
+        if not isinstance(session_context, dict):
+            return ""
+        session_id = session_context.get("session_id")
+        segment = session_context.get("segment")
+        details: list[str] = []
+        if isinstance(segment, str) and segment.strip():
+            details.append(f"segment={segment.strip()}")
+        if isinstance(session_id, str) and session_id.strip():
+            details.append(f"session_id={session_id.strip()}")
+        if not details:
+            return ""
         return (
-            "Tool-call step limit reached before the assistant produced a final answer. "
-            "Please retry with a narrower question."
+            "Current reserving workspace context: "
+            + ", ".join(details)
+            + ". Reuse this context in tool calls unless the user asks to start a different session."
         )
+
+    def _prime_context_for_prompt(
+        self,
+        *,
+        user_prompt: str,
+        session_context: dict[str, Any] | None,
+        messages: list[dict[str, Any]],
+        tool_outputs: dict[str, dict[str, Any]],
+        tool_events: list[dict[str, Any]],
+        memory_state: dict[str, Any],
+        workflow_state: dict[str, Any],
+        event_callback: Any | None,
+    ) -> None:
+        session_id = None
+        if isinstance(session_context, dict):
+            raw_session_id = session_context.get("session_id")
+            if isinstance(raw_session_id, str) and raw_session_id.strip():
+                session_id = raw_session_id.strip()
+        if not session_id:
+            return
+        prompt = str(user_prompt or "").strip().lower()
+        if not self._is_movement_question(prompt):
+            return
+        if "claims" not in prompt and "incurred" not in prompt:
+            return
+
+        preloads = [
+            (
+                "tool_get_data_view_summary",
+                {
+                    "session_id": session_id,
+                    "metric": "incurred",
+                    "view": "incremental",
+                },
+                "latest_diagonal_incurred_incremental",
+            ),
+            (
+                "tool_get_data_view_summary",
+                {
+                    "session_id": session_id,
+                    "metric": "incurred",
+                    "view": "cumulative",
+                    "denominator": "premium",
+                },
+                "latest_diagonal_incurred_on_premium",
+            ),
+            (
+                "tool_run_ldf_consistency_diagnostics",
+                {"session_id": session_id},
+                "a2a_ldf_consistency",
+            ),
+        ]
+
+        evidence_payload: dict[str, Any] = {}
+        for function_name, args, evidence_key in preloads:
+            self._emit_event(
+                event_callback,
+                "status",
+                {"message": self._tool_status_label(function_name, args)},
+            )
+            tool_result = self._tools.call_tool(function_name, args)
+            tool_outputs[f"prefetch:{evidence_key}"] = tool_result
+            memory_state.update(
+                self._update_memory_state(
+                    dict(memory_state),
+                    function_name=function_name,
+                    tool_result=tool_result,
+                )
+            )
+            tool_event = {
+                "name": function_name,
+                "arguments": args,
+                "result_summary": tool_result,
+                "prefetch": True,
+            }
+            tool_events.append(tool_event)
+            self._emit_event(event_callback, "tool_event", tool_event)
+            self._update_workflow_state(
+                workflow_state=workflow_state,
+                function_name=function_name,
+                args=args,
+                tool_result=tool_result,
+            )
+            evidence_payload[evidence_key] = tool_result
+
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "Preloaded evidence for this claims-movement question. "
+                    "Base the first answer primarily on this evidence: latest-diagonal incremental incurred movement, "
+                    "incurred-on-premium context, and age-to-age/LDF consistency. "
+                    "Do not lead with premium or generic recommendations unless this evidence supports it.\n"
+                    + json.dumps(evidence_payload, ensure_ascii=True)
+                ),
+            }
+        )
+
+    @staticmethod
+    def _build_intent_hint(user_prompt: str) -> str:
+        prompt = str(user_prompt or "").strip().lower()
+        if not prompt:
+            return ""
+        if AssistantService._is_movement_question(prompt):
+            return (
+                "This user is asking an observational movement question, not asking for a scenario recommendation yet. "
+                "Prefer movement/data-view tools first. Answer the movement question directly from current data and diagnostics. "
+                "If they say claims without a modifier, treat that as incurred. "
+                "If they ask about this quarter/current quarter, focus on the latest diagonal or in-quarter incremental movement first. "
+                "Do not lead with premium unless they explicitly asked about premium or it is clearly secondary supporting context. "
+                "Do not run scenario-search unless the user asks for recommendations, drops, method changes, or scenario comparisons."
+            )
+        if AssistantService._is_recommendation_question(prompt):
+            return (
+                "This user is asking for recommendations or alternative scenarios. "
+                "Use scenario iteration before final recommendations unless the answer is already directly established by stronger evidence."
+            )
+        return ""
+
+    @staticmethod
+    def _build_playbook_hint(user_prompt: str) -> str:
+        prompt = str(user_prompt or "").strip().lower()
+        if not prompt:
+            return ""
+        playbook = AssistantService._select_playbook(prompt)
+        if playbook == "movement_review":
+            return (
+                "Selected playbook: Movement Review. "
+                "Use the Movement Review workflow from AI_PLAYBOOKS.md. "
+                "Start with data-view summaries and movement-focused evidence, then answer directly."
+            )
+        if playbook == "scenario_recommendation":
+            return (
+                "Selected playbook: Scenario Recommendation. "
+                "Use the Scenario Recommendation workflow from AI_PLAYBOOKS.md. "
+                "Favor diagnostics plus scenario iteration before recommending changes."
+            )
+        if playbook == "reserve_change_explanation":
+            return (
+                "Selected playbook: Reserve Change Explanation. "
+                "Use attribution against baseline before broad scenario discussion."
+            )
+        if playbook == "late_emergence_review":
+            return (
+                "Selected playbook: Late Emergence Review. "
+                "Use historical continuation evidence before broad recommendations."
+            )
+        if playbook == "method_suitability_review":
+            return (
+                "Selected playbook: Method Suitability Review. "
+                "Use diagnostics, a2a/LDF consistency, and incurred/premium context."
+            )
+        if playbook == "tail_selection":
+            return (
+                "Selected playbook: Tail Selection. "
+                "Use tested tail-fit evaluation before recommending or comparing tail methods."
+            )
+        if playbook == "data_exploration":
+            return (
+                "Selected playbook: Data Exploration. "
+                "Use summary data tools first and only request detailed rows if needed."
+            )
+        return ""
+
+    @staticmethod
+    def _is_recommendation_question(prompt: str) -> bool:
+        recommendation_keywords = {
+            "recommend",
+            "scenario",
+            "drop",
+            "tail",
+            "bf",
+            "bornhuetter",
+            "change",
+            "adjust",
+            "what should",
+            "which should",
+            "best",
+            "optimi",
+            "recal",
+            "compare",
+            "trade-off",
+            "tradeoff",
+        }
+        return any(keyword in prompt for keyword in recommendation_keywords)
+
+    @staticmethod
+    def _select_playbook(prompt: str) -> str:
+        if AssistantService._is_movement_question(prompt):
+            return "movement_review"
+        if any(
+            keyword in prompt
+            for keyword in {
+                "why did reserve",
+                "why does reserve",
+                "explain reserve change",
+                "driver of reserve",
+                "reserve change",
+                "impact on reserve",
+            }
+        ):
+            return "reserve_change_explanation"
+        if any(
+            keyword in prompt
+            for keyword in {
+                "how much more",
+                "still emerge",
+                "late emergence",
+                "still come",
+                "still develop",
+            }
+        ):
+            return "late_emergence_review"
+        if any(
+            keyword in prompt
+            for keyword in {
+                "tail",
+                "weibull",
+                "inverse power",
+                "inverse_power",
+                "exponential",
+                "r2",
+                "fit period",
+                "tail fit",
+            }
+        ):
+            return "tail_selection"
+        if any(
+            keyword in prompt
+            for keyword in {
+                "cl vs bf",
+                "chainladder vs bf",
+                "bornhuetter",
+                "method suitable",
+                "bf better",
+                "chainladder better",
+            }
+        ):
+            return "method_suitability_review"
+        if AssistantService._is_recommendation_question(prompt):
+            return "scenario_recommendation"
+        if any(
+            keyword in prompt
+            for keyword in {
+                "show me",
+                "compare data",
+                "triangle",
+                "view",
+                "ratio",
+                "table",
+            }
+        ):
+            return "data_exploration"
+        return ""
+
+    @staticmethod
+    def _is_movement_question(prompt: str) -> bool:
+        movement_keywords = {
+            "movement",
+            "movements",
+            "unexpected",
+            "unusual",
+            "this quarter",
+            "current quarter",
+            "latest diagonal",
+            "in quarter",
+            "what happened",
+        }
+        claims_keywords = {"claims", "incurred", "paid", "outstanding", "premium"}
+        return any(keyword in prompt for keyword in movement_keywords) and any(
+            keyword in prompt for keyword in claims_keywords
+        )
+
+    @staticmethod
+    def _emit_event(
+        event_callback: Any | None, event_type: str, payload: dict[str, Any]
+    ) -> None:
+        if callable(event_callback):
+            event_callback(event_type, payload)
+
+    @staticmethod
+    def _emit_streamed_content(event_callback: Any | None, content: str) -> None:
+        if not callable(event_callback):
+            return
+        for chunk in AssistantService._chunk_text(content):
+            event_callback("content_chunk", {"text": chunk})
+            time.sleep(0.02)
+        event_callback("status", {"message": "Done"})
+
+    @staticmethod
+    def _chunk_text(content: str, words_per_chunk: int = 10) -> list[str]:
+        words = content.split()
+        if not words:
+            return [content] if content else []
+        chunks: list[str] = []
+        for index in range(0, len(words), words_per_chunk):
+            part = " ".join(words[index : index + words_per_chunk])
+            if index + words_per_chunk < len(words):
+                part += " "
+            chunks.append(part)
+        return chunks
+
+    @staticmethod
+    def _tool_status_label(function_name: str, args: dict[str, Any]) -> str:
+        labels = {
+            "tool_get_session_summary": "Loading session summary",
+            "tool_evaluate_tail_fit": "Evaluating tail fit",
+            "tool_get_data_view_summary": "Loading data summary",
+            "tool_get_data_view": "Loading detailed data view",
+            "tool_compare_data_views": "Comparing data views",
+            "tool_run_diagnostics": "Running diagnostics",
+            "tool_run_diagnostics_summary": "Running diagnostics",
+            "tool_iterate_diagnostics": "Testing scenarios",
+            "tool_run_movement_diagnostics": "Running movement diagnostics",
+            "tool_run_ldf_consistency_diagnostics": "Checking LDF consistency",
+            "tool_project_late_emergence_benchmark": "Projecting late emergence",
+            "tool_iterate_diagnostics_summary": "Testing scenarios",
+            "tool_rank_link_ratios": "Ranking link ratios",
+            "tool_run_derived_drop_scenario": "Running derived drop scenario",
+            "tool_run_highest_a2a_drop_scenario": "Running highest a2a drop scenario",
+            "tool_get_last_derived_drop_detail": "Loading exact derived drop detail",
+            "tool_get_results_summary": "Loading results summary",
+            "tool_get_finding_detail": "Inspecting diagnostic evidence",
+            "tool_get_scenario_detail": "Inspecting scenario detail",
+            "tool_get_result_for_uwy": "Inspecting underwriting year detail",
+            "tool_recalculate": "Running bespoke recalculation",
+            "tool_explain_reserve_change": "Explaining reserve change",
+        }
+        label = labels.get(function_name, function_name.replace("tool_", ""))
+        scenario_id = args.get("scenario_id") if isinstance(args, dict) else None
+        uwy = args.get("uwy") if isinstance(args, dict) else None
+        if scenario_id:
+            return f"{label}: {scenario_id}"
+        if uwy:
+            return f"{label}: UWY {uwy}"
+        return label
+
+    @staticmethod
+    def _update_memory_state(
+        memory_state: dict[str, Any],
+        *,
+        function_name: str,
+        tool_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        current = dict(memory_state)
+        if function_name == "tool_get_session_summary":
+            current["session_summary"] = dict(tool_result)
+        elif function_name in {"tool_get_data_view_summary", "tool_get_data_view"}:
+            current["data_view_summary"] = dict(tool_result)
+        elif function_name in {"tool_run_diagnostics", "tool_run_diagnostics_summary"}:
+            current["diagnostics_summary"] = dict(tool_result)
+        elif function_name in {
+            "tool_run_movement_diagnostics",
+            "tool_run_ldf_consistency_diagnostics",
+            "tool_project_late_emergence_benchmark",
+        }:
+            current["movement_summary"] = dict(tool_result)
+        elif function_name in {
+            "tool_iterate_diagnostics",
+            "tool_iterate_diagnostics_summary",
+        }:
+            current = build_memory_snapshot(
+                session_summary=current.get("session_summary"),
+                diagnostics_summary=current.get("diagnostics_summary"),
+                iteration_summary=dict(tool_result),
+                results_summary=current.get("results_summary"),
+                data_view_summary=current.get("data_view_summary"),
+                movement_summary=current.get("movement_summary"),
+                reserve_change_summary=current.get("reserve_change_summary"),
+                existing_scenario_ledger=current.get("scenario_ledger"),
+            )
+        elif function_name in {"tool_get_results_summary", "tool_recalculate"}:
+            current["results_summary"] = dict(tool_result)
+        elif function_name == "tool_explain_reserve_change":
+            current["reserve_change_summary"] = dict(tool_result)
+        elif function_name in {
+            "tool_run_highest_a2a_drop_scenario",
+            "tool_run_derived_drop_scenario",
+        }:
+            current["reserve_change_summary"] = dict(tool_result)
+        elif function_name == "tool_rank_link_ratios":
+            current["data_view_summary"] = dict(tool_result)
+        return current
 
     @staticmethod
     def _update_workflow_state(
@@ -200,9 +801,12 @@ class AssistantService:
         if isinstance(session_id, str) and session_id:
             workflow_state["session_id"] = session_id
 
-        if function_name == "tool_run_diagnostics":
+        if function_name in {"tool_run_diagnostics", "tool_run_diagnostics_summary"}:
             workflow_state["ran_diagnostics"] = True
-        if function_name == "tool_iterate_diagnostics":
+        if function_name in {
+            "tool_iterate_diagnostics",
+            "tool_iterate_diagnostics_summary",
+        }:
             workflow_state["ran_iteration"] = True
 
     @staticmethod
@@ -240,7 +844,7 @@ class AssistantService:
         top_uncertainty = tool_result.get("uncertainty")
         AssistantService._update_uncertainty_state(state, top_uncertainty)
 
-        scenarios = tool_result.get("scenarios")
+        scenarios = tool_result.get("scenarios") or tool_result.get("top_scenarios")
         if isinstance(scenarios, list):
             for scenario in scenarios:
                 if not isinstance(scenario, dict):
@@ -269,12 +873,16 @@ class AssistantService:
         if not isinstance(uncertainty_payload, dict):
             return
         cv_raw = uncertainty_payload.get("total_process_cv")
+        if cv_raw is None:
+            cv_raw = uncertainty_payload.get("process_cv")
         try:
             if cv_raw is not None and float(cv_raw) >= 0.35:
                 state["high_process_uncertainty"] = True
         except (TypeError, ValueError):
             pass
-        if bool(uncertainty_payload.get("instability_flag")):
+        if bool(uncertainty_payload.get("instability_flag")) or bool(
+            uncertainty_payload.get("tail_instability")
+        ):
             state["tail_instability"] = True
 
         baseline = uncertainty_payload.get("baseline")
@@ -341,6 +949,12 @@ class AssistantService:
         ):
             guarded += "\n\nProcess variability note: aggregate reserve variability is elevated (high process CV); communicate a range-based view using bootstrap quantiles rather than point estimates only."
 
+        if "z-score" in guarded.lower() and "how far" not in guarded.lower():
+            guarded += "\n\nPlain-language note: a z-score measures how far a result is from the typical range; bigger absolute values mean the year looks more unusual."
+
+        if "evidence:" in guarded.lower() and "evidence id" not in guarded.lower():
+            guarded += "\n\nReference note: each evidence ID points to a specific diagnostic record shown in the analysis trace or evidence panel, including the metric tested and the observed value."
+
         return guarded
 
     @staticmethod
@@ -362,20 +976,129 @@ class AssistantService:
 
     @staticmethod
     def _summarize_tool_result(result: dict[str, Any]) -> str:
-        keys = sorted(result.keys())
-        summary: dict[str, Any] = {"keys": keys[:8]}
-        if "findings" in result and isinstance(result.get("findings"), list):
-            summary["finding_count"] = len(result["findings"])
-        if "recommendations" in result and isinstance(
-            result.get("recommendations"), list
-        ):
-            summary["recommendation_count"] = len(result["recommendations"])
-        if "scenarios" in result and isinstance(result.get("scenarios"), list):
-            summary["scenario_count"] = len(result["scenarios"])
-        if "iteration_metrics" in result and isinstance(
-            result.get("iteration_metrics"), dict
-        ):
-            metrics = result["iteration_metrics"]
-            summary["duration_ms"] = metrics.get("duration_ms")
-            summary["best_scenario_id"] = metrics.get("best_scenario_id")
-        return json.dumps(summary, ensure_ascii=True)
+        return json.dumps(result, ensure_ascii=True)
+
+    @staticmethod
+    def _build_deterministic_fallback_commentary(
+        *,
+        session_id: str | None,
+        diagnostics: dict[str, Any] | None,
+        iteration: dict[str, Any] | None,
+        results: dict[str, Any] | None,
+    ) -> str:
+        sections: list[str] = [
+            "Model provider is temporarily unavailable, so this is a deterministic summary from completed tool outputs.",
+        ]
+
+        if session_id:
+            sections.append(f"session_id={session_id}")
+
+        if isinstance(diagnostics, dict):
+            findings = diagnostics.get("top_findings")
+            recommendations = diagnostics.get("top_recommendations")
+            governance = diagnostics.get("governance")
+            metrics = diagnostics.get("metrics")
+
+            finding_count = int(diagnostics.get("finding_count") or 0)
+            recommendation_count = int(diagnostics.get("recommendation_count") or 0)
+            tier = "unknown"
+            requires_review = None
+            if isinstance(governance, dict):
+                tier = str(governance.get("tier", "unknown")).upper()
+                requires_review = governance.get("requires_human_review")
+
+            diagnostic_line = f"Diagnostics: {finding_count} findings, {recommendation_count} recommendations, governance tier {tier}"
+            if requires_review is not None:
+                diagnostic_line += (
+                    ", human review required"
+                    if bool(requires_review)
+                    else ", no mandatory human review flag"
+                )
+            sections.append(diagnostic_line + ".")
+
+            if isinstance(findings, list) and findings:
+                top_findings = []
+                for item in findings[:5]:
+                    if not isinstance(item, dict):
+                        continue
+                    code = str(item.get("code", "unknown"))
+                    severity = str(item.get("severity", "unknown"))
+                    message = str(item.get("message", "")).strip()
+                    top_findings.append(f"- [{severity}] {code}: {message}")
+                if top_findings:
+                    sections.append("Top findings:\n" + "\n".join(top_findings))
+
+            if isinstance(recommendations, list) and recommendations:
+                top_recommendations = []
+                for item in recommendations[:5]:
+                    if not isinstance(item, dict):
+                        continue
+                    code = str(item.get("code", "unknown"))
+                    priority = str(item.get("priority", "unknown"))
+                    message = str(item.get("message", "")).strip()
+                    top_recommendations.append(f"- [{priority}] {code}: {message}")
+                if top_recommendations:
+                    sections.append(
+                        "Top recommendations:\n" + "\n".join(top_recommendations)
+                    )
+
+            uncertainty = diagnostics.get("uncertainty")
+            if isinstance(uncertainty, dict):
+                notes: list[str] = []
+                if uncertainty.get("process_cv") is not None:
+                    notes.append(f"process_cv={uncertainty.get('process_cv')}")
+                if uncertainty.get("bootstrap_p50") is not None:
+                    notes.append(f"bootstrap_p50={uncertainty.get('bootstrap_p50')}")
+                if uncertainty.get("bootstrap_p90") is not None:
+                    notes.append(f"bootstrap_p90={uncertainty.get('bootstrap_p90')}")
+                if uncertainty.get("tail_instability") is not None:
+                    notes.append(
+                        f"tail_instability={uncertainty.get('tail_instability')}"
+                    )
+                if notes:
+                    sections.append("Uncertainty: " + "; ".join(notes) + ".")
+
+        if isinstance(iteration, dict):
+            scenarios = iteration.get("top_scenarios")
+            iteration_metrics = iteration.get("iteration_metrics")
+            scenario_count = int(iteration.get("scenario_count") or 0)
+            best_scenario_id = None
+            if isinstance(iteration_metrics, dict):
+                best_scenario_id = iteration_metrics.get("best_scenario_id")
+            sections.append(
+                f"Scenario search: evaluated {scenario_count} scenarios; best scenario={best_scenario_id or 'none'}."
+            )
+            if isinstance(scenarios, list) and scenarios:
+                best_item = None
+                if best_scenario_id is not None:
+                    for item in scenarios:
+                        if (
+                            isinstance(item, dict)
+                            and item.get("scenario_id") == best_scenario_id
+                        ):
+                            best_item = item
+                            break
+                if best_item is None and isinstance(scenarios[0], dict):
+                    best_item = scenarios[0]
+                if isinstance(best_item, dict):
+                    summary = str(best_item.get("summary", "")).strip()
+                    score = best_item.get("score")
+                    if summary or score is not None:
+                        best_line = "Best scenario detail:"
+                        if score is not None:
+                            best_line += f" score={score}."
+                        if summary:
+                            best_line += f" {summary}"
+                        sections.append(best_line)
+
+        if isinstance(results, dict):
+            row_count = results.get("result_row_count")
+            if row_count is not None:
+                sections.append(
+                    f"Results snapshot: {row_count} underwriting years in the latest results table."
+                )
+
+        sections.append(
+            "Retry later if you want a model-written narrative, but the diagnostics and scenario search above completed successfully."
+        )
+        return "\n\n".join(section for section in sections if section.strip())

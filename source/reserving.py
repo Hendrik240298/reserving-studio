@@ -6,7 +6,7 @@ from source.triangle import Triangle
 import chainladder as cl
 import pandas as pd
 import logging
-from typing import Any, Optional, Tuple, Literal
+from typing import Any, Optional, Tuple, Literal, cast
 
 
 DEFAULT_BF_APRIORI = 0.6
@@ -25,6 +25,26 @@ class Reserving:
         self._selected_ultimate_by_uwy: dict[str, str] = {}
 
     @staticmethod
+    def _normalize_average(average: object) -> Literal["volume", "simple"]:
+        value = str(average).strip().lower()
+        aliases = {
+            "volume": "volume",
+            "weighted": "volume",
+            "weighted_average": "volume",
+            "weighted_average_all": "volume",
+            "volume_weighted": "volume",
+            "volume_weighted_average": "volume",
+            "volume_weighted_all": "volume",
+            "simple": "simple",
+            "simple_average": "simple",
+            "arithmetic": "simple",
+        }
+        normalized = aliases.get(value)
+        if normalized is not None:
+            return cast(Literal["volume", "simple"], normalized)
+        raise ValueError(f"average must be 'volume' or 'simple', got '{average}'")
+
+    @staticmethod
     def _origin_to_uwy_label(origin: object) -> str:
         if hasattr(origin, "year"):
             return str(origin.year)
@@ -39,6 +59,30 @@ class Reserving:
         if value in {"chainladder", "bornhuetter_ferguson"}:
             return value
         return None
+
+    @staticmethod
+    def _normalize_tail_curve(
+        curve: object,
+    ) -> Literal["exponential", "inverse_power", "weibull"]:
+        value = str(curve).strip().lower().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "exponential": "exponential",
+            "exp": "exponential",
+            "inverse_power": "inverse_power",
+            "inversepower": "inverse_power",
+            "power": "inverse_power",
+            "power_curve": "inverse_power",
+            "powercurve": "inverse_power",
+            "inverse_power_curve": "inverse_power",
+            "weibull": "weibull",
+        }
+        normalized = aliases.get(value)
+        if normalized is not None:
+            return cast(Literal["exponential", "inverse_power", "weibull"], normalized)
+        raise ValueError(
+            "curve must be one of 'exponential', 'inverse_power' or 'weibull', "
+            f"got '{curve}'"
+        )
 
     @staticmethod
     def _parse_cdf_label_to_age(label: object) -> int | None:
@@ -59,8 +103,7 @@ class Reserving:
         drop: Optional[list] = None,
         drop_valuation: Optional[list] = None,
     ):
-        if average not in ("volume", "simple"):
-            raise ValueError(f"average must be 'volume' or 'simple', got '{average}'")
+        average = self._normalize_average(average)
 
         # validate drop format
         if drop is not None:
@@ -114,10 +157,7 @@ class Reserving:
         projection_period: Optional[int] = None,
         fit_period: Optional[Tuple[int, Optional[int]]] = None,
     ):
-        if curve not in ("exponential", "inverse_power", "weibull"):
-            raise ValueError(
-                f"curve is {curve}, but has to be: 'exponential', 'inverse_power' or 'weibull'"
-            )
+        curve = self._normalize_tail_curve(curve)
         params: dict[str, Any] = {
             "curve": curve,
         }

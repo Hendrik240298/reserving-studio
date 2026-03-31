@@ -52,6 +52,7 @@ class AIReviewService:
         )
 
         backend = InMemoryReservingBackend.__new__(InMemoryReservingBackend)
+        backend._observability_enabled = False
         backend._diagnostics_service = DiagnosticsService()
         backend._uncertainty_service = UncertaintyService()
         context = SessionContext(
