@@ -23,6 +23,9 @@ from source.api.schemas import (
 
 
 class _BackendStub:
+    def __init__(self) -> None:
+        self.last_reserve_change_payload = None
+
     def get_data_view(self, payload):
         return DataViewResponse(
             session_id=payload.session_id,
@@ -76,6 +79,7 @@ class _BackendStub:
         )
 
     def explain_reserve_change(self, payload):
+        self.last_reserve_change_payload = payload
         return ReserveChangeResponse(
             session_id=payload.session_id,
             baseline={"total_ibnr": 100.0},
@@ -136,6 +140,18 @@ class _BackendStub:
                     "final_ultimate": "chainladder",
                     "selected_ultimate_by_uwy": {},
                 },
+                "recommendations": [
+                    {
+                        "code": "RECOMMEND_DROP_2022_12",
+                        "message": "Test dropping AY 2022, age 12 from development selection.",
+                        "rationale": "Robust link-ratio outlier by development age.",
+                        "proposed_parameters": {
+                            "drop": [["2022", 12]],
+                            "average": "volume",
+                        },
+                        "evidence": {"evidence_id": "ev-drop-2022-12"},
+                    }
+                ],
             },
             scenario={
                 "scenario_id": "derived_drop_max_per_development_period",
@@ -271,6 +287,19 @@ def test_backend_tools_support_new_ai_tools() -> None:
         {"session_id": "s-1"},
     )
     assert derived_detail["candidate_parameters"]["drop"] == [["2022", 12]]
+    assert derived_detail["drop_details"] == [
+        {
+            "origin": "2022",
+            "development_period": 12,
+            "observed_a2a": 2.1,
+            "support_status": "explicit_recommendation",
+            "reason_label": "drop_recommendation",
+            "message": "Test dropping AY 2022, age 12 from development selection.",
+            "rationale": "Robust link-ratio outlier by development age.",
+            "evidence_id": "ev-drop-2022-12",
+            "code": "RECOMMEND_DROP_2022_12",
+        }
+    ]
 
     tail_eval = tools.call_tool(
         "tool_evaluate_tail_fit",
@@ -321,3 +350,36 @@ def test_backend_tools_support_new_ai_tools() -> None:
         "Collapsed tail.fit_period to [12, 48].",
         "Dropped 2 invalid selected_ultimate_by_uwy override(s) and kept only method values.",
     ]
+
+
+def test_explain_reserve_change_drops_invalid_drop_entries() -> None:
+    backend = _BackendStub()
+    tools = BackendReservingTools(backend=backend)
+
+    reserve_change = tools.call_tool(
+        "tool_explain_reserve_change",
+        {
+            "session_id": "s-1",
+            "average": "volume",
+            "drop": [["2001", None], ["2002", 12], [None, 24]],
+            "drop_valuation": [["1999", None], ["2000", 12], ["2001"]],
+            "tail": {
+                "curve": "weibull",
+                "attachment_age": None,
+                "projection_period": 0,
+                "fit_period": [],
+            },
+            "bf_apriori": {},
+            "final_ultimate": "chainladder",
+            "selected_ultimate_by_uwy": {},
+        },
+    )
+
+    assert reserve_change["delta_ibnr"] == 20.0
+    assert reserve_change["input_adjustments"] == [
+        "Dropped 2 invalid drop entries.",
+        "Dropped 2 invalid drop_valuation entries.",
+    ]
+    assert backend.last_reserve_change_payload is not None
+    assert backend.last_reserve_change_payload.drop == [["2002", 12]]
+    assert backend.last_reserve_change_payload.drop_valuation == [["2000", 12]]

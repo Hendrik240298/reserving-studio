@@ -62,6 +62,7 @@ class DiagnosticsService:
         backtest_mae_threshold: float = 0.2,
         calendar_drift_slope_threshold: float = 0.02,
         tail_sensitivity_threshold: float = 0.03,
+        tail_attachment_cut_threshold: float = 0.1,
         paid_incurred_gap_threshold: float = 0.2,
         data_quality_critical_missing_threshold: float = 0.01,
         incurred_decrease_materiality_threshold: float = 0.15,
@@ -91,6 +92,7 @@ class DiagnosticsService:
         self._backtest_mae_threshold = float(backtest_mae_threshold)
         self._calendar_drift_slope_threshold = float(calendar_drift_slope_threshold)
         self._tail_sensitivity_threshold = float(tail_sensitivity_threshold)
+        self._tail_attachment_cut_threshold = float(tail_attachment_cut_threshold)
         self._paid_incurred_gap_threshold = float(paid_incurred_gap_threshold)
         self._data_quality_critical_missing_threshold = float(
             data_quality_critical_missing_threshold
@@ -127,6 +129,7 @@ class DiagnosticsService:
         findings.extend(self._incurred_on_premium_development(heatmap_data))
         findings.extend(self._rolling_origin_backtest(heatmap_data))
         findings.extend(self._calendar_year_drift(heatmap_data))
+        findings.extend(self._reserve_adequacy_check(results_df))
         findings.extend(
             self._tail_sensitivity_check(results_df, heatmap_data, maturity)
         )
@@ -1451,6 +1454,16 @@ class DiagnosticsService:
         if link_ratios is None or link_ratios.empty:
             return None
 
+        selected_ldf_row = link_ratios.loc[link_ratios.index.astype(str).isin(["LDF"])]
+        selected_ldf_map: dict[int, float] = {}
+        if not selected_ldf_row.empty:
+            for col, raw_value in selected_ldf_row.iloc[0].items():
+                age = self._parse_int(col)
+                value = self._scalar_or_none(raw_value)
+                if age is None or value is None or value <= 0:
+                    continue
+                selected_ldf_map[age] = value
+
         triangle_only = link_ratios.loc[
             ~link_ratios.index.astype(str).isin(["LDF", "Tail"])
         ]
@@ -1459,6 +1472,7 @@ class DiagnosticsService:
             return None
 
         age_scores: list[tuple[int, float]] = []
+        age_medians: list[tuple[int, float]] = []
         for col in numeric.columns:
             series = numeric[col].dropna()
             if len(series) < 3:
@@ -1469,6 +1483,7 @@ class DiagnosticsService:
             med = float(series.median())
             if med == 0:
                 continue
+            age_medians.append((age, med))
             iqr_ratio = abs(float(series.quantile(0.75) - series.quantile(0.25)) / med)
             age_scores.append((age, iqr_ratio))
 
@@ -1476,60 +1491,185 @@ class DiagnosticsService:
             return None
 
         age_scores.sort(key=lambda item: item[0])
-        stable_tail_ages = [
-            age for age, score in age_scores if score <= self._link_ratio_iqr_threshold
-        ]
-        if len(stable_tail_ages) >= 3:
-            start_age = stable_tail_ages[-3]
-        else:
-            start_age = age_scores[-3][0]
-        upper_age = age_scores[-1][0]
-
-        candidate_fit_periods: list[list[int]] = [[start_age, upper_age]]
-        if start_age > 1:
-            candidate_fit_periods.append([start_age - 1, upper_age])
-        if len(stable_tail_ages) >= 4:
-            candidate_fit_periods.append([stable_tail_ages[-4], upper_age])
-
-        scored_periods: list[tuple[list[int], float]] = []
+        ordered_ages = [age for age, _score in age_scores]
         age_score_map = {age: score for age, score in age_scores}
-        for period in candidate_fit_periods:
-            period_ages = [
-                age
-                for age in sorted(age_score_map.keys())
-                if period[0] <= age <= period[1]
-            ]
-            if not period_ages:
+        age_median_map = {age: med for age, med in age_medians}
+        upper_age = ordered_ages[-1]
+        earliest_start_index = min(3, max(len(ordered_ages) - 3, 0))
+        near_one_threshold = 1.15
+
+        attachment_candidates: list[tuple[int, float, int | None, float | None]] = []
+        for start_index in range(earliest_start_index, max(len(ordered_ages) - 1, 0)):
+            remaining_ages = ordered_ages[start_index:]
+            if len(remaining_ages) < 2:
                 continue
+            if not all(
+                age_median_map.get(age, float("inf")) <= near_one_threshold
+                for age in remaining_ages
+            ):
+                continue
+            attachment_age = remaining_ages[0]
+            previous_age = ordered_ages[start_index - 1] if start_index > 0 else None
+            previous_ldf = None
+            continuity_gap = 0.0
+            if previous_age is not None:
+                previous_ldf = selected_ldf_map.get(
+                    previous_age, age_median_map.get(previous_age)
+                )
+                current_ldf = age_median_map.get(attachment_age)
+                if (
+                    previous_ldf is not None
+                    and previous_ldf > 0
+                    and current_ldf is not None
+                ):
+                    continuity_gap = max(previous_ldf - current_ldf, 0.0) / previous_ldf
+            attachment_candidates.append(
+                (attachment_age, continuity_gap, previous_age, previous_ldf)
+            )
+
+        acceptable_attachment_candidates = [
+            item
+            for item in attachment_candidates
+            if item[1] <= self._tail_attachment_cut_threshold
+        ]
+        if acceptable_attachment_candidates:
+            (
+                recommended_attachment_age,
+                attachment_gap_ratio,
+                previous_age,
+                previous_ldf,
+            ) = acceptable_attachment_candidates[0]
+        elif attachment_candidates:
+            (
+                recommended_attachment_age,
+                attachment_gap_ratio,
+                previous_age,
+                previous_ldf,
+            ) = min(
+                attachment_candidates,
+                key=lambda item: (item[1], item[0]),
+            )
+        else:
+            recommended_attachment_age = ordered_ages[earliest_start_index]
+            attachment_gap_ratio = 0.0
+            previous_age = (
+                ordered_ages[earliest_start_index - 1]
+                if earliest_start_index > 0
+                else None
+            )
+            previous_ldf = (
+                selected_ldf_map.get(previous_age, age_median_map.get(previous_age))
+                if previous_age is not None
+                else None
+            )
+
+        candidate_fit_periods: list[list[int]] = []
+        scored_periods: list[tuple[list[int], float, bool]] = []
+        for start_index in range(earliest_start_index, max(len(ordered_ages) - 1, 0)):
+            period_ages = ordered_ages[start_index:]
+            if len(period_ages) < 2:
+                continue
+            period = [period_ages[0], upper_age]
+            candidate_fit_periods.append(period)
             avg_dispersion = sum(age_score_map[age] for age in period_ages) / len(
                 period_ages
             )
-            scored_periods.append((period, float(avg_dispersion)))
+            non_negative_tail = all(
+                age_median_map.get(age, 0.0) >= 1.0 for age in period_ages
+            )
+            near_one_tail = all(
+                age_median_map.get(age, float("inf")) <= near_one_threshold
+                for age in period_ages
+            )
+            good_fit = (
+                avg_dispersion <= self._link_ratio_iqr_threshold
+                and non_negative_tail
+                and near_one_tail
+            )
+            scored_periods.append((period, float(avg_dispersion), good_fit))
 
         if not scored_periods:
             return None
-        scored_periods.sort(key=lambda item: item[1])
-        recommended_fit_period = scored_periods[0][0]
+        preferred_periods = [item for item in scored_periods if item[2]]
+        if preferred_periods:
+            preferred_periods.sort(key=lambda item: (item[0][0], item[1]))
+            recommended_fit_period = preferred_periods[0][0]
+        else:
+            scored_periods.sort(key=lambda item: (item[1], item[0][0]))
+            recommended_fit_period = scored_periods[0][0]
 
         return DiagnosticRecommendation(
             code="RECOMMEND_TAIL_FIT",
             priority="medium",
-            message="Test Weibull and inverse-power tail fits anchored on stable late development ages.",
-            rationale="Late-age link ratios with lower dispersion improve tail fit stability.",
+            message="Attach the tail as soon as development has flattened toward 1.0, then fit Weibull and inverse-power curves on the earliest stable late-age window above 1.0.",
+            rationale="Use the tail to smooth late age-to-age fluctuation around 1.0 and replace observed sub-1.0 factors beyond the attachment age with convergence from above.",
             evidence={
-                "metric_id": "tail_fit_start_age",
-                "value": float(recommended_fit_period[0]),
+                "metric_id": "tail_attachment_age",
+                "value": float(recommended_attachment_age),
                 "threshold": float(upper_age),
-                "basis": "fit-period selected by minimum mean IQR/median dispersion across candidate intervals",
+                "basis": "earliest attachment where remaining median link ratios are near 1.0 without a material drop from the selected LDF immediately before attachment; fit window chosen from the earliest stable interval whose medians stay above 1.0",
+                "attachment_gap_ratio": round(float(attachment_gap_ratio), 6),
+                "attachment_previous_age": previous_age,
+                "attachment_previous_ldf": round(float(previous_ldf), 6)
+                if previous_ldf is not None
+                else None,
+                "late_subunit_median_ages": [
+                    age
+                    for age in ordered_ages
+                    if age >= recommended_attachment_age
+                    and age_median_map.get(age, 1.0) < 1.0
+                ],
             },
             proposed_parameters={
                 "tail": {
                     "curve_candidates": ["weibull", "inverse_power", "exponential"],
+                    "attachment_age_candidates": [
+                        item[0] for item in attachment_candidates
+                    ]
+                    or [recommended_attachment_age],
+                    "recommended_attachment_age": recommended_attachment_age,
                     "fit_period_candidates": candidate_fit_periods,
                     "recommended_fit_period": recommended_fit_period,
                 }
             },
         )
+
+    @staticmethod
+    def _reserve_adequacy_check(
+        results_df: pd.DataFrame | None,
+    ) -> list[DiagnosticFinding]:
+        if results_df is None or len(results_df) == 0:
+            return []
+
+        total_incurred = float(results_df.get("incurred", pd.Series(dtype=float)).sum())
+        total_ultimate = float(results_df.get("ultimate", pd.Series(dtype=float)).sum())
+        if total_ultimate >= total_incurred:
+            return []
+
+        ibnr_ratio = (
+            (total_ultimate - total_incurred) / total_incurred
+            if total_incurred > 0
+            else 0.0
+        )
+        return [
+            DiagnosticFinding(
+                code="NEGATIVE_IBNR_TOTAL",
+                severity="critical",
+                message=(
+                    "Total selected ultimate is below incurred, implying negative total IBNR and an implausible reserve outcome."
+                ),
+                evidence={
+                    "metric_id": "total_ibnr_ratio",
+                    "value": ibnr_ratio,
+                    "threshold": 0.0,
+                    "basis": "(total ultimate - total incurred) / total incurred",
+                },
+                suggested_actions=[
+                    "Review aggressive drops and tail assumptions that may be driving development below 1.0",
+                    "Constrain tail and selected development so cumulative development does not fall below 1.0",
+                ],
+            )
+        ]
 
     @staticmethod
     def _incremental_from_cumulative(cumulative_df: pd.DataFrame) -> pd.DataFrame:

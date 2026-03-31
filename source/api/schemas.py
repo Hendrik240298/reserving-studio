@@ -121,6 +121,11 @@ class TailEvaluationResponse(BaseModel):
     residuals: list[dict] = Field(default_factory=list)
     observed_ldf: list[dict] = Field(default_factory=list)
     fitted_tail_ldf: list[dict] = Field(default_factory=list)
+    attachment_previous_age: int | None = None
+    attachment_previous_ldf: float | None = None
+    attachment_first_fitted_ldf: float | None = None
+    attachment_gap_ratio: float | None = None
+    late_subunit_observed_ages: list[int] = Field(default_factory=list)
     input_adjustments: list[str] = Field(default_factory=list)
 
 

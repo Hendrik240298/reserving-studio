@@ -48,6 +48,90 @@ def test_diagnostics_v2_returns_findings_and_recommendations() -> None:
     assert "RECOMMEND_TAIL_FIT" in recommendation_codes
     assert run_result.metrics["severity_score"] is not None
 
+    tail_recommendation = next(
+        item for item in run_result.recommendations if item.code == "RECOMMEND_TAIL_FIT"
+    )
+    assert (
+        tail_recommendation.proposed_parameters["tail"]["recommended_attachment_age"]
+        == 36
+    )
+    assert tail_recommendation.proposed_parameters["tail"][
+        "recommended_fit_period"
+    ] == [36, 48]
+
+
+def test_tail_recommendation_prefers_earliest_acceptable_non_negative_window() -> None:
+    link_ratios = pd.DataFrame(
+        {
+            12: [2.10, 2.00, 2.20, 2.05, 2.15],
+            24: [1.60, 1.55, 1.58, 1.61, 1.57],
+            36: [1.25, 1.22, 1.24, 1.23, 1.21],
+            48: [0.98, 0.99, 0.97, 0.98, 0.96],
+            60: [1.05, 1.04, 1.03, 1.04, 1.05],
+            72: [1.03, 1.02, 1.01, 1.02, 1.03],
+            84: [1.01, 1.01, 1.00, 1.01, 1.02],
+        },
+        index=pd.Index(["2018", "2019", "2020", "2021", "2022"]),
+    )
+
+    recommendation = DiagnosticsService()._tail_recommendation(
+        {"link_ratios": link_ratios}
+    )
+
+    assert recommendation is not None
+    assert (
+        recommendation.proposed_parameters["tail"]["recommended_attachment_age"] == 60
+    )
+    assert recommendation.proposed_parameters["tail"]["recommended_fit_period"] == [
+        60,
+        84,
+    ]
+    assert recommendation.evidence["late_subunit_median_ages"] == []
+
+
+def test_tail_recommendation_avoids_large_attachment_cut_from_previous_ldf() -> None:
+    link_ratios = pd.DataFrame(
+        {
+            12: [2.10, 2.05, 2.00, 2.08, 2.02],
+            24: [1.45, 1.43, 1.46, 1.44, 1.42],
+            36: [1.22, 1.21, 1.20, 1.22, 1.21],
+            48: [1.00, 1.01, 0.99, 1.00, 1.00],
+            60: [1.03, 1.02, 1.01, 1.02, 1.03],
+            72: [1.01, 1.01, 1.00, 1.01, 1.02],
+        },
+        index=pd.Index(["2018", "2019", "2020", "2021", "2022"]),
+    )
+    link_ratios.loc["LDF"] = [2.05, 1.44, 1.22, 1.0, 1.02, 1.01]
+
+    recommendation = DiagnosticsService()._tail_recommendation(
+        {"link_ratios": link_ratios}
+    )
+
+    assert recommendation is not None
+    assert (
+        recommendation.proposed_parameters["tail"]["recommended_attachment_age"] == 60
+    )
+    assert recommendation.evidence["attachment_previous_age"] == 48
+    assert recommendation.evidence["attachment_gap_ratio"] == 0.0
+
+
+def test_diagnostics_flags_negative_total_ibnr() -> None:
+    results_df = pd.DataFrame(
+        {
+            "incurred": [100.0, 120.0, 140.0],
+            "Premium": [1000.0, 1000.0, 1000.0],
+            "cl_ultimate": [90.0, 100.0, 110.0],
+            "bf_ultimate": [95.0, 105.0, 115.0],
+            "ultimate": [90.0, 100.0, 110.0],
+        },
+        index=pd.Index(["2020", "2021", "2022"]),
+    )
+
+    run_result = DiagnosticsService().run(results_df=results_df, heatmap_data=None)
+    codes = {item.code for item in run_result.findings}
+
+    assert "NEGATIVE_IBNR_TOTAL" in codes
+
 
 def test_diagnostics_v2_handles_empty_input() -> None:
     service = DiagnosticsService()

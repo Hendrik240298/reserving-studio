@@ -41,6 +41,12 @@ SYSTEM_PROMPT = (
     "If the user specifies a notation preference, terminology preference, or unit preference, follow it consistently for the rest of the conversation unless they change it again. "
     "If the user asks about movements 'this quarter' or 'current quarter', interpret that as the latest valuation period / latest diagonal. "
     "For questions about claims movements this quarter, inspect incurred incremental latest-diagonal movement first, not premium first. "
+    "When recommending tail settings, proactively check for late selected LDFs below 1.0 and for a sharp drop between the selected LDF just before attachment and the first fitted tail LDF. "
+    "Do not wait for the user to point those issues out. If either issue appears, revise the tail recommendation and explain the issue plainly. "
+    "Prefer earlier attachment to smooth late around-1.0 fluctuation, but avoid recommendations where the first tail factor creates a material cut versus the previous selected LDF. "
+    "When the user asks which drops were used or why a drop was used, load exact scenario or derived-drop detail first. "
+    "Only assign a drop reason if the tool output gives explicit support for that exact AY/development pair. Otherwise say the exact driver is not confirmed from current evidence. "
+    "Do not relabel a drop as 'below 1.0', 'negative development', 'high outlier', or similar unless that label is directly supported by the tool output for that same drop. "
     "Ground all material statements in tool outputs. "
     "Decide for yourself whether scenario iteration is needed. "
     "Use scenario iteration when the user is asking for recommendations, best alternatives, scenario comparisons, or changes to drops, tail fitting, BF apriori, or final selection. "
@@ -558,7 +564,8 @@ class AssistantService:
         if playbook == "tail_selection":
             return (
                 "Selected playbook: Tail Selection. "
-                "Use tested tail-fit evaluation before recommending or comparing tail methods."
+                "Use tested tail-fit evaluation before recommending or comparing tail methods. "
+                "Proactively comment on sub-1 late selected LDFs, whether the tail smooths them from above, and whether the attachment creates too sharp a cut from the previous selected LDF."
             )
         if playbook == "data_exploration":
             return (

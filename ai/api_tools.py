@@ -423,6 +423,15 @@ def _sanitize_recalculate_like_arguments(
                 f"Dropped {dropped} invalid selected_ultimate_by_uwy override(s) and kept only method values."
             )
         sanitized["selected_ultimate_by_uwy"] = valid_selected
+    for field_name in ("drop", "drop_valuation"):
+        field_value = sanitized.get(field_name)
+        if isinstance(field_value, list):
+            sanitized_pairs, dropped = _sanitize_drop_like_pairs(field_value)
+            if dropped:
+                adjustments.append(
+                    f"Dropped {dropped} invalid {field_name} entr{'y' if dropped == 1 else 'ies'}."
+                )
+            sanitized[field_name] = sanitized_pairs
     return sanitized, adjustments
 
 
@@ -465,6 +474,24 @@ def _normalize_selected_method(value: object) -> str | None:
     if normalized in {"chainladder", "bornhuetter_ferguson"}:
         return normalized
     return None
+
+
+def _sanitize_drop_like_pairs(value: list[Any]) -> tuple[list[list[str | int]], int]:
+    valid_pairs: list[list[str | int]] = []
+    dropped = 0
+    for pair in value:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            dropped += 1
+            continue
+        origin, development = pair
+        if origin is None or development is None:
+            dropped += 1
+            continue
+        if not isinstance(development, int) or isinstance(development, bool):
+            dropped += 1
+            continue
+        valid_pairs.append([str(origin), development])
+    return valid_pairs, dropped
 
 
 def _json_default(value: Any) -> Any:

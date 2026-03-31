@@ -864,6 +864,13 @@ def extract_last_derived_drop_detail(
         "candidate_score": candidate.get("score"),
         "baseline": payload.get("baseline", {}),
         "candidate": candidate,
+        "drop_details": _extract_drop_details(
+            candidate,
+            drop=payload.get("drop", []),
+            selected_rows=payload.get("selected_rows")
+            or payload.get("top_factors", []),
+            rule=payload.get("rule", {}),
+        ),
     }
 
 
@@ -932,9 +939,227 @@ def extract_scenario_detail(
         },
         "top_findings": _top_findings(scenario.get("findings")),
         "top_recommendations": _top_recommendations(scenario.get("recommendations")),
+        "drop_details": _extract_drop_details(
+            scenario,
+            drop=(
+                scenario.get("parameters", {}).get("drop", [])
+                if isinstance(scenario.get("parameters"), dict)
+                else []
+            ),
+        ),
         "uncertainty": _summarize_uncertainty(scenario.get("uncertainty")),
         "lineage": scenario.get("lineage", {}),
     }
+
+
+def _extract_drop_details(
+    payload: dict[str, Any] | None,
+    *,
+    drop: object,
+    selected_rows: object = None,
+    rule: object = None,
+) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    details: list[dict[str, Any]] = []
+    selected_map = _selected_row_map(selected_rows)
+    recommendations = payload.get("recommendations")
+    findings = payload.get("findings")
+    rule_list = _rule_list(rule)
+    for item in drop or []:
+        pair = _normalize_drop_pair(item)
+        if pair is None:
+            continue
+        origin, age = pair
+        matched_rec = _match_drop_recommendation(
+            recommendations, origin=origin, age=age
+        )
+        matched_finding = _match_drop_finding(findings, origin=origin, age=age)
+        observed = selected_map.get((origin, age), {})
+        detail = {
+            "origin": origin,
+            "development_period": age,
+            "observed_a2a": observed.get("a2a"),
+            "support_status": "unsupported",
+            "reason_label": None,
+            "message": None,
+            "rationale": None,
+            "evidence_id": None,
+            "code": None,
+        }
+        if matched_rec is not None:
+            evidence = (
+                matched_rec.get("evidence")
+                if isinstance(matched_rec.get("evidence"), dict)
+                else {}
+            )
+            detail.update(
+                {
+                    "support_status": "explicit_recommendation",
+                    "reason_label": _reason_label_from_code(matched_rec.get("code")),
+                    "message": matched_rec.get("message"),
+                    "rationale": matched_rec.get("rationale"),
+                    "evidence_id": evidence.get("evidence_id"),
+                    "code": matched_rec.get("code"),
+                }
+            )
+        elif matched_finding is not None:
+            evidence = (
+                matched_finding.get("evidence")
+                if isinstance(matched_finding.get("evidence"), dict)
+                else {}
+            )
+            detail.update(
+                {
+                    "support_status": "matched_finding",
+                    "reason_label": _reason_label_from_code(
+                        matched_finding.get("code")
+                    ),
+                    "message": matched_finding.get("message"),
+                    "rationale": None,
+                    "evidence_id": evidence.get("evidence_id"),
+                    "code": matched_finding.get("code"),
+                }
+            )
+        else:
+            rule_reason = _rule_based_reason(
+                origin=origin,
+                age=age,
+                observed_a2a=observed.get("a2a"),
+                rule_list=rule_list,
+            )
+            if rule_reason is not None:
+                detail.update(rule_reason)
+        details.append(detail)
+    return details
+
+
+def _selected_row_map(selected_rows: object) -> dict[tuple[str, int], dict[str, Any]]:
+    mapping: dict[tuple[str, int], dict[str, Any]] = {}
+    if not isinstance(selected_rows, list):
+        return mapping
+    for item in selected_rows:
+        if not isinstance(item, dict):
+            continue
+        pair = _normalize_drop_pair(
+            [item.get("origin"), item.get("development_period")]
+        )
+        if pair is None:
+            continue
+        mapping[pair] = dict(item)
+    return mapping
+
+
+def _normalize_drop_pair(item: object) -> tuple[str, int] | None:
+    if not isinstance(item, (list, tuple)) or len(item) != 2:
+        return None
+    origin = str(item[0])
+    try:
+        age = int(item[1])
+    except (TypeError, ValueError):
+        return None
+    return (origin, age)
+
+
+def _match_drop_recommendation(
+    recommendations: object,
+    *,
+    origin: str,
+    age: int,
+) -> dict[str, Any] | None:
+    if not isinstance(recommendations, list):
+        return None
+    target = [origin, age]
+    for item in recommendations:
+        if not isinstance(item, dict):
+            continue
+        proposed = (
+            item.get("proposed_parameters")
+            if isinstance(item.get("proposed_parameters"), dict)
+            else {}
+        )
+        drops = proposed.get("drop") if isinstance(proposed, dict) else None
+        if not isinstance(drops, list):
+            continue
+        if any(_normalize_drop_pair(candidate) == (origin, age) for candidate in drops):
+            return item
+    return None
+
+
+def _match_drop_finding(
+    findings: object,
+    *,
+    origin: str,
+    age: int,
+) -> dict[str, Any] | None:
+    if not isinstance(findings, list):
+        return None
+    suffix = f"_{origin}_{age}"
+    for item in findings:
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("code", ""))
+        if code.endswith(suffix):
+            return item
+    return None
+
+
+def _rule_list(rule: object) -> list[dict[str, Any]]:
+    if not isinstance(rule, dict):
+        return []
+    if isinstance(rule.get("rules"), list):
+        return [item for item in rule.get("rules", []) if isinstance(item, dict)]
+    if isinstance(rule.get("primary"), dict):
+        return [rule.get("primary")]
+    return [rule]
+
+
+def _rule_based_reason(
+    *,
+    origin: str,
+    age: int,
+    observed_a2a: object,
+    rule_list: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    a2a = None
+    try:
+        if observed_a2a is not None:
+            a2a = float(observed_a2a)
+    except (TypeError, ValueError):
+        a2a = None
+    for rule in rule_list:
+        operator = str(rule.get("threshold_operator", "") or "").strip().lower()
+        threshold = rule.get("threshold_value")
+        try:
+            threshold_value = float(threshold) if threshold is not None else None
+        except (TypeError, ValueError):
+            threshold_value = None
+        if (
+            operator == "lt"
+            and threshold_value == 1.0
+            and a2a is not None
+            and a2a < 1.0
+        ):
+            return {
+                "support_status": "explicit_rule",
+                "reason_label": "rule_threshold_lt_1.0",
+                "message": "Selected by an explicit rule targeting observed factors below 1.0.",
+                "rationale": "This reason comes from the configured selection rule, not from an inferred narrative label.",
+                "evidence_id": None,
+                "code": None,
+            }
+    return None
+
+
+def _reason_label_from_code(code: object) -> str | None:
+    text = str(code or "")
+    if text.startswith("RECOMMEND_DROP_"):
+        return "drop_recommendation"
+    if text.startswith("LINK_RATIO_OUTLIER_"):
+        return "link_ratio_outlier"
+    if text.startswith("LARGE_LOSS_PROXY_"):
+        return "large_loss_proxy"
+    return None
 
 
 def extract_result_row_detail(

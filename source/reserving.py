@@ -4,6 +4,7 @@ follow the workflow in ``https://chainladder-python.readthedocs.io/en/latest/use
 
 from source.triangle import Triangle
 import chainladder as cl
+import numpy as np
 import pandas as pd
 import logging
 from typing import Any, Optional, Tuple, Literal, cast
@@ -96,6 +97,33 @@ class Reserving:
             return int(text)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _enforce_monotone_tail_vector(values: np.ndarray) -> np.ndarray:
+        adjusted = np.array(values, dtype=float, copy=True)
+        if adjusted.size == 0:
+            return adjusted
+        adjusted = np.where(np.isfinite(adjusted), adjusted, 1.0)
+        adjusted = np.maximum(adjusted, 1.0)
+        adjusted[..., -1] = 1.0
+        for index in range(adjusted.shape[-1] - 2, -1, -1):
+            adjusted[..., index] = np.maximum(
+                adjusted[..., index],
+                adjusted[..., index + 1],
+            )
+        return adjusted
+
+    @staticmethod
+    def _cdf_from_tail_ldf(values: np.ndarray) -> np.ndarray:
+        adjusted = np.array(values, dtype=float, copy=True)
+        if adjusted.size == 0:
+            return adjusted
+        cdf = np.ones_like(adjusted, dtype=float)
+        running = np.ones(adjusted.shape[:-1], dtype=float)
+        for index in range(adjusted.shape[-1] - 1, -1, -1):
+            running = running * adjusted[..., index]
+            cdf[..., index] = running
+        return cdf
 
     def set_development(
         self,
@@ -344,29 +372,55 @@ class Reserving:
             return self
 
         def transform(self, X):
-            # set the final ldf factor (tail) to 1.0 for the 'incurred' triangle to prevent over-projection
             X_tail_corrected = X.copy()
-            # Find the index of 'incurred' in the vdims
             incurred_idx = list(X.ldf_.vdims).index("incurred")
             logger = logging.getLogger(__name__)
+            corrected_ldf = Reserving._enforce_monotone_tail_vector(
+                X_tail_corrected.ldf_.values[:, incurred_idx, :, :]
+            )
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("incurred index in vdims: %s", incurred_idx)
                 logger.debug(
                     "Original tail LDFs: %s",
-                    X_tail_corrected.ldf_.values[:, incurred_idx, :, -1],
+                    X_tail_corrected.ldf_.values[:, incurred_idx, :, :],
                 )
-            # Set the tail link ratio (last development period) to 1.0 for 'incurred'
-            X_tail_corrected.ldf_.values[:, incurred_idx, :, -1] = 1.0
+            X_tail_corrected.ldf_.values[:, incurred_idx, :, :] = corrected_ldf
+            if hasattr(X_tail_corrected, "cdf_") and X_tail_corrected.cdf_ is not None:
+                X_tail_corrected.cdf_.values[:, incurred_idx, :, :] = (
+                    Reserving._cdf_from_tail_ldf(corrected_ldf)
+                )
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
                     "Corrected tail LDFs: %s",
-                    X_tail_corrected.ldf_.values[:, incurred_idx, :, -1],
+                    X_tail_corrected.ldf_.values[:, incurred_idx, :, :],
                 )
             return X_tail_corrected
 
     def correct_tail(self):
         incurred_idx = list(self.result.named_steps.tail.ldf_.vdims).index("incurred")
-        self.result.named_steps.tail.ldf_.values[:, incurred_idx, :, -1] = 1.0
+        corrected_ldf = self._enforce_monotone_tail_vector(
+            self.result.named_steps.tail.ldf_.values[:, incurred_idx, :, :]
+        )
+        corrected_cdf = self._cdf_from_tail_ldf(corrected_ldf)
+        self.result.named_steps.tail.ldf_.values[:, incurred_idx, :, :] = corrected_ldf
+        if self._chainladder_result is not None:
+            self._chainladder_result.named_steps.tail.ldf_.values[
+                :, incurred_idx, :, :
+            ] = corrected_ldf
+            self._chainladder_result.named_steps.tail.cdf_.values[
+                :, incurred_idx, :, :
+            ] = corrected_cdf
+        if self._bornhuetter_result is not None:
+            self._bornhuetter_result.named_steps.tail.ldf_.values[
+                :, incurred_idx, :, :
+            ] = corrected_ldf
+            self._bornhuetter_result.named_steps.tail.cdf_.values[
+                :, incurred_idx, :, :
+            ] = corrected_cdf
+        if self.result.named_steps.tail.cdf_ is not None:
+            self.result.named_steps.tail.cdf_.values[:, incurred_idx, :, :] = (
+                corrected_cdf
+            )
 
     def chainladder(self):
         pipe = cl.Pipeline(

@@ -4,6 +4,11 @@ This is currently a personal project to build a reserving workflow, including a 
 
 ## Preview
 
+### AI Chat Interface 
+
+<img src=".github/images/ai-interface.png" alt="AI interface" width="100%" />
+
+### reserving-studio
 The Data tab shows claims and premium triangles. You can toggle between incremental and cumulative triangles. Each triangle can also be viewed in relation to another one, for example incurred in relation to premium.
 
 <img src=".github/images/data-tab.png" alt="Data tab preview" width="100%" />

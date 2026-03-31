@@ -320,3 +320,75 @@ def test_claims_movement_question_prefetches_incurred_and_a2a_evidence() -> None
         "tool_get_data_view_summary",
         "tool_run_ldf_consistency_diagnostics",
     ]
+
+
+def test_tail_selection_prompt_includes_proactive_subunit_and_attachment_checks() -> (
+    None
+):
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ok",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+
+    client = _FakeClient(responses)
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", client)
+    setattr(service, "_tools", _FakeTools())
+    service._observability_enabled = False
+
+    result = service.answer(user_prompt="How should we set the tail?")
+
+    assert result == "ok"
+    system_messages = [
+        item.get("content", "")
+        for item in (client.last_messages or [])
+        if item.get("role") == "system"
+    ]
+    merged = "\n".join(system_messages).lower()
+    assert "late selected ldfs below 1.0" in merged
+    assert "sharp drop" in merged
+    assert "first fitted tail ldf" in merged
+
+
+def test_drop_reason_prompt_forbids_unsupported_reason_labels() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ok",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+
+    client = _FakeClient(responses)
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", client)
+    setattr(service, "_tools", _FakeTools())
+    service._observability_enabled = False
+
+    result = service.answer(user_prompt="List me all drops you have used")
+
+    assert result == "ok"
+    system_messages = [
+        item.get("content", "")
+        for item in (client.last_messages or [])
+        if item.get("role") == "system"
+    ]
+    merged = "\n".join(system_messages).lower()
+    assert "load exact scenario or derived-drop detail first" in merged
+    assert (
+        "only assign a drop reason if the tool output gives explicit support" in merged
+    )
+    assert "do not relabel a drop as 'below 1.0'" in merged

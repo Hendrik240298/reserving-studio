@@ -872,18 +872,24 @@ class InMemoryReservingBackend:
             fitted_points: list[dict[str, Any]] = []
             observed_values: list[float] = []
             fitted_values: list[float] = []
+            observed_by_age: dict[int, float] = {}
+            fitted_by_age: dict[int, float] = {}
             for col in link_ratios_raw.columns:
                 age = Reserving._parse_cdf_label_to_age(col)
                 if age is None:
                     continue
+                observed = self._to_optional_float(observed_row.iloc[0].get(col))
+                fitted = self._to_optional_float(fitted_row.iloc[0].get(col))
+                if observed is not None:
+                    observed_by_age[age] = observed
+                if fitted is not None:
+                    fitted_by_age[age] = fitted
                 if fit_period is not None:
                     start, end = fit_period
                     if age < start:
                         continue
                     if end is not None and age > end:
                         continue
-                observed = self._to_optional_float(observed_row.iloc[0].get(col))
-                fitted = self._to_optional_float(fitted_row.iloc[0].get(col))
                 if observed is None or fitted is None:
                     continue
                 observed_values.append(observed)
@@ -912,6 +918,38 @@ class InMemoryReservingBackend:
                         1.0 - np.sum((observed_series - fitted_series) ** 2) / denom
                     )
 
+            attachment_previous_age = None
+            attachment_previous_ldf = None
+            attachment_first_fitted_ldf = None
+            attachment_gap_ratio = None
+            late_subunit_observed_ages: list[int] = []
+            attachment_age = payload.tail.attachment_age
+            if attachment_age is not None:
+                prior_ages = [age for age in observed_by_age if age < attachment_age]
+                if prior_ages:
+                    attachment_previous_age = max(prior_ages)
+                    attachment_previous_ldf = observed_by_age.get(
+                        attachment_previous_age
+                    )
+                attachment_first_fitted_ldf = fitted_by_age.get(attachment_age)
+                if (
+                    attachment_previous_ldf is not None
+                    and attachment_previous_ldf > 0
+                    and attachment_first_fitted_ldf is not None
+                ):
+                    attachment_gap_ratio = (
+                        max(
+                            attachment_previous_ldf - attachment_first_fitted_ldf,
+                            0.0,
+                        )
+                        / attachment_previous_ldf
+                    )
+                late_subunit_observed_ages = [
+                    age
+                    for age, value in sorted(observed_by_age.items())
+                    if age >= attachment_age and value < 1.0
+                ]
+
             self._apply_params_to_reserving(context, baseline_params)
             context.last_results_payload = self._build_results_payload(
                 context.reserving
@@ -929,6 +967,17 @@ class InMemoryReservingBackend:
                 residuals=residuals,
                 observed_ldf=observed_points,
                 fitted_tail_ldf=fitted_points,
+                attachment_previous_age=attachment_previous_age,
+                attachment_previous_ldf=round(attachment_previous_ldf, 6)
+                if attachment_previous_ldf is not None
+                else None,
+                attachment_first_fitted_ldf=round(attachment_first_fitted_ldf, 6)
+                if attachment_first_fitted_ldf is not None
+                else None,
+                attachment_gap_ratio=round(attachment_gap_ratio, 6)
+                if attachment_gap_ratio is not None
+                else None,
+                late_subunit_observed_ages=late_subunit_observed_ages,
             )
 
     def _build_results_payload(self, reserving: Reserving) -> dict:
@@ -1591,10 +1640,12 @@ class InMemoryReservingBackend:
             tail_params = tail_rec.proposed_parameters.get("tail", {})
             curves = tail_params.get("curve_candidates", [])
             fit_periods = tail_params.get("fit_period_candidates", [])
+            attachment_age = tail_params.get("recommended_attachment_age")
             for curve in curves:
                 for fit_period in fit_periods:
                     params = self._clone_params(baseline)
                     params["tail"]["curve"] = curve
+                    params["tail"]["attachment_age"] = attachment_age
                     params["tail"]["fit_period"] = fit_period
                     scenarios.append(
                         ScenarioCandidate(
@@ -1633,7 +1684,9 @@ class InMemoryReservingBackend:
                 bf_rec.proposed_parameters.get("bf_apriori", {})
             )
             tail_params = tail_rec.proposed_parameters.get("tail", {})
+            attachment_age = tail_params.get("recommended_attachment_age")
             fit_periods = tail_params.get("fit_period_candidates", [])
+            params["tail"]["attachment_age"] = attachment_age
             if fit_periods:
                 params["tail"]["fit_period"] = fit_periods[0]
             rationale_ids: list[str] = []
