@@ -9,6 +9,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from ai.backend_tools import BackendReservingTools
 from source.api.schemas import (
+    AssumptionDetailResponse,
     AnomalyTriageResponse,
     BfSuitabilityResponse,
     DataCompareResponse,
@@ -181,6 +182,29 @@ class _BackendStub:
             ],
             observed_ldf=[{"age": 12, "ldf": 1.2}],
             fitted_tail_ldf=[{"age": 12, "ldf": 1.18}],
+        )
+
+    def get_assumption_context_detail(self, payload):
+        return AssumptionDetailResponse(
+            session_id=payload.session_id,
+            parameters={
+                "average": "volume",
+                "tail": {"curve": "weibull", "attachment_age": 30},
+                "bf_apriori": {"2005": 0.5988},
+                "selected_ultimate_by_uwy": {"2005": "bornhuetter_ferguson"},
+            },
+            selected_ldf=[{"age": 21, "development_label": "21-24", "ldf": 1.058}],
+            fitted_tail_ldf=[{"age": 30, "development_label": "30-33", "ldf": 1.048}],
+            observed_a2a=[
+                {
+                    "origin": "2005",
+                    "age": 3,
+                    "development_label": "3-6",
+                    "a2a": 3.762,
+                }
+            ],
+            bf_apriori_by_uwy={"2005": 0.5988},
+            selected_ultimate_by_uwy={"2005": "bornhuetter_ferguson"},
         )
 
     def run_drop_review(self, payload):
@@ -467,6 +491,14 @@ def test_backend_tools_support_new_ai_tools() -> None:
         {"session_id": "s-1"},
     )
     assert bf_review["overall_class"] == "mixed"
+
+    assumption_detail = tools.call_tool(
+        "tool_get_assumption_context_detail",
+        {"session_id": "s-1", "start_age": 21, "end_age": 45},
+    )
+    assert assumption_detail["selected_ldf"][0]["ldf"] == 1.058
+    assert assumption_detail["fitted_tail_ldf"][0]["ldf"] == 1.048
+    assert assumption_detail["bf_apriori_by_uwy"]["2005"] == 0.5988
 
     anomaly_review = tools.call_tool(
         "tool_run_anomaly_triage",

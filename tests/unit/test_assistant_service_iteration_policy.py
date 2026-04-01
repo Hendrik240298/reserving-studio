@@ -56,6 +56,20 @@ class _FakeTools:
 
     def call_tool(self, function_name, args):
         self.calls.append((function_name, args))
+        if function_name == "tool_get_assumption_context_detail":
+            return {
+                "session_id": "s-1",
+                "parameters": {"average": "volume"},
+                "selected_ldf": [
+                    {"age": 21, "development_label": "21-24", "ldf": 1.058}
+                ],
+                "fitted_tail_ldf": [
+                    {"age": 30, "development_label": "30-33", "ldf": 1.048}
+                ],
+                "observed_a2a": [],
+                "bf_apriori_by_uwy": {"2005": 0.5988},
+                "selected_ultimate_by_uwy": {"2005": "bornhuetter_ferguson"},
+            }
         if function_name == "tool_run_diagnostics":
             return {
                 "session_id": "s-1",
@@ -392,3 +406,33 @@ def test_drop_reason_prompt_forbids_unsupported_reason_labels() -> None:
         "only assign a drop reason if the tool output gives explicit support" in merged
     )
     assert "do not relabel a drop as 'below 1.0'" in merged
+
+
+def test_exact_factor_question_prefetches_assumption_detail() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ok",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", _FakeClient(responses))
+    fake_tools = _FakeTools()
+    setattr(service, "_tools", fake_tools)
+    service._observability_enabled = False
+
+    result = service.run_turn(
+        user_prompt="Can you show me the fitted LDFs from 21 up to 45?",
+        session_context={"segment": "seg", "session_id": "s-1"},
+    )
+
+    assert result["content"] == "ok"
+    tool_names = [name for name, _ in fake_tools.calls]
+    assert tool_names[0] == "tool_get_assumption_context_detail"

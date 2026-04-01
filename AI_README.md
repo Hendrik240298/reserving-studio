@@ -38,6 +38,7 @@
 - `tool_get_session_summary`: load the current session context for a segment.
 - `tool_get_data_view_summary`: get a compact summary of a data view.
 - `tool_get_data_view`: get the full detailed data view when needed.
+- `tool_get_assumption_context_detail`: get exact current selected LDFs, fitted tail LDFs, BF apriori by UWY, selected methods by UWY, and one observed a2a vector when the user asks for exact numbers.
 - `tool_compare_data_views`: compare two data views.
 - `tool_run_diagnostics_summary`: run deterministic diagnostics and return a compact summary.
 - `tool_run_drop_review`: run the composite deterministic drop review and return ranked tested drop candidates.

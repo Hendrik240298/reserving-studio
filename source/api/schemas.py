@@ -148,6 +148,25 @@ class TailEvaluationResponse(BaseModel):
     input_adjustments: list[str] = Field(default_factory=list)
 
 
+class AssumptionDetailRequest(BaseModel):
+    session_id: str
+    start_age: int | None = Field(default=None, ge=0)
+    end_age: int | None = Field(default=None, ge=0)
+    development_period: int | None = Field(default=None, ge=0)
+
+
+class AssumptionDetailResponse(BaseModel):
+    schema_version: str = SCHEMA_VERSION
+    session_id: str
+    metric: Literal["incurred"] = "incurred"
+    parameters: dict = Field(default_factory=dict)
+    selected_ldf: list[dict] = Field(default_factory=list)
+    fitted_tail_ldf: list[dict] = Field(default_factory=list)
+    observed_a2a: list[dict] = Field(default_factory=list)
+    bf_apriori_by_uwy: dict[str, float] = Field(default_factory=dict)
+    selected_ultimate_by_uwy: dict[str, SelectionMethod] = Field(default_factory=dict)
+
+
 class ReviewScoreBreakdown(BaseModel):
     components: dict[str, float] = Field(default_factory=dict)
     penalties: dict[str, float] = Field(default_factory=dict)

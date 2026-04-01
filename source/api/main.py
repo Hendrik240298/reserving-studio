@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import NoReturn, Protocol
 
 from fastapi import Depends, FastAPI, HTTPException
+import yaml
 
 from ai.assistant_service import AssistantService
 from ai.chat_service import AIChatService
+from ai.chat_store import FileChatStore, InMemoryChatStore
 from source.api.adapters.reserving_adapter import (
     InMemoryReservingBackend,
     SessionConflictError,
@@ -17,6 +20,8 @@ from source.api.schemas import (
     AIChatMessageRequest,
     AIChatMessageResponse,
     AIChatSessionResponse,
+    AssumptionDetailRequest,
+    AssumptionDetailResponse,
     AnomalyTriageRequest,
     AnomalyTriageResponse,
     BfSuitabilityRequest,
@@ -135,6 +140,11 @@ class ReservingApiBackend(Protocol):
         payload: TailEvaluationRequest,
     ) -> TailEvaluationResponse: ...
 
+    def get_assumption_context_detail(
+        self,
+        payload: AssumptionDetailRequest,
+    ) -> AssumptionDetailResponse: ...
+
     def run_drop_review(self, payload: DropReviewRequest) -> DropReviewResponse: ...
 
     def run_tail_review(self, payload: TailReviewRequest) -> TailReviewResponse: ...
@@ -252,6 +262,12 @@ class NotImplementedBackend:
     ) -> TailEvaluationResponse:
         raise NotImplementedError("Tail evaluation backend not wired yet")
 
+    def get_assumption_context_detail(
+        self,
+        payload: AssumptionDetailRequest,
+    ) -> AssumptionDetailResponse:
+        raise NotImplementedError("Assumption detail backend not wired yet")
+
     def run_drop_review(self, payload: DropReviewRequest) -> DropReviewResponse:
         raise NotImplementedError("Drop review backend not wired yet")
 
@@ -287,7 +303,42 @@ def _raise_not_implemented(error: NotImplementedError) -> NoReturn:
     raise HTTPException(status_code=501, detail=str(error)) from error
 
 
-def create_app(backend: ReservingApiBackend | None = None) -> FastAPI:
+def _default_config_path() -> Path:
+    return Path(__file__).resolve().parents[2] / "config.yml"
+
+
+def _chat_store_from_config(config_path: str | Path | None) -> InMemoryChatStore:
+    path = Path(config_path) if config_path else _default_config_path()
+    if not path.exists():
+        return InMemoryChatStore()
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = yaml.safe_load(handle) or {}
+    except (OSError, yaml.YAMLError):
+        return InMemoryChatStore()
+    if not isinstance(payload, dict):
+        return InMemoryChatStore()
+    ai_config = payload.get("ai")
+    if not isinstance(ai_config, dict):
+        return InMemoryChatStore()
+    chat_logging = ai_config.get("chat_logging")
+    if not isinstance(chat_logging, dict):
+        return InMemoryChatStore()
+    if not bool(chat_logging.get("enabled", False)):
+        return InMemoryChatStore()
+    raw_path = str(chat_logging.get("path", "chats")).strip() or "chats"
+    directory = Path(raw_path)
+    if not directory.is_absolute():
+        directory = path.parent / directory
+    return FileChatStore(directory)
+
+
+def create_app(
+    backend: ReservingApiBackend | None = None,
+    *,
+    chat_store: InMemoryChatStore | None = None,
+    config_path: str | Path | None = None,
+) -> FastAPI:
     app = FastAPI(
         title="Reserving API",
         version="0.1.0",
@@ -297,9 +348,12 @@ def create_app(backend: ReservingApiBackend | None = None) -> FastAPI:
         ),
     )
     backend_impl = backend or InMemoryReservingBackend()
+    chat_store_impl = chat_store or _chat_store_from_config(config_path)
     chat_service = AIChatService(
-        assistant_factory=lambda: AssistantService.from_backend(backend=backend_impl)
+        assistant_factory=lambda: AssistantService.from_backend(backend=backend_impl),
+        store=chat_store_impl,
     )
+    app.state.chat_store = chat_store_impl
 
     def get_backend() -> ReservingApiBackend:
         return backend_impl
@@ -770,6 +824,28 @@ def create_app(backend: ReservingApiBackend | None = None) -> FastAPI:
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         raise HTTPException(status_code=500, detail="Unexpected tail evaluation error")
+
+    @app.post(
+        "/v1/reserving/assumption-detail",
+        response_model=AssumptionDetailResponse,
+        tags=["Reserving"],
+    )
+    def get_assumption_context_detail(
+        payload: AssumptionDetailRequest,
+        backend_service: ReservingApiBackend = Depends(get_backend),
+    ) -> AssumptionDetailResponse:
+        try:
+            return backend_service.get_assumption_context_detail(payload)
+        except NotImplementedError as error:
+            _raise_not_implemented(error)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(
+            status_code=500,
+            detail="Unexpected assumption detail error",
+        )
 
     @app.get("/v1/meta", tags=["System"])
     def meta() -> dict[str, str]:

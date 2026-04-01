@@ -56,6 +56,8 @@
 - Use the existing `source.reserving.Reserving` class and its supported parameters.
 - Supported tail curve method names are: `exponential`, `inverse_power`, `weibull`.
 - Map common tail aliases as follows: `power` -> `inverse_power`, `power_curve` -> `inverse_power`.
+- If the user asks for exact numeric values, vectors, or tables about selected `LDF`, fitted tail factors, observed `a2a`, BF apriori, or method selection by UWY, load an exact-detail tool result first and answer from that payload only.
+- Do not answer exact numeric factor questions from narrative memory or from a recommendation summary.
 - If a user asks for a tail recommendation, prefer tested tail scenarios or explicitly label an idea as untested.
 - Do not present a bespoke scenario recommendation as validated unless it has actually been run through the available tools in the current conversation.
 - Do not claim to create a brand-new reserving algorithm unless code explicitly supports it.

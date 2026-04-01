@@ -211,6 +211,8 @@ class AssistantService:
             "session_id": None,
             "ran_diagnostics": False,
             "ran_iteration": False,
+            "exact_data_required": False,
+            "exact_data_loaded": False,
         }
         self._prime_context_for_prompt(
             user_prompt=user_prompt,
@@ -344,6 +346,18 @@ class AssistantService:
                 content = choice.get("content")
                 if isinstance(content, str):
                     self._emit_streamed_content(event_callback, content)
+                    if self._should_block_for_missing_exact_data(workflow_state):
+                        blocked = self._exact_data_guardrail_message()
+                        return {
+                            "content": blocked,
+                            "fallback_used": False,
+                            "session_id": workflow_state.get("session_id"),
+                            "tool_events": tool_events,
+                            "memory_snapshot": memory_state,
+                            "deterministic_packet": memory_state.get(
+                                "deterministic_packet", {}
+                            ),
+                        }
                     return {
                         "content": self._apply_narrative_guardrails(
                             content,
@@ -365,6 +379,18 @@ class AssistantService:
                     ]
                     merged = "\n".join(part for part in parts if part)
                     self._emit_streamed_content(event_callback, merged)
+                    if self._should_block_for_missing_exact_data(workflow_state):
+                        blocked = self._exact_data_guardrail_message()
+                        return {
+                            "content": blocked,
+                            "fallback_used": False,
+                            "session_id": workflow_state.get("session_id"),
+                            "tool_events": tool_events,
+                            "memory_snapshot": memory_state,
+                            "deterministic_packet": memory_state.get(
+                                "deterministic_packet", {}
+                            ),
+                        }
                     return {
                         "content": self._apply_narrative_guardrails(
                             merged,
@@ -846,6 +872,54 @@ class AssistantService:
         if not session_id:
             return
         prompt = str(user_prompt or "").strip().lower()
+        if self._is_exact_numeric_question(prompt):
+            workflow_state["exact_data_required"] = True
+            args = self._build_exact_detail_args(session_id=session_id, prompt=prompt)
+            self._emit_event(
+                event_callback,
+                "status",
+                {
+                    "message": self._tool_status_label(
+                        "tool_get_assumption_context_detail",
+                        args,
+                    )
+                },
+            )
+            tool_result = self._tools.call_tool(
+                "tool_get_assumption_context_detail", args
+            )
+            tool_outputs["prefetch:assumption_detail"] = tool_result
+            memory_state.update(
+                self._update_memory_state(
+                    dict(memory_state),
+                    function_name="tool_get_assumption_context_detail",
+                    tool_result=tool_result,
+                )
+            )
+            tool_event = {
+                "name": "tool_get_assumption_context_detail",
+                "arguments": args,
+                "result_summary": tool_result,
+                "prefetch": True,
+            }
+            tool_events.append(tool_event)
+            self._emit_event(event_callback, "tool_event", tool_event)
+            self._update_workflow_state(
+                workflow_state=workflow_state,
+                function_name="tool_get_assumption_context_detail",
+                args=args,
+                tool_result=tool_result,
+            )
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Exact numeric follow-up detected. Use this exact-detail payload as the primary evidence source. "
+                        "Do not invent tables, vectors, or quoted values outside this payload. If a requested value is missing here, say it is not verified from current tool outputs.\n"
+                        + json.dumps(tool_result, ensure_ascii=True)
+                    ),
+                }
+            )
         if not self._is_movement_question(prompt):
             return
         if "claims" not in prompt and "incurred" not in prompt:
@@ -1153,6 +1227,67 @@ class AssistantService:
         )
 
     @staticmethod
+    def _is_exact_numeric_question(prompt: str) -> bool:
+        request_terms = {
+            "show me",
+            "what is",
+            "what are",
+            "list",
+            "table",
+            "vector",
+            "values",
+            "factors",
+            "rows",
+        }
+        subject_terms = {
+            "ldf",
+            "ldfs",
+            "a2a",
+            "age-to-age",
+            "link ratio",
+            "link ratios",
+            "apriori",
+            "selected method",
+            "selected methods",
+            "fitted tail",
+            "fitted ldf",
+            "uwy",
+        }
+        return any(term in prompt for term in request_terms) and any(
+            term in prompt for term in subject_terms
+        )
+
+    @staticmethod
+    def _build_exact_detail_args(*, session_id: str, prompt: str) -> dict[str, Any]:
+        args: dict[str, Any] = {"session_id": session_id}
+        age_range = re.search(
+            r"(?:from|between|ages?|months?)\s+(\d+)\s*(?:-|to|up to|through|until|and)\s*(\d+)",
+            prompt,
+        )
+        if age_range is not None:
+            left = int(age_range.group(1))
+            right = int(age_range.group(2))
+            args["start_age"] = min(left, right)
+            args["end_age"] = max(left, right)
+        development_period = re.search(r"period\s+(\d+)\s*[-/]\s*(\d+)", prompt)
+        if development_period is not None:
+            args["development_period"] = int(development_period.group(1))
+        return args
+
+    @staticmethod
+    def _should_block_for_missing_exact_data(workflow_state: dict[str, Any]) -> bool:
+        return bool(workflow_state.get("exact_data_required")) and not bool(
+            workflow_state.get("exact_data_loaded")
+        )
+
+    @staticmethod
+    def _exact_data_guardrail_message() -> str:
+        return (
+            "Guardrail: exact numeric answer blocked because no exact-data tool result was loaded for this question. "
+            "Load exact assumption/detail evidence first, then answer from that payload only."
+        )
+
+    @staticmethod
     def _emit_event(
         event_callback: Any | None, event_type: str, payload: dict[str, Any]
     ) -> None:
@@ -1188,6 +1323,7 @@ class AssistantService:
             "tool_evaluate_tail_fit": "Evaluating tail fit",
             "tool_get_data_view_summary": "Loading data summary",
             "tool_get_data_view": "Loading detailed data view",
+            "tool_get_assumption_context_detail": "Loading exact assumption detail",
             "tool_compare_data_views": "Comparing data views",
             "tool_run_diagnostics": "Running diagnostics",
             "tool_run_diagnostics_summary": "Running diagnostics",
@@ -1232,6 +1368,8 @@ class AssistantService:
         current = dict(memory_state)
         if function_name == "tool_get_session_summary":
             current["session_summary"] = dict(tool_result)
+        elif function_name == "tool_get_assumption_context_detail":
+            current["assumption_detail"] = dict(tool_result)
         elif function_name in {"tool_get_data_view_summary", "tool_get_data_view"}:
             current["data_view_summary"] = dict(tool_result)
         elif function_name in {"tool_run_diagnostics", "tool_run_diagnostics_summary"}:
@@ -1310,6 +1448,16 @@ class AssistantService:
             "tool_iterate_diagnostics_summary",
         }:
             workflow_state["ran_iteration"] = True
+        if function_name in {
+            "tool_get_assumption_context_detail",
+            "tool_get_data_view",
+            "tool_get_result_for_uwy",
+            "tool_get_last_derived_drop_detail",
+            "tool_evaluate_tail_fit",
+            "tool_rank_link_ratios",
+            "tool_run_bf_suitability_review",
+        }:
+            workflow_state["exact_data_loaded"] = True
 
     @staticmethod
     def _update_guardrail_state(

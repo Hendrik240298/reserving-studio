@@ -53,6 +53,7 @@ class ReservingApiTools:
             "iteration": {},
             "results": {},
             "recalculate": {},
+            "assumption_detail": {},
             "data_view": {},
             "movement": {},
             "ldf_consistency": {},
@@ -219,6 +220,20 @@ class ReservingApiTools:
             if name == "tool_get_data_view":
                 return payload
             return summarize_data_view_payload(payload)
+        if name == "tool_get_assumption_context_detail":
+            session_id = str(arguments["session_id"])
+            payload = self.request_json(
+                "POST",
+                "/v1/reserving/assumption-detail",
+                {
+                    "session_id": session_id,
+                    "start_age": arguments.get("start_age"),
+                    "end_age": arguments.get("end_age"),
+                    "development_period": arguments.get("development_period"),
+                },
+            )
+            self._raw_cache["assumption_detail"][session_id] = payload
+            return payload
         if name == "tool_compare_data_views":
             session_id = str(arguments["session_id"])
             payload = self.request_json(

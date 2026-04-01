@@ -18,7 +18,7 @@ def test_preset_prompt_specs_define_six_high_value_prompts() -> None:
         "Quarter-Close Review",
         "Drop Review",
         "Tail Review",
-        "BF Suitability",
+        "Reserve Recommendation",
         "Anomaly Triage",
         "Movement Review",
     ]

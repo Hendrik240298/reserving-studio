@@ -18,6 +18,8 @@ import pandas as pd
 
 from source.app import build_workflow_from_dataframes, load_config
 from source.api.schemas import (
+    AssumptionDetailRequest,
+    AssumptionDetailResponse,
     AnomalyTriageRequest,
     AnomalyTriageResponse,
     BfSuitabilityRequest,
@@ -1029,6 +1031,94 @@ class InMemoryReservingBackend:
                 late_subunit_observed_ages=late_subunit_observed_ages,
             )
 
+    def get_assumption_context_detail(
+        self,
+        payload: AssumptionDetailRequest,
+    ) -> AssumptionDetailResponse:
+        with self._lock:
+            context = self._get_context_by_session_id(payload.session_id)
+            if context is None:
+                raise LookupError(f"Session not found: {payload.session_id}")
+
+            heatmap_data = context.reserving.get_triangle_heatmap_data()
+            link_ratios_raw = heatmap_data.get("link_ratios")
+            if not isinstance(link_ratios_raw, pd.DataFrame) or link_ratios_raw.empty:
+                raise ValueError("Assumption detail requires link ratio data")
+
+            observed_row = link_ratios_raw.loc[
+                link_ratios_raw.index.astype(str) == "LDF"
+            ]
+            fitted_row = link_ratios_raw.loc[
+                link_ratios_raw.index.astype(str) == "Tail"
+            ]
+            if observed_row.empty or fitted_row.empty:
+                raise ValueError("Assumption detail requires both LDF and Tail rows")
+
+            triangle_only = link_ratios_raw.loc[
+                ~link_ratios_raw.index.astype(str).isin(["LDF", "Tail"])
+            ]
+            selected_ldf: list[dict[str, Any]] = []
+            fitted_tail_ldf: list[dict[str, Any]] = []
+            observed_a2a: list[dict[str, Any]] = []
+
+            for col in link_ratios_raw.columns:
+                age = Reserving._parse_cdf_label_to_age(col)
+                if not self._age_in_window(
+                    age,
+                    start_age=payload.start_age,
+                    end_age=payload.end_age,
+                ):
+                    continue
+                label = str(col)
+                selected_value = self._to_optional_float(observed_row.iloc[0].get(col))
+                fitted_value = self._to_optional_float(fitted_row.iloc[0].get(col))
+                if selected_value is not None:
+                    selected_ldf.append(
+                        {
+                            "age": age,
+                            "development_label": label,
+                            "ldf": round(selected_value, 6),
+                        }
+                    )
+                if fitted_value is not None:
+                    fitted_tail_ldf.append(
+                        {
+                            "age": age,
+                            "development_label": label,
+                            "ldf": round(fitted_value, 6),
+                        }
+                    )
+                if (
+                    payload.development_period is None
+                    or age != payload.development_period
+                ):
+                    continue
+                for origin in triangle_only.index:
+                    a2a_value = self._to_optional_float(triangle_only.loc[origin, col])
+                    if a2a_value is None:
+                        continue
+                    observed_a2a.append(
+                        {
+                            "origin": self._origin_label(origin),
+                            "age": age,
+                            "development_label": label,
+                            "a2a": round(a2a_value, 6),
+                        }
+                    )
+
+            params = self._params_from_store(context)
+            return AssumptionDetailResponse(
+                session_id=context.session_id,
+                parameters=params,
+                selected_ldf=selected_ldf,
+                fitted_tail_ldf=fitted_tail_ldf,
+                observed_a2a=observed_a2a,
+                bf_apriori_by_uwy=dict(params.get("bf_apriori", {})),
+                selected_ultimate_by_uwy=dict(
+                    params.get("selected_ultimate_by_uwy", {})
+                ),
+            )
+
     def run_drop_review(self, payload: DropReviewRequest) -> DropReviewResponse:
         with self._lock:
             context = self._get_context_by_session_id(payload.session_id)
@@ -1673,6 +1763,21 @@ class InMemoryReservingBackend:
             return str(origin.year)
         text = str(origin)
         return text[:4] if len(text) >= 4 and text[:4].isdigit() else text
+
+    @staticmethod
+    def _age_in_window(
+        age: int | None,
+        *,
+        start_age: int | None,
+        end_age: int | None,
+    ) -> bool:
+        if age is None:
+            return False
+        if start_age is not None and age < start_age:
+            return False
+        if end_age is not None and age > end_age:
+            return False
+        return True
 
     def _build_scenario_candidates(
         self,

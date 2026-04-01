@@ -7,10 +7,37 @@ import chainladder as cl
 import numpy as np
 import pandas as pd
 import logging
+import math
 from typing import Any, Optional, Tuple, Literal, cast
 
 
 DEFAULT_BF_APRIORI = 0.6
+
+
+class StableTailCurve(cl.TailCurve):
+    def _predict_tail(self, extrapolate):
+        if self.curve != "weibull":
+            return super()._predict_tail(extrapolate)
+
+        # The upstream Weibull formula can overflow when AI-driven tail fits
+        # produce a large intercept. Evaluating it in log-space preserves the
+        # same limiting behaviour without crashing scenario evaluation.
+        xp = self.ldf_.get_array_module()
+        finfo = np.finfo(float)
+        max_log = math.log(finfo.max)
+        min_log = math.log(finfo.tiny)
+
+        with np.errstate(
+            over="ignore", under="ignore", divide="ignore", invalid="ignore"
+        ):
+            log_z = self._intercept_ + self._slope_ * xp.log(extrapolate)
+            clipped_log_z = xp.clip(log_z, min_log, max_log)
+            z = xp.exp(clipped_log_z)
+            tail_ldf = 1.0 / xp.expm1(z)
+            tail_ldf = xp.where(log_z >= max_log, 0.0, tail_ldf)
+            tail_ldf = xp.where(log_z <= min_log, finfo.max, tail_ldf)
+
+        return self._get_tail_prediction(tail_ldf)
 
 
 class Reserving:
@@ -200,7 +227,7 @@ class Reserving:
         if projection_period is not None:
             params["projection_period"] = projection_period
 
-        self.tail = cl.TailCurve(**params)  # type: ignore[call-arg]
+        self.tail = StableTailCurve(**params)  # type: ignore[call-arg]
 
     def set_bornhuetter_ferguson(self, apriori: float | dict[str, float] = 0.6):
         if isinstance(apriori, dict):

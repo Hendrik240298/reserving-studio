@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from source.api.schemas import (
+    AssumptionDetailRequest,
     AnomalyTriageRequest,
     BfSuitabilityRequest,
     DataCompareRequest,
@@ -67,6 +68,7 @@ class BackendReservingTools:
             "iteration": {},
             "results": {},
             "recalculate": {},
+            "assumption_detail": {},
             "data_view": {},
             "movement": {},
             "ldf_consistency": {},
@@ -225,6 +227,14 @@ class BackendReservingTools:
             if name == "tool_get_data_view":
                 return payload
             return summarize_data_view_payload(payload)
+        if name == "tool_get_assumption_context_detail":
+            session_id = str(arguments["session_id"])
+            response = self._backend.get_assumption_context_detail(
+                AssumptionDetailRequest(**arguments)
+            )
+            payload = response.model_dump(mode="json")
+            self._raw_cache["assumption_detail"][session_id] = payload
+            return payload
         if name == "tool_compare_data_views":
             session_id = str(arguments["session_id"])
             response = self._backend.compare_data_views(

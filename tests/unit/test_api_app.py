@@ -12,6 +12,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from source.api.main import create_app
 from source.api.schemas import (
+    AssumptionDetailResponse,
     AnomalyTriageResponse,
     BfSuitabilityResponse,
     DiagnosticsIterateResponse,
@@ -207,6 +208,24 @@ class FakeBackend:
             ],
             observed_ldf=[{"age": 12, "ldf": 1.2}],
             fitted_tail_ldf=[{"age": 12, "ldf": 1.18}],
+        )
+
+    def get_assumption_context_detail(self, payload):
+        return AssumptionDetailResponse(
+            session_id=payload.session_id,
+            parameters={"average": "volume"},
+            selected_ldf=[{"age": 21, "development_label": "21-24", "ldf": 1.058}],
+            fitted_tail_ldf=[{"age": 30, "development_label": "30-33", "ldf": 1.048}],
+            observed_a2a=[
+                {
+                    "origin": "2005",
+                    "age": 3,
+                    "development_label": "3-6",
+                    "a2a": 3.762,
+                }
+            ],
+            bf_apriori_by_uwy={"2005": 0.5988},
+            selected_ultimate_by_uwy={"2005": "bornhuetter_ferguson"},
         )
 
     def run_drop_review(self, payload):
@@ -494,6 +513,13 @@ def test_api_scaffold_endpoints() -> None:
     )
     assert tail_response.status_code == 200
     assert tail_response.json()["r2"] == 0.98
+
+    assumption_detail_response = client.post(
+        "/v1/reserving/assumption-detail",
+        json={"session_id": "s-1", "start_age": 21, "end_age": 45},
+    )
+    assert assumption_detail_response.status_code == 200
+    assert assumption_detail_response.json()["selected_ldf"][0]["ldf"] == 1.058
 
     drop_review_response = client.post(
         "/v1/reviews/drop",

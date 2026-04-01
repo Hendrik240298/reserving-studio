@@ -114,6 +114,23 @@ def build_tool_specs() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "tool_get_assumption_context_detail",
+                "description": "Get exact current reserving assumption detail for the active scenario, including selected LDFs, fitted tail LDFs, BF apriori by UWY, selected methods by UWY, and the observed a2a vector for one development period when requested. Use this for exact numeric follow-up questions instead of answering from memory.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string"},
+                        "start_age": {"type": ["integer", "null"]},
+                        "end_age": {"type": ["integer", "null"]},
+                        "development_period": {"type": ["integer", "null"]},
+                    },
+                    "required": ["session_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "tool_compare_data_views",
                 "description": "Compare two data views such as cumulative versus incremental or incurred versus paid and return a compact summary. Allowed metric names: incurred, paid, outstanding, premium. Allowed view names: cumulative, incremental.",
                 "parameters": {

@@ -43,10 +43,10 @@ PRESET_PROMPTS = [
         "prompt": "Review the tail assumptions. Rank the best tail candidates, explain attachment continuity, sub-1.0 late factors, and stability risk, and recommend the strongest selection versus sensitivity.",
     },
     {
-        "id": "ai-prompt-bf-review",
-        "label": "BF Suitability",
-        "description": "Assess CL versus BF by UWY and highlight continuity or apriori blockers.",
-        "prompt": "Assess Chain Ladder versus Bornhuetter-Ferguson by UWY. Tell me where BF is genuinely more appropriate, where CL should stay, and what continuity or apriori concerns would block a method change.",
+        "id": "ai-prompt-reserve-recommendation",
+        "label": "Reserve Recommendation",
+        "description": "Run the full reserving analysis and recommend the overall booking approach for this segment.",
+        "prompt": "Give me your overall reserving recommendation for this segment. Test the strongest overall parameter set and recommend the final booking approach, including any development exclusions, the selected late-development curve settings, and the final reserving method selection by underwriting year where needed.",
     },
     {
         "id": "ai-prompt-anomaly-triage",
