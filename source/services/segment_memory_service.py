@@ -23,7 +23,7 @@ class SegmentMemoryService:
 
         normalized["schema_version"] = self.SCHEMA_VERSION
         normalized["segment_id"] = str(segment or normalized.get("segment_id") or "")
-        normalized["house_preferences"] = self._string_list(
+        normalized["house_preferences"] = self._house_preferences_list(
             normalized.get("house_preferences")
         )
         normalized["known_issues"] = self._string_list(normalized.get("known_issues"))
@@ -143,6 +143,20 @@ class SegmentMemoryService:
             }
             migrated.append(candidate)
         return self._trim_dict_list(migrated, limit=self._SCENARIO_DISPOSITION_LIMIT)
+
+    @staticmethod
+    def _house_preferences_list(value: object) -> list[dict[str, Any] | str]:
+        if not isinstance(value, list):
+            return []
+        normalized: list[dict[str, Any] | str] = []
+        for item in value:
+            if isinstance(item, dict):
+                normalized.append(dict(item))
+                continue
+            text = str(item).strip()
+            if text:
+                normalized.append(text)
+        return normalized
 
     @staticmethod
     def _string_list(value: object) -> list[str]:

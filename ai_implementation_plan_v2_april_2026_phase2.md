@@ -8,7 +8,7 @@ Assumptions
 
 ## Milestone Order
 1. ~~Foundation extraction and memory schema~~
-2. Decision engines v2
+2. ~~Decision engines v2~~
 3. Quarter-close orchestration
 4. Assistant/API/UI integration
 5. Regression and release gating
@@ -74,72 +74,74 @@ Tests:
 Exit criteria:
 - ~~A service can produce current_snapshot and prior_proxy_snapshot deterministically from one session.~~
 
-## Milestone 2: Decision Engines V2
-4. Epic: Drop review engine v2
-Goal: convert current drop heuristics into a deterministic review workflow.
+## ~~Milestone 2: Decision Engines V2~~
+Remark: backend/domain implementation is complete; assistant/API composite tool integration remains in Milestone 4.
+
+4. ~~Epic: Drop review engine v2~~
+~~Goal: convert current drop heuristics into a deterministic review workflow.~~
 Tasks:
-- Create a composite drop-review service using ranked link ratios, LDF consistency, late emergence, reserve change attribution, and scenario comparison.
-- Add component scoring for outlier support, consistency improvement, reserve impact, fragility, and governance penalties.
-- Add recommendation classes: recommend, reasonable_alternative, watch, avoid.
-- Add continuity penalties for previously rejected scenarios and house-preference conflicts.
+- ~~Create a composite drop-review service using ranked link ratios, LDF consistency, late emergence, reserve change attribution, and scenario comparison.~~
+- ~~Add component scoring for outlier support, consistency improvement, reserve impact, fragility, and governance penalties.~~
+- ~~Add recommendation classes: recommend, reasonable_alternative, watch, avoid.~~
+- ~~Add continuity penalties for previously rejected scenarios and house-preference conflicts.~~
 Files to add:
-- source/services/assumption_review_service.py
+- ~~source/services/assumption_review_service.py~~
 Files to change:
-- source/services/scenario_scoring_service.py
-- source/api/adapters/reserving_adapter.py
-- source/api/schemas.py
+- ~~source/services/scenario_scoring_service.py~~
+- ~~source/api/adapters/reserving_adapter.py~~
+- ~~source/api/schemas.py~~
 Tests:
-- tests/unit/test_drop_review_service.py
+- ~~tests/unit/test_drop_review_service.py~~
 Exit criteria:
-- Drop review produces a ranked result with score breakdown and recommendation class.
-5. Epic: Tail review engine v2
-Goal: promote existing tail heuristics plus evaluate_tail_fit(...) into a real ranked tail review.
+- ~~Drop review produces a ranked result with score breakdown and recommendation class.~~
+5. ~~Epic: Tail review engine v2~~
+~~Goal: promote existing tail heuristics plus evaluate_tail_fit(...) into a real ranked tail review.~~
 Tasks:
-- Build a composite tail review using current tail recommendation heuristics, tested tail-fit evaluation, continuity gap checks, sub-1.0 late factor checks, reserve impact, and instability signals.
-- Rank candidate curve/attachment/fit-period combinations.
-- Add explicit penalties for material attachment cuts and unstable tail scenarios.
-- Return a recommendation package with alternatives and caveats.
+- ~~Build a composite tail review using current tail recommendation heuristics, tested tail-fit evaluation, continuity gap checks, sub-1.0 late factor checks, reserve impact, and instability signals.~~
+- ~~Rank candidate curve/attachment/fit-period combinations.~~
+- ~~Add explicit penalties for material attachment cuts and unstable tail scenarios.~~
+- ~~Return a recommendation package with alternatives and caveats.~~
 Files to change:
-- source/services/assumption_review_service.py
-- source/services/scenario_scoring_service.py
-- source/api/adapters/reserving_adapter.py
-- source/api/schemas.py
+- ~~source/services/assumption_review_service.py~~
+- ~~source/services/scenario_scoring_service.py~~
+- ~~source/api/adapters/reserving_adapter.py~~
+- ~~source/api/schemas.py~~
 Tests:
-- tests/unit/test_tail_review_service.py
-- update tests/unit/test_diagnostics_service.py
-- update tests/unit/test_backend_tools_new_tools.py
+- ~~tests/unit/test_tail_review_service.py~~
+- ~~update tests/unit/test_diagnostics_service.py~~
+- tests/unit/test_backend_tools_new_tools.py
 Exit criteria:
-- Tail review returns ranked tested candidates, not only one heuristic recommendation.
-6. Epic: BF suitability v1
-Goal: separate “BF apriori recommendation” from true BF suitability assessment.
+- ~~Tail review returns ranked tested candidates, not only one heuristic recommendation.~~
+6. ~~Epic: BF suitability v1~~
+~~Goal: separate “BF apriori recommendation” from true BF suitability assessment.~~
 Tasks:
-- Score BF suitability by maturity, volatility, CL sensitivity, percent reported reasonableness, and apriori readiness.
-- Return classification by UWY and overall: cl_preferred, bf_preferred, mixed, inconclusive.
-- Keep apriori recommendation logic separate from suitability classification.
+- ~~Score BF suitability by maturity, volatility, CL sensitivity, percent reported reasonableness, and apriori readiness.~~
+- ~~Return classification by UWY and overall: cl_preferred, bf_preferred, mixed, inconclusive.~~
+- ~~Keep apriori recommendation logic separate from suitability classification.~~
 Files to change:
-- source/services/assumption_review_service.py
-- source/services/scenario_scoring_service.py
-- source/api/schemas.py
-- source/api/adapters/reserving_adapter.py
+- ~~source/services/assumption_review_service.py~~
+- ~~source/services/scenario_scoring_service.py~~
+- ~~source/api/schemas.py~~
+- ~~source/api/adapters/reserving_adapter.py~~
 Tests:
-- tests/unit/test_bf_suitability_service.py
+- ~~tests/unit/test_bf_suitability_service.py~~
 Exit criteria:
-- BF review explains why BF is or is not suitable, not just what apriori to use.
-7. Epic: Data anomaly triage v2
-Goal: strengthen anomaly triage from flagging into classification and next-step guidance.
+- ~~BF review explains why BF is or is not suitable, not just what apriori to use.~~
+7. ~~Epic: Data anomaly triage v2~~
+~~Goal: strengthen anomaly triage from flagging into classification and next-step guidance.~~
 Tasks:
-- Classify anomalies into types such as data quality, calendar distortion, large-loss contamination, sparse maturity, case reserve shift, and segment definition change.
-- Attach reserve relevance, next diagnostic, and pause_recommendation guidance.
-- Feed anomaly classification into scenario scoring penalties and reviewer gating.
+- ~~Classify anomalies into types such as data quality, calendar distortion, large-loss contamination, sparse maturity, case reserve shift, and segment definition change.~~
+- ~~Attach reserve relevance, next diagnostic, and pause_recommendation guidance.~~
+- ~~Feed anomaly classification into scenario scoring penalties and reviewer gating.~~
 Files to change:
-- source/services/assumption_review_service.py
+- ~~source/services/assumption_review_service.py~~
 - source/services/movement_diagnostics_service.py
 - source/services/diagnostics_service.py
-- source/api/schemas.py
+- ~~source/api/schemas.py~~
 Tests:
-- tests/unit/test_anomaly_triage_service.py
+- ~~tests/unit/test_anomaly_triage_service.py~~
 Exit criteria:
-- Triage result is structured and actionable, not just a list of findings.
+- ~~Triage result is structured and actionable, not just a list of findings.~~
 
 ## Milestone 3: Quarter-Close Orchestration
 8. Epic: Quarter-close workflow service

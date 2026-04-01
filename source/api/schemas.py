@@ -10,6 +10,18 @@ SCHEMA_VERSION = "v1"
 
 SelectionMethod = Literal["chainladder", "bornhuetter_ferguson"]
 SeverityLevel = Literal["low", "medium", "high", "critical"]
+RecommendationClass = Literal[
+    "recommend",
+    "reasonable_alternative",
+    "watch",
+    "avoid",
+]
+SuitabilityClass = Literal[
+    "cl_preferred",
+    "bf_preferred",
+    "mixed",
+    "inconclusive",
+]
 
 
 class TailConfig(BaseModel):
@@ -128,6 +140,116 @@ class TailEvaluationResponse(BaseModel):
     attachment_gap_ratio: float | None = None
     late_subunit_observed_ages: list[int] = Field(default_factory=list)
     input_adjustments: list[str] = Field(default_factory=list)
+
+
+class ReviewScoreBreakdown(BaseModel):
+    components: dict[str, float] = Field(default_factory=dict)
+    penalties: dict[str, float] = Field(default_factory=dict)
+    total_score: float = 0.0
+    formula_version: str = ""
+
+
+class ContinuityNote(BaseModel):
+    code: str
+    severity: SeverityLevel = "low"
+    message: str
+    context: dict = Field(default_factory=dict)
+
+
+class PolicyTrace(BaseModel):
+    rejected_before: bool = False
+    rejected_signatures: list[str] = Field(default_factory=list)
+    house_preference_conflicts: list[str] = Field(default_factory=list)
+    applied_penalties: dict[str, float] = Field(default_factory=dict)
+    governance_tier: Literal["green", "amber", "red"] | None = None
+
+
+class ReviewCandidate(BaseModel):
+    candidate_id: str
+    summary: str
+    parameters: dict = Field(default_factory=dict)
+    score: float = 0.0
+    score_breakdown: ReviewScoreBreakdown = Field(default_factory=ReviewScoreBreakdown)
+    recommendation_class: RecommendationClass = "watch"
+    metrics: dict = Field(default_factory=dict)
+    continuity_notes: list[ContinuityNote] = Field(default_factory=list)
+    policy_trace: PolicyTrace = Field(default_factory=PolicyTrace)
+    rank: int | None = None
+
+
+class ReviewRecommendation(BaseModel):
+    recommendation_class: RecommendationClass = "watch"
+    candidate_id: str | None = None
+    summary: str = ""
+    caveats: list[str] = Field(default_factory=list)
+    alternatives: list[str] = Field(default_factory=list)
+
+
+class DropReviewRequest(BaseModel):
+    session_id: str
+    candidate_limit: int = Field(default=5, ge=1, le=20)
+
+
+class DropReviewResponse(BaseModel):
+    schema_version: str = SCHEMA_VERSION
+    session_id: str
+    review_type: Literal["drop_review"] = "drop_review"
+    baseline: dict = Field(default_factory=dict)
+    candidates: list[ReviewCandidate] = Field(default_factory=list)
+    recommendation: ReviewRecommendation = Field(default_factory=ReviewRecommendation)
+    continuity_notes: list[ContinuityNote] = Field(default_factory=list)
+    policy_trace: PolicyTrace = Field(default_factory=PolicyTrace)
+    evidence_summary: dict = Field(default_factory=dict)
+    run_metadata: dict = Field(default_factory=dict)
+
+
+class TailReviewRequest(BaseModel):
+    session_id: str
+    candidate_limit: int = Field(default=12, ge=1, le=30)
+
+
+class TailReviewResponse(BaseModel):
+    schema_version: str = SCHEMA_VERSION
+    session_id: str
+    review_type: Literal["tail_review"] = "tail_review"
+    baseline: dict = Field(default_factory=dict)
+    candidates: list[ReviewCandidate] = Field(default_factory=list)
+    recommendation: ReviewRecommendation = Field(default_factory=ReviewRecommendation)
+    continuity_notes: list[ContinuityNote] = Field(default_factory=list)
+    policy_trace: PolicyTrace = Field(default_factory=PolicyTrace)
+    evidence_summary: dict = Field(default_factory=dict)
+    run_metadata: dict = Field(default_factory=dict)
+
+
+class BfSuitabilityRequest(BaseModel):
+    session_id: str
+
+
+class BfSuitabilityResponse(BaseModel):
+    schema_version: str = SCHEMA_VERSION
+    session_id: str
+    review_type: Literal["bf_suitability"] = "bf_suitability"
+    rows: list[dict] = Field(default_factory=list)
+    overall_class: SuitabilityClass = "inconclusive"
+    summary: dict = Field(default_factory=dict)
+    apriori_guidance: dict = Field(default_factory=dict)
+    continuity_notes: list[ContinuityNote] = Field(default_factory=list)
+    policy_trace: PolicyTrace = Field(default_factory=PolicyTrace)
+    run_metadata: dict = Field(default_factory=dict)
+
+
+class AnomalyTriageRequest(BaseModel):
+    session_id: str
+
+
+class AnomalyTriageResponse(BaseModel):
+    schema_version: str = SCHEMA_VERSION
+    session_id: str
+    review_type: Literal["anomaly_triage"] = "anomaly_triage"
+    triaged_findings: list[dict] = Field(default_factory=list)
+    summary: dict = Field(default_factory=dict)
+    pause_recommendation: bool = False
+    run_metadata: dict = Field(default_factory=dict)
 
 
 class DataViewQuery(BaseModel):

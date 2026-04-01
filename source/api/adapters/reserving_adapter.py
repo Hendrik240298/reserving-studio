@@ -18,12 +18,18 @@ import pandas as pd
 
 from source.app import build_workflow_from_dataframes, load_config
 from source.api.schemas import (
+    AnomalyTriageRequest,
+    AnomalyTriageResponse,
+    BfSuitabilityRequest,
+    BfSuitabilityResponse,
     DataCompareRequest,
     DataCompareResponse,
     DataViewRequest,
     DataViewResponse,
     DerivedDropScenarioRequest,
     DerivedDropScenarioResponse,
+    DropReviewRequest,
+    DropReviewResponse,
     DiagnosticFinding,
     DiagnosticRecommendation,
     DiagnosticEvidence,
@@ -55,11 +61,14 @@ from source.api.schemas import (
     SessionSaveRequest,
     SessionSaveResponse,
     SessionStateResponse,
+    TailReviewRequest,
+    TailReviewResponse,
     WorkflowFromDataframesRequest,
     WorkflowInitializationResponse,
 )
 from source.config_manager import ConfigManager
 from source.reserving import Reserving
+from source.services.assumption_review_service import AssumptionReviewService
 from source.services.data_view_service import (
     DataViewQuery as ServiceDataViewQuery,
     DataViewService,
@@ -69,6 +78,7 @@ from source.services.diagnostics_service import DiagnosticsService
 from source.services.movement_diagnostics_service import MovementDiagnosticsService
 from source.services.scenario_evaluation_service import ScenarioEvaluationService
 from source.services.scenario_scoring_service import ScenarioScoringService
+from source.services.segment_memory_service import SegmentMemoryService
 from source.services.uncertainty_service import UncertaintyService
 from source.services.valuation_snapshot_service import ValuationSnapshotService
 
@@ -135,6 +145,11 @@ class InMemoryReservingBackend:
             uncertainty_service=self._uncertainty_service,
             scoring_service=self._scenario_scoring_service,
             scenario_generator_version=self.SCENARIO_GENERATOR_VERSION,
+        )
+        self._assumption_review_service = AssumptionReviewService(
+            evaluation_service=self._scenario_evaluation_service,
+            scoring_service=self._scenario_scoring_service,
+            diagnostics_service=self._diagnostics_service,
         )
         self._valuation_snapshot_service = ValuationSnapshotService(
             evaluation_service=self._scenario_evaluation_service,
@@ -1002,6 +1017,118 @@ class InMemoryReservingBackend:
                 if attachment_gap_ratio is not None
                 else None,
                 late_subunit_observed_ages=late_subunit_observed_ages,
+            )
+
+    def run_drop_review(self, payload: DropReviewRequest) -> DropReviewResponse:
+        with self._lock:
+            context = self._get_context_by_session_id(payload.session_id)
+            if context is None:
+                raise LookupError(f"Session not found: {payload.session_id}")
+            baseline_params = self._params_from_store(context)
+            review = self._get_assumption_review_service().review_drops(
+                segment=context.segment,
+                reserving=context.reserving,
+                baseline_params=baseline_params,
+                segment_memory=self._load_segment_memory(context.segment),
+                candidate_limit=payload.candidate_limit,
+            )
+            self._apply_params_to_reserving(context, baseline_params)
+            context.last_results_payload = self._build_results_payload(
+                context.reserving
+            )
+            return DropReviewResponse(
+                session_id=context.session_id,
+                baseline=review.get("baseline", {}),
+                candidates=review.get("candidates", []),
+                recommendation=review.get("recommendation", {}),
+                continuity_notes=review.get("continuity_notes", []),
+                policy_trace=review.get("policy_trace", {}),
+                evidence_summary=review.get("evidence_summary", {}),
+                run_metadata=review.get("run_metadata", {}),
+            )
+
+    def run_tail_review(self, payload: TailReviewRequest) -> TailReviewResponse:
+        with self._lock:
+            context = self._get_context_by_session_id(payload.session_id)
+            if context is None:
+                raise LookupError(f"Session not found: {payload.session_id}")
+            baseline_params = self._params_from_store(context)
+            review = self._get_assumption_review_service().review_tail(
+                segment=context.segment,
+                reserving=context.reserving,
+                baseline_params=baseline_params,
+                segment_memory=self._load_segment_memory(context.segment),
+                candidate_limit=payload.candidate_limit,
+            )
+            self._apply_params_to_reserving(context, baseline_params)
+            context.last_results_payload = self._build_results_payload(
+                context.reserving
+            )
+            return TailReviewResponse(
+                session_id=context.session_id,
+                baseline=review.get("baseline", {}),
+                candidates=review.get("candidates", []),
+                recommendation=review.get("recommendation", {}),
+                continuity_notes=review.get("continuity_notes", []),
+                policy_trace=review.get("policy_trace", {}),
+                evidence_summary=review.get("evidence_summary", {}),
+                run_metadata=review.get("run_metadata", {}),
+            )
+
+    def run_bf_suitability_review(
+        self,
+        payload: BfSuitabilityRequest,
+    ) -> BfSuitabilityResponse:
+        with self._lock:
+            context = self._get_context_by_session_id(payload.session_id)
+            if context is None:
+                raise LookupError(f"Session not found: {payload.session_id}")
+            baseline_params = self._params_from_store(context)
+            review = self._get_assumption_review_service().review_bf_suitability(
+                segment=context.segment,
+                reserving=context.reserving,
+                baseline_params=baseline_params,
+                segment_memory=self._load_segment_memory(context.segment),
+            )
+            self._apply_params_to_reserving(context, baseline_params)
+            context.last_results_payload = self._build_results_payload(
+                context.reserving
+            )
+            return BfSuitabilityResponse(
+                session_id=context.session_id,
+                rows=review.get("rows", []),
+                overall_class=review.get("overall_class", "inconclusive"),
+                summary=review.get("summary", {}),
+                apriori_guidance=review.get("apriori_guidance", {}),
+                continuity_notes=review.get("continuity_notes", []),
+                policy_trace=review.get("policy_trace", {}),
+                run_metadata=review.get("run_metadata", {}),
+            )
+
+    def run_anomaly_triage(
+        self,
+        payload: AnomalyTriageRequest,
+    ) -> AnomalyTriageResponse:
+        with self._lock:
+            context = self._get_context_by_session_id(payload.session_id)
+            if context is None:
+                raise LookupError(f"Session not found: {payload.session_id}")
+            baseline_params = self._params_from_store(context)
+            review = self._get_assumption_review_service().triage_anomalies(
+                segment=context.segment,
+                reserving=context.reserving,
+                baseline_params=baseline_params,
+            )
+            self._apply_params_to_reserving(context, baseline_params)
+            context.last_results_payload = self._build_results_payload(
+                context.reserving
+            )
+            return AnomalyTriageResponse(
+                session_id=context.session_id,
+                triaged_findings=review.get("triaged_findings", []),
+                summary=review.get("summary", {}),
+                pause_recommendation=bool(review.get("pause_recommendation", False)),
+                run_metadata=review.get("run_metadata", {}),
             )
 
     def _build_results_payload(self, reserving: Reserving) -> dict:
@@ -1955,6 +2082,24 @@ class InMemoryReservingBackend:
         )
         self._scenario_evaluation_service = service
         return service
+
+    def _get_assumption_review_service(self) -> AssumptionReviewService:
+        service = getattr(self, "_assumption_review_service", None)
+        if isinstance(service, AssumptionReviewService):
+            return service
+        service = AssumptionReviewService(
+            evaluation_service=self._get_scenario_evaluation_service(),
+            scoring_service=getattr(self, "_scenario_scoring_service", None),
+            diagnostics_service=getattr(self, "_diagnostics_service", None),
+        )
+        self._assumption_review_service = service
+        return service
+
+    def _load_segment_memory(self, segment: str) -> dict[str, Any]:
+        if self._config is None:
+            return SegmentMemoryService().load({}, segment=segment)
+        raw_memory = self._config.load_ai_segment_memory(segment=segment)
+        return SegmentMemoryService().load(raw_memory, segment=segment)
 
     def _get_valuation_snapshot_service(self) -> ValuationSnapshotService:
         service = getattr(self, "_valuation_snapshot_service", None)

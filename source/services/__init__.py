@@ -1,3 +1,4 @@
+from source.services.assumption_review_service import AssumptionReviewService
 from source.services.cache_service import CacheService
 from source.services.data_view_service import DataViewService
 from source.services.diagnostics_service import DiagnosticsService
@@ -12,6 +13,7 @@ from source.services.valuation_snapshot_service import ValuationSnapshotService
 
 __all__ = [
     "CacheService",
+    "AssumptionReviewService",
     "DataViewService",
     "DiagnosticsService",
     "MovementDiagnosticsService",

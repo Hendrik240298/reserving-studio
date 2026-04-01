@@ -25,3 +25,27 @@ def test_scenario_scoring_service_returns_breakdown_and_total() -> None:
     assert score["penalties"]["drop_count"] == 0.4
     assert score["penalties"]["continuity"] == 0.3
     assert score["score"] == 7.7
+
+
+def test_review_scoring_classifies_candidate_quality() -> None:
+    service = ScenarioScoringService()
+
+    score = service.score_drop_candidate(
+        outlier_support=0.8,
+        consistency_improvement=0.7,
+        late_emergence_support=0.6,
+        reserve_impact_penalty=0.1,
+        fragility_penalty=0.0,
+        governance_penalty=0.0,
+        continuity_penalty=0.0,
+    )
+
+    assert score["formula_version"] == "v2"
+    assert score["score"] == 2.0
+    assert (
+        service.classify_recommendation(
+            total_score=score["score"],
+            governance_tier="green",
+        )
+        == "recommend"
+    )
