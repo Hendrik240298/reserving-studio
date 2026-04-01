@@ -102,6 +102,7 @@ class AIChatService:
                     chat_id,
                     working_memory=memory_snapshot,
                     scenario_ledger=memory_snapshot.get("scenario_ledger"),
+                    deterministic_packet=memory_snapshot.get("deterministic_packet"),
                 )
             self._store.update_assistant_message(
                 chat_id,
@@ -164,6 +165,7 @@ class AIChatService:
             "messages": [dict(item) for item in refreshed.messages],
             "working_memory": dict(refreshed.working_memory),
             "scenario_ledger": [dict(item) for item in refreshed.scenario_ledger],
+            "deterministic_packet": dict(refreshed.deterministic_packet),
             "streaming": bool(refreshed.metadata.get("streaming")),
             "stream_status": str(refreshed.metadata.get("stream_status", "")),
             "updated_at": refreshed.updated_at,

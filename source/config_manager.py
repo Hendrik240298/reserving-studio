@@ -4,7 +4,7 @@ import yaml
 import logging
 import os
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 import threading
 
@@ -142,6 +142,11 @@ class ConfigManager:
     def get_session_path(self) -> Path:
         return self._session_path
 
+    def _ai_segment_memory_path(self, segment: str | None = None) -> Path:
+        target_segment = str(segment or self._segment).strip() or self._segment
+        safe_segment = re.sub(r"[^A-Za-z0-9_\-]", "_", target_segment)
+        return Path(self._SESSIONS) / "ai_memory" / f"{safe_segment}.yml"
+
     def load_session(self) -> dict:
         with self._SESSION_LOCK:
             return self._load_session_unlocked()
@@ -155,7 +160,7 @@ class ConfigManager:
                 payload = yaml.safe_load(f) or {}
         except yaml.YAMLError as exc:
             logging.error("Failed to parse session YAML at %s: %s", session_path, exc)
-            timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S%fZ")
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
             corrupt_path = session_path.with_suffix(
                 session_path.suffix + f".corrupt.{timestamp}"
             )
@@ -175,6 +180,25 @@ class ConfigManager:
         if not isinstance(payload, dict):
             return {}
         return payload
+
+    def load_ai_segment_memory(self, segment: str | None = None) -> dict:
+        with self._SESSION_LOCK:
+            memory_path = self._ai_segment_memory_path(segment)
+            if not memory_path.exists():
+                return {}
+            try:
+                with memory_path.open("r") as f:
+                    payload = yaml.safe_load(f) or {}
+            except yaml.YAMLError as exc:
+                logging.error(
+                    "Failed to parse AI segment memory YAML at %s: %s",
+                    memory_path,
+                    exc,
+                )
+                return {}
+            if not isinstance(payload, dict):
+                return {}
+            return payload
 
     def _normalize_session_payload(self, payload: dict) -> dict:
         normalized = payload.copy()
@@ -231,10 +255,33 @@ class ConfigManager:
         session_path.parent.mkdir(parents=True, exist_ok=True)
         payload = data.copy()
         payload.setdefault("segment", self._segment)
-        payload["updated_at"] = datetime.utcnow().isoformat() + "Z"
+        payload["updated_at"] = (
+            datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        )
         tmp_path = session_path.with_suffix(session_path.suffix + ".tmp")
         with tmp_path.open("w") as f:
             yaml.safe_dump(payload, f, sort_keys=False)
             f.flush()
             os.fsync(f.fileno())
         tmp_path.replace(session_path)
+
+    def save_ai_segment_memory(
+        self,
+        data: dict,
+        *,
+        segment: str | None = None,
+    ) -> None:
+        with self._SESSION_LOCK:
+            memory_path = self._ai_segment_memory_path(segment)
+            memory_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = data.copy()
+            payload.setdefault("segment_id", str(segment or self._segment))
+            payload["updated_at"] = (
+                datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            )
+            tmp_path = memory_path.with_suffix(memory_path.suffix + ".tmp")
+            with tmp_path.open("w") as f:
+                yaml.safe_dump(payload, f, sort_keys=False)
+                f.flush()
+                os.fsync(f.fileno())
+            tmp_path.replace(memory_path)

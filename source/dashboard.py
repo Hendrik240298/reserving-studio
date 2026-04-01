@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional, List, Tuple, TYPE_CHECKING
 
 import pandas as pd
+from ai.deterministic_packet import build_deterministic_packet
 from source.config_manager import ConfigManager
 from source.presentation import (
     build_heatmap_core,
@@ -1859,6 +1860,7 @@ class Dashboard:
             Output("ai-status", "children"),
             Output("ai-scenario-matrix", "data"),
             Output("ai-evidence-trace", "data"),
+            Output("ai-recommendation-panel", "children"),
             Output("ai-governance-panel", "children"),
             Output("ai-commentary-output", "children"),
             Input("ai-run-review-button", "n_clicks"),
@@ -1867,7 +1869,7 @@ class Dashboard:
         )
         def _run_ai_review(n_clicks, params_store_data):
             if not n_clicks:
-                return (no_update,) * 8
+                return (no_update,) * 9
             try:
                 review_data = self._build_ai_review_payload(params_store_data)
             except Exception as exc:
@@ -1877,6 +1879,7 @@ class Dashboard:
                     no_update,
                     no_update,
                     f"AI review failed: {exc}",
+                    no_update,
                     no_update,
                     no_update,
                     no_update,
@@ -1910,6 +1913,7 @@ class Dashboard:
                 "AI review completed.",
                 review_data.get("scenario_matrix", []),
                 review_data.get("evidence_trace", []),
+                self._build_ai_recommendation_panel(review_data),
                 governance_panel,
                 review_data.get("ai_commentary", ""),
             )
@@ -1990,6 +1994,16 @@ class Dashboard:
                     "ai_decision_packet", {}
                 )
                 self._config.save_session_with_version(session_payload)
+                segment_key = self._get_segment_key()
+                ai_memory = self._config.load_ai_segment_memory(segment=segment_key)
+                ai_memory["segment_id"] = segment_key
+                ai_memory["last_human_decision"] = updated.get("ai_override", {})
+                deterministic_packet = updated.get("deterministic_packet", {})
+                if isinstance(deterministic_packet, dict):
+                    recommendation = deterministic_packet.get("recommendation", {})
+                    if isinstance(recommendation, dict):
+                        ai_memory["last_recommendation"] = recommendation
+                self._config.save_ai_segment_memory(ai_memory, segment=segment_key)
                 return updated, "AI decision saved to session."
             return updated, "AI decision saved in current run state."
 
@@ -2319,6 +2333,61 @@ class Dashboard:
             best=best,
             uncertainty=aggregate_uncertainty,
         )
+        improvement = float(getattr(baseline_eval, "score", 0.0) or 0.0) - float(
+            getattr(best, "score", 0.0) or 0.0
+        )
+        recommendation_status = "watch"
+        if best.scenario_id != baseline_eval.scenario_id and improvement > 0.5:
+            recommendation_status = "recommended"
+        elif best.scenario_id != baseline_eval.scenario_id and improvement > 0.1:
+            recommendation_status = "reasonable_alternative"
+        review_status = "pass"
+        tier_value = str(best.governance.get("tier", "green")).lower()
+        if tier_value == "red":
+            review_status = "hard_fail"
+        elif tier_value == "amber":
+            review_status = "pass_with_caveats"
+        deterministic_packet = build_deterministic_packet(
+            plan={
+                "playbook": "scenario_recommendation",
+                "goal": "Review current UI scenario candidates and recommend a tested configuration.",
+            },
+            review={
+                "status": review_status,
+                "collected_evidence": [
+                    "scenario_comparison",
+                    "evidence_trace",
+                    "governance",
+                ],
+                "missing_evidence": [],
+                "issues": []
+                if review_status != "hard_fail"
+                else ["red_governance_or_data_quality"],
+                "caveats": best.governance.get("required_actions", []),
+            },
+            recommendation={
+                "status": recommendation_status,
+                "summary": commentary,
+                "recommended_scenario_id": best.scenario_id,
+                "alternative_scenario_ids": [
+                    item.get("scenario_id")
+                    for item in scenario_matrix[1:3]
+                    if isinstance(item, dict)
+                    and item.get("scenario_id") not in {best.scenario_id, "baseline"}
+                ],
+                "rationale": [
+                    f"score_improvement={improvement:.3f}",
+                    f"governance={best.governance.get('tier', 'green')}",
+                ],
+            },
+            evidence_packets=[
+                {
+                    "provenance": {
+                        "evidence_ids": ai_evidence_refs,
+                    }
+                }
+            ],
+        )
         model_meta = {
             "engine": "deterministic-ai-review",
             "diagnostics_version": DiagnosticsService.DIAGNOSTICS_VERSION,
@@ -2335,6 +2404,7 @@ class Dashboard:
             "ai_commentary": commentary,
             "ai_evidence_refs": ai_evidence_refs,
             "ai_model_meta": model_meta,
+            "deterministic_packet": deterministic_packet,
             "ai_override": {},
             "ai_decision_packet": {},
         }
@@ -2376,6 +2446,11 @@ class Dashboard:
         text = str(prompt or "").strip().lower()
         if not isinstance(review_data, dict):
             return "Run AI review first so I can answer from deterministic evidence."
+        deterministic_packet = (
+            review_data.get("deterministic_packet", {})
+            if isinstance(review_data.get("deterministic_packet"), dict)
+            else {}
+        )
         governance = review_data.get("governance", {})
         uncertainty = review_data.get("uncertainty", {})
         scenario_matrix = review_data.get("scenario_matrix", [])
@@ -2405,6 +2480,17 @@ class Dashboard:
             )
 
         if "scenario" in text or "best" in text:
+            recommendation = (
+                deterministic_packet.get("recommendation", {})
+                if isinstance(deterministic_packet, dict)
+                else {}
+            )
+            if isinstance(recommendation, dict) and recommendation:
+                return (
+                    f"Recommendation status is {recommendation.get('status')}. "
+                    f"Recommended scenario is {recommendation.get('recommended_scenario_id')} "
+                    f"with alternatives {recommendation.get('alternative_scenario_ids', [])}."
+                )
             if isinstance(scenario_matrix, list) and scenario_matrix:
                 best = scenario_matrix[0]
                 return (
@@ -2466,9 +2552,91 @@ class Dashboard:
             "uncertainty": review_data.get("uncertainty", {}),
             "scenario_matrix": review_data.get("scenario_matrix", []),
             "evidence_trace": review_data.get("evidence_trace", []),
+            "deterministic_packet": review_data.get("deterministic_packet", {}),
             "ai_evidence_refs": review_data.get("ai_evidence_refs", []),
             "ai_override": review_data.get("ai_override", {}),
         }
+
+    def _build_ai_recommendation_panel(self, review_data: dict):
+        deterministic_packet = (
+            review_data.get("deterministic_packet", {})
+            if isinstance(review_data.get("deterministic_packet"), dict)
+            else {}
+        )
+        recommendation = (
+            deterministic_packet.get("recommendation", {})
+            if isinstance(deterministic_packet, dict)
+            else {}
+        )
+        review = (
+            deterministic_packet.get("review", {})
+            if isinstance(deterministic_packet, dict)
+            else {}
+        )
+        presentation = (
+            deterministic_packet.get("presentation", {})
+            if isinstance(deterministic_packet, dict)
+            else {}
+        )
+        status = str(recommendation.get("status", "watch")).replace("_", " ").title()
+        review_status = str(review.get("status", "unknown")).replace("_", " ").title()
+        evidence_refs = (
+            presentation.get("evidence_used", [])
+            if isinstance(presentation.get("evidence_used"), list)
+            else review_data.get("ai_evidence_refs", [])
+        )
+        evidence_text = (
+            ", ".join(str(item) for item in evidence_refs[:5]) or "None recorded"
+        )
+        alternatives = (
+            presentation.get("alternative_considered", [])
+            if isinstance(presentation.get("alternative_considered"), list)
+            else recommendation.get("alternative_scenario_ids", [])
+        )
+        alternative_text = (
+            ", ".join(str(item) for item in alternatives if item) or "None"
+        )
+        caveat_text = str(presentation.get("key_caveat", "")).strip() or "None"
+        next_question = str(
+            presentation.get(
+                "next_best_question",
+                "What human judgment or segment-specific caveat could overturn this recommendation?",
+            )
+        )
+        return html.Div(
+            [
+                html.H4("Recommendation", style={"margin": "0 0 10px 0"}),
+                html.Div(
+                    f"Conclusion: {status}",
+                    style={"fontWeight": 700, "marginBottom": "6px"},
+                ),
+                html.Div(
+                    f"Review status: {review_status}",
+                    style={
+                        "fontSize": "13px",
+                        "color": COLOR_MUTED,
+                        "marginBottom": "8px",
+                    },
+                ),
+                html.Div(
+                    f"Summary: {recommendation.get('summary', '')}",
+                    style={"marginBottom": "8px"},
+                ),
+                html.Div(
+                    f"Recommended scenario: {recommendation.get('recommended_scenario_id') or 'baseline'}",
+                    style={"marginBottom": "6px"},
+                ),
+                html.Div(
+                    f"Evidence used: {evidence_text}", style={"marginBottom": "6px"}
+                ),
+                html.Div(
+                    f"Alternative considered: {alternative_text}",
+                    style={"marginBottom": "6px"},
+                ),
+                html.Div(f"Key caveat: {caveat_text}", style={"marginBottom": "6px"}),
+                html.Div(f"Next best question: {next_question}"),
+            ]
+        )
 
     def _create_layout(self):
         """
@@ -3335,6 +3503,16 @@ class Dashboard:
                                                         "borderRadius": RADIUS_MD,
                                                         "padding": "10px",
                                                         "fontSize": "13px",
+                                                        "marginBottom": "12px",
+                                                    },
+                                                ),
+                                                html.Div(
+                                                    id="ai-recommendation-panel",
+                                                    style={
+                                                        "background": "#f9fbfe",
+                                                        "border": f"1px solid {COLOR_BORDER}",
+                                                        "borderRadius": RADIUS_MD,
+                                                        "padding": "10px",
                                                         "marginBottom": "12px",
                                                     },
                                                 ),

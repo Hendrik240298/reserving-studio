@@ -20,6 +20,7 @@ class ChatSession:
     tool_events: list[dict[str, Any]] = field(default_factory=list)
     working_memory: dict[str, Any] = field(default_factory=dict)
     scenario_ledger: list[dict[str, Any]] = field(default_factory=list)
+    deterministic_packet: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=_utc_now)
     updated_at: str = field(default_factory=_utc_now)
@@ -153,6 +154,7 @@ class InMemoryChatStore:
         *,
         working_memory: dict[str, Any] | None = None,
         scenario_ledger: list[dict[str, Any]] | None = None,
+        deterministic_packet: dict[str, Any] | None = None,
     ) -> ChatSession:
         with self._lock:
             session = self._require(chat_id)
@@ -162,6 +164,8 @@ class InMemoryChatStore:
                 session.scenario_ledger = [
                     dict(item) for item in scenario_ledger if isinstance(item, dict)
                 ]
+            if isinstance(deterministic_packet, dict):
+                session.deterministic_packet = dict(deterministic_packet)
             session.updated_at = _utc_now()
             return self._copy_session(session)
 
@@ -181,6 +185,7 @@ class InMemoryChatStore:
             tool_events=[dict(item) for item in session.tool_events],
             working_memory=dict(session.working_memory),
             scenario_ledger=[dict(item) for item in session.scenario_ledger],
+            deterministic_packet=dict(session.deterministic_packet),
             metadata=dict(session.metadata),
             created_at=session.created_at,
             updated_at=session.updated_at,

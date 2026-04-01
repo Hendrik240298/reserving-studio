@@ -611,6 +611,7 @@ def create_app(backend: ReservingApiBackend | None = None) -> FastAPI:
                 tool_events=session.tool_events,
                 working_memory=session.working_memory,
                 scenario_ledger=session.scenario_ledger,
+                deterministic_packet=session.deterministic_packet,
                 created_at=session.created_at,
                 updated_at=session.updated_at,
             )
@@ -637,6 +638,7 @@ def create_app(backend: ReservingApiBackend | None = None) -> FastAPI:
             tool_events=session.tool_events,
             working_memory=session.working_memory,
             scenario_ledger=session.scenario_ledger,
+            deterministic_packet=session.deterministic_packet,
             created_at=session.created_at,
             updated_at=session.updated_at,
         )

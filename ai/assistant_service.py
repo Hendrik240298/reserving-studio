@@ -10,8 +10,15 @@ from typing import Any
 
 from ai.api_tools import ReservingApiTools
 from ai.backend_tools import BackendReservingTools
+from ai.context_loader import load_segment_note
+from ai.deterministic_packet import build_deterministic_packet
+from ai.memory_store import SegmentMemoryStore
 from ai.openrouter_client import OpenRouterClient
+from ai.planner import PlaybookPlanner
+from ai.recommendation_policy import RecommendationPolicy
+from ai.reviewer import ReviewerGate
 from ai.tool_payloads import build_memory_snapshot, build_tool_specs, render_memory_hint
+from ai.tool_contract import normalize_tool_result
 
 
 logger = logging.getLogger(__name__)
@@ -61,6 +68,7 @@ SYSTEM_PROMPT = (
 AI_CONTEXT_PROMPT = _load_prompt_file("AI_CONTEXT.md")
 AI_PLAYBOOKS_PROMPT = _load_prompt_file("AI_PLAYBOOKS.md")
 AI_EXAMPLES_PROMPT = _load_prompt_file("AI_EXAMPLES.md")
+AI_POLICY_PROMPT = _load_prompt_file("AI_POLICY.md")
 
 RECENT_HISTORY_LIMIT = 6
 
@@ -69,6 +77,13 @@ class AssistantService:
     def __init__(self, *, tool_executor: Any) -> None:
         self._client = OpenRouterClient()
         self._tools = tool_executor
+        self._planner = PlaybookPlanner()
+        self._reviewer = ReviewerGate()
+        self._recommendation_policy = RecommendationPolicy()
+        self._segment_memory_store = SegmentMemoryStore()
+        self._deterministic_orchestration_enabled = os.environ.get(
+            "AI_DETERMINISTIC_ORCHESTRATION", "1"
+        ).strip().lower() not in {"0", "false", "off"}
         self._observability_enabled = os.environ.get(
             "AI_OBSERVABILITY", "1"
         ).strip().lower() not in {"0", "false", "off"}
@@ -123,6 +138,8 @@ class AssistantService:
             messages.append({"role": "system", "content": AI_PLAYBOOKS_PROMPT})
         if AI_EXAMPLES_PROMPT:
             messages.append({"role": "system", "content": AI_EXAMPLES_PROMPT})
+        if AI_POLICY_PROMPT:
+            messages.append({"role": "system", "content": AI_POLICY_PROMPT})
         intent_hint = self._build_intent_hint(user_prompt)
         if intent_hint:
             messages.append({"role": "system", "content": intent_hint})
@@ -136,6 +153,13 @@ class AssistantService:
         if memory_hint:
             messages.append({"role": "system", "content": memory_hint})
         recent_history = (conversation_history or [])[-RECENT_HISTORY_LIMIT:]
+        segment_memory = self._load_segment_memory(session_context)
+        segment_memory_hint = self._build_segment_memory_hint(segment_memory)
+        if segment_memory_hint:
+            messages.append({"role": "system", "content": segment_memory_hint})
+        segment_note = self._load_segment_note(session_context)
+        if segment_note:
+            messages.append({"role": "system", "content": segment_note})
         for item in recent_history:
             role = str(item.get("role", "")).strip().lower()
             content = str(item.get("content", "")).strip()
@@ -194,17 +218,51 @@ class AssistantService:
             workflow_state=workflow_state,
             event_callback=event_callback,
         )
+        memory_state["segment_memory"] = segment_memory
+        deterministic_packet = self._run_deterministic_orchestration(
+            user_prompt=user_prompt,
+            session_context=session_context,
+            tool_outputs=tool_outputs,
+            tool_events=tool_events,
+            memory_state=memory_state,
+            guardrail_state=guardrail_state,
+            workflow_state=workflow_state,
+            event_callback=event_callback,
+            segment_memory=segment_memory,
+        )
+        if deterministic_packet:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": self._build_deterministic_packet_prompt(
+                        deterministic_packet
+                    ),
+                }
+            )
+            memory_state["deterministic_packet"] = deterministic_packet
+            self._persist_segment_memory(
+                session_context=session_context,
+                segment_memory=segment_memory,
+                memory_state=memory_state,
+                deterministic_packet=deterministic_packet,
+            )
 
         for _ in range(max_steps):
+            available_tool_specs = self._filter_tool_specs_for_turn(
+                tool_specs=tool_specs,
+                deterministic_packet=memory_state.get("deterministic_packet", {}),
+            )
             if self._observability_enabled:
                 logger.info(
-                    "[OBS] ai.step request_openrouter messages=%s", len(messages)
+                    "[OBS] ai.step request_openrouter messages=%s tools=%s",
+                    len(messages),
+                    len(available_tool_specs),
                 )
             try:
                 self._emit_event(event_callback, "status", {"message": "Thinking"})
                 response = self._client.chat_completion(
                     messages=messages,
-                    tools=tool_specs,
+                    tools=available_tool_specs,
                     tool_choice="auto",
                     temperature=0.1,
                     max_tokens=1200,
@@ -226,6 +284,9 @@ class AssistantService:
                             "session_id": session_id,
                             "tool_events": tool_events,
                             "memory_snapshot": memory_state,
+                            "deterministic_packet": memory_state.get(
+                                "deterministic_packet", {}
+                            ),
                         }
                     suffix = (
                         f" session_id={session_id}"
@@ -242,6 +303,9 @@ class AssistantService:
                         "session_id": session_id,
                         "tool_events": tool_events,
                         "memory_snapshot": memory_state,
+                        "deterministic_packet": memory_state.get(
+                            "deterministic_packet", {}
+                        ),
                     }
                 provider_error = str(error).strip()
                 if provider_error:
@@ -262,6 +326,9 @@ class AssistantService:
                     "session_id": workflow_state.get("session_id"),
                     "tool_events": tool_events,
                     "memory_snapshot": memory_state,
+                    "deterministic_packet": memory_state.get(
+                        "deterministic_packet", {}
+                    ),
                 }
                 raise error
             choice = response["choices"][0]["message"]
@@ -282,6 +349,9 @@ class AssistantService:
                         "session_id": workflow_state.get("session_id"),
                         "tool_events": tool_events,
                         "memory_snapshot": memory_state,
+                        "deterministic_packet": memory_state.get(
+                            "deterministic_packet", {}
+                        ),
                     }
                 if isinstance(content, list):
                     parts = [
@@ -300,6 +370,9 @@ class AssistantService:
                         "session_id": workflow_state.get("session_id"),
                         "tool_events": tool_events,
                         "memory_snapshot": memory_state,
+                        "deterministic_packet": memory_state.get(
+                            "deterministic_packet", {}
+                        ),
                     }
                 return {
                     "content": "No response content was produced by the model.",
@@ -307,6 +380,9 @@ class AssistantService:
                     "session_id": workflow_state.get("session_id"),
                     "tool_events": tool_events,
                     "memory_snapshot": memory_state,
+                    "deterministic_packet": memory_state.get(
+                        "deterministic_packet", {}
+                    ),
                 }
 
             messages.append(
@@ -339,32 +415,16 @@ class AssistantService:
                     {"message": self._tool_status_label(function_name, args)},
                 )
 
-                tool_result = self._tools.call_tool(function_name, args)
-                tool_outputs[function_name] = tool_result
-                memory_state = self._update_memory_state(
-                    memory_state,
-                    function_name=function_name,
-                    tool_result=tool_result,
-                )
-                tool_events.append(
-                    {
-                        "name": function_name,
-                        "arguments": args,
-                        "result_summary": tool_result,
-                    }
-                )
-                self._emit_event(
-                    event_callback,
-                    "tool_event",
-                    tool_events[-1],
-                )
-                self._update_workflow_state(
-                    workflow_state=workflow_state,
+                tool_result, memory_state = self._execute_tool_call(
                     function_name=function_name,
                     args=args,
-                    tool_result=tool_result,
+                    tool_outputs=tool_outputs,
+                    tool_events=tool_events,
+                    memory_state=memory_state,
+                    workflow_state=workflow_state,
+                    guardrail_state=guardrail_state,
+                    event_callback=event_callback,
                 )
-                self._update_guardrail_state(guardrail_state, tool_result)
                 if self._observability_enabled:
                     logger.info(
                         "[OBS] ai.tool.result name=%s summary=%s",
@@ -389,7 +449,321 @@ class AssistantService:
             "session_id": workflow_state.get("session_id"),
             "tool_events": tool_events,
             "memory_snapshot": memory_state,
+            "deterministic_packet": memory_state.get("deterministic_packet", {}),
         }
+
+    def _run_deterministic_orchestration(
+        self,
+        *,
+        user_prompt: str,
+        session_context: dict[str, Any] | None,
+        tool_outputs: dict[str, dict[str, Any]],
+        tool_events: list[dict[str, Any]],
+        memory_state: dict[str, Any],
+        guardrail_state: dict[str, bool],
+        workflow_state: dict[str, Any],
+        event_callback: Any | None,
+        segment_memory: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if not getattr(self, "_deterministic_orchestration_enabled", True):
+            return None
+        planner = getattr(self, "_planner", None) or PlaybookPlanner()
+        plan = planner.plan(
+            user_prompt=user_prompt,
+            session_context=session_context,
+            segment_memory=segment_memory,
+        )
+        if plan is None:
+            return None
+        if self._observability_enabled:
+            logger.info(
+                "[OBS] deterministic.playbook.selected playbook=%s session_id=%s segment=%s steps=%s min_evidence=%s",
+                plan.playbook,
+                plan.session_id,
+                plan.segment,
+                len(plan.steps),
+                plan.minimum_evidence_count,
+            )
+
+        self._emit_event(
+            event_callback,
+            "status",
+            {"message": f"Running deterministic playbook: {plan.playbook}"},
+        )
+        envelopes: list[dict[str, Any]] = []
+        for step in plan.steps:
+            if self._observability_enabled:
+                logger.info(
+                    "[OBS] deterministic.step.execute playbook=%s tool=%s evidence_key=%s",
+                    plan.playbook,
+                    step.tool_name,
+                    step.evidence_key,
+                )
+            tool_result, updated_memory = self._execute_tool_call(
+                function_name=step.tool_name,
+                args=step.args,
+                tool_outputs=tool_outputs,
+                tool_events=tool_events,
+                memory_state=memory_state,
+                workflow_state=workflow_state,
+                guardrail_state=guardrail_state,
+                event_callback=event_callback,
+            )
+            memory_state.clear()
+            memory_state.update(updated_memory)
+            envelopes.append(
+                normalize_tool_result(
+                    tool_name=step.tool_name,
+                    args=step.args,
+                    result=tool_result,
+                    segment=plan.segment,
+                    evidence_key=step.evidence_key,
+                )
+            )
+
+        reviewer = getattr(self, "_reviewer", None) or ReviewerGate()
+        review_outcome = reviewer.review(plan=plan, evidence_packets=envelopes)
+        if self._observability_enabled:
+            logger.info(
+                "[OBS] deterministic.review.completed playbook=%s status=%s collected=%s missing=%s issues=%s caveats=%s",
+                plan.playbook,
+                review_outcome.status,
+                len(review_outcome.collected_evidence),
+                len(review_outcome.missing_evidence),
+                len(review_outcome.issues),
+                len(review_outcome.caveats),
+            )
+        policy = getattr(self, "_recommendation_policy", None) or RecommendationPolicy()
+        recommendation = policy.decide(
+            review=review_outcome,
+            evidence_packets=envelopes,
+        )
+        if self._observability_enabled:
+            logger.info(
+                "[OBS] deterministic.recommendation.completed playbook=%s status=%s scenario_id=%s alternatives=%s",
+                plan.playbook,
+                recommendation.status,
+                recommendation.recommended_scenario_id,
+                len(recommendation.alternative_scenario_ids),
+            )
+        return build_deterministic_packet(
+            plan=plan.to_dict(),
+            review=review_outcome.to_dict(),
+            recommendation=recommendation.to_dict(),
+            evidence_packets=envelopes,
+        )
+
+    def _filter_tool_specs_for_turn(
+        self,
+        *,
+        tool_specs: list[dict[str, Any]],
+        deterministic_packet: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        if not isinstance(deterministic_packet, dict) or not deterministic_packet:
+            return tool_specs
+        plan = (
+            deterministic_packet.get("plan", {})
+            if isinstance(deterministic_packet.get("plan"), dict)
+            else {}
+        )
+        review = (
+            deterministic_packet.get("review", {})
+            if isinstance(deterministic_packet.get("review"), dict)
+            else {}
+        )
+        steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
+        if not steps:
+            return tool_specs
+        if str(review.get("status", "")).strip().lower() == "hard_fail":
+            return tool_specs
+
+        suppressed_names = {
+            str(step.get("tool_name", "")).strip()
+            for step in steps
+            if isinstance(step, dict) and str(step.get("tool_name", "")).strip()
+        }
+        if not suppressed_names:
+            return tool_specs
+
+        filtered: list[dict[str, Any]] = []
+        for spec in tool_specs:
+            if not isinstance(spec, dict):
+                continue
+            function = spec.get("function")
+            if not isinstance(function, dict):
+                filtered.append(spec)
+                continue
+            name = str(function.get("name", "")).strip()
+            if name in suppressed_names:
+                continue
+            filtered.append(spec)
+        if self._observability_enabled and len(filtered) != len(tool_specs):
+            logger.info(
+                "[OBS] deterministic.tools.suppressed count=%s names=%s",
+                len(tool_specs) - len(filtered),
+                sorted(suppressed_names),
+            )
+        return filtered
+
+    def _execute_tool_call(
+        self,
+        *,
+        function_name: str,
+        args: dict[str, Any],
+        tool_outputs: dict[str, dict[str, Any]],
+        tool_events: list[dict[str, Any]],
+        memory_state: dict[str, Any],
+        workflow_state: dict[str, Any],
+        guardrail_state: dict[str, bool],
+        event_callback: Any | None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        for event in tool_events:
+            if not isinstance(event, dict):
+                continue
+            if event.get("name") == function_name and event.get("arguments") == args:
+                cached = event.get("result_summary")
+                if isinstance(cached, dict):
+                    return cached, memory_state
+
+        tool_result = self._tools.call_tool(function_name, args)
+        tool_outputs[function_name] = tool_result
+        next_memory = self._update_memory_state(
+            memory_state,
+            function_name=function_name,
+            tool_result=tool_result,
+        )
+        tool_event = {
+            "name": function_name,
+            "arguments": args,
+            "result_summary": tool_result,
+        }
+        tool_events.append(tool_event)
+        self._emit_event(event_callback, "tool_event", tool_event)
+        self._update_workflow_state(
+            workflow_state=workflow_state,
+            function_name=function_name,
+            args=args,
+            tool_result=tool_result,
+        )
+        self._update_guardrail_state(guardrail_state, tool_result)
+        return tool_result, next_memory
+
+    @staticmethod
+    def _build_deterministic_packet_prompt(packet: dict[str, Any]) -> str:
+        return (
+            "Deterministic control packet already prepared for this turn. "
+            "Use it as the primary evidence frame for the answer. Do not contradict its review status or recommendation status.\n"
+            + json.dumps(packet, ensure_ascii=True)
+        )
+
+    @staticmethod
+    def _build_segment_memory_hint(segment_memory: dict[str, Any]) -> str:
+        if not isinstance(segment_memory, dict) or not segment_memory:
+            return ""
+        parts: list[str] = []
+        last_selection = segment_memory.get("last_selection")
+        if isinstance(last_selection, dict):
+            tail = (
+                last_selection.get("tail")
+                if isinstance(last_selection.get("tail"), dict)
+                else {}
+            )
+            parts.append(
+                "Segment memory: "
+                f"valuation_date={last_selection.get('valuation_date')}, "
+                f"tail={tail.get('estimator') or tail.get('curve')}, "
+                f"attachment_age={tail.get('attachment_age')}"
+            )
+        known_issues = segment_memory.get("known_issues")
+        if isinstance(known_issues, list) and known_issues:
+            parts.append(
+                "Known issues: " + ", ".join(str(item) for item in known_issues[:4])
+            )
+        rejected = segment_memory.get("rejected_scenarios")
+        if isinstance(rejected, list) and rejected:
+            parts.append(
+                "Previously rejected scenarios: "
+                + "; ".join(
+                    str(item.get("scenario_hash") or item.get("scenario_id"))
+                    for item in rejected[:3]
+                    if isinstance(item, dict)
+                )
+            )
+        return "\n".join(part for part in parts if part)
+
+    @staticmethod
+    def _load_segment_note(session_context: dict[str, Any] | None) -> str:
+        if not isinstance(session_context, dict):
+            return ""
+        return load_segment_note(session_context.get("segment"))
+
+    def _load_segment_memory(
+        self,
+        session_context: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if not isinstance(session_context, dict):
+            return {}
+        segment = session_context.get("segment")
+        store = getattr(self, "_segment_memory_store", None)
+        if store is None:
+            return {}
+        try:
+            return store.load(segment=segment)
+        except Exception:
+            return {}
+
+    def _persist_segment_memory(
+        self,
+        *,
+        session_context: dict[str, Any] | None,
+        segment_memory: dict[str, Any],
+        memory_state: dict[str, Any],
+        deterministic_packet: dict[str, Any],
+    ) -> None:
+        if not isinstance(session_context, dict):
+            return
+        segment = session_context.get("segment")
+        if not isinstance(segment, str) or not segment.strip():
+            return
+        store = getattr(self, "_segment_memory_store", None)
+        if store is None:
+            return
+        next_memory = dict(segment_memory)
+        next_memory["segment_id"] = segment.strip()
+        session_summary = (
+            memory_state.get("session_summary")
+            if isinstance(memory_state.get("session_summary"), dict)
+            else {}
+        )
+        params = (
+            session_summary.get("params")
+            if isinstance(session_summary.get("params"), dict)
+            else {}
+        )
+        last_selection = dict(next_memory.get("last_selection", {}))
+        if params:
+            last_selection.update(
+                {
+                    "average": params.get("average"),
+                    "tail": {
+                        "curve": params.get("tail_curve"),
+                        "attachment_age": params.get("tail_attachment_age"),
+                    },
+                }
+            )
+        next_memory["last_selection"] = last_selection
+        if isinstance(memory_state.get("scenario_ledger"), list):
+            next_memory["scenario_ledger"] = memory_state.get("scenario_ledger")
+        recommendation = deterministic_packet.get("recommendation")
+        if isinstance(recommendation, dict):
+            next_memory["last_recommendation"] = recommendation
+        review = deterministic_packet.get("review")
+        if isinstance(review, dict):
+            next_memory["last_review"] = review
+        try:
+            store.save(segment=segment.strip(), memory=next_memory)
+        except Exception:
+            return
 
     @staticmethod
     def _build_session_context_hint(session_context: dict[str, Any] | None) -> str:
@@ -567,6 +941,11 @@ class AssistantService:
                 "Use tested tail-fit evaluation before recommending or comparing tail methods. "
                 "Proactively comment on sub-1 late selected LDFs, whether the tail smooths them from above, and whether the attachment creates too sharp a cut from the previous selected LDF."
             )
+        if playbook == "data_anomaly_triage":
+            return (
+                "Selected playbook: Data Anomaly Triage. "
+                "Lead with diagnostics, movement evidence, and LDF consistency before any parameter recommendation."
+            )
         if playbook == "data_exploration":
             return (
                 "Selected playbook: Data Exploration. "
@@ -612,6 +991,19 @@ class AssistantService:
             }
         ):
             return "reserve_change_explanation"
+        if any(
+            keyword in prompt
+            for keyword in {
+                "data quality",
+                "anomaly",
+                "triage",
+                "missing diagonal",
+                "impossible link ratio",
+                "calendar year distortion",
+                "large loss contamination",
+            }
+        ):
+            return "data_anomaly_triage"
         if any(
             keyword in prompt
             for keyword in {

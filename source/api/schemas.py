@@ -408,6 +408,7 @@ class AIChatCreateResponse(BaseModel):
     tool_events: list[AIChatToolEvent] = Field(default_factory=list)
     working_memory: dict = Field(default_factory=dict)
     scenario_ledger: list[dict] = Field(default_factory=list)
+    deterministic_packet: dict = Field(default_factory=dict)
     created_at: str
     updated_at: str
 
@@ -427,6 +428,7 @@ class AIChatMessageResponse(BaseModel):
     tool_events: list[AIChatToolEvent] = Field(default_factory=list)
     working_memory: dict = Field(default_factory=dict)
     scenario_ledger: list[dict] = Field(default_factory=list)
+    deterministic_packet: dict = Field(default_factory=dict)
     updated_at: str
 
 
@@ -439,5 +441,6 @@ class AIChatSessionResponse(BaseModel):
     tool_events: list[AIChatToolEvent] = Field(default_factory=list)
     working_memory: dict = Field(default_factory=dict)
     scenario_ledger: list[dict] = Field(default_factory=list)
+    deterministic_packet: dict = Field(default_factory=dict)
     created_at: str
     updated_at: str
