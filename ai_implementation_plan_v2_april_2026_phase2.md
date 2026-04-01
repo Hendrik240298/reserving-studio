@@ -9,9 +9,9 @@ Assumptions
 ## Milestone Order
 1. ~~Foundation extraction and memory schema~~
 2. ~~Decision engines v2~~
-3. Quarter-close orchestration
-4. Assistant/API/UI integration
-5. Regression and release gating
+3. ~~Quarter-close orchestration~~
+4. ~~Assistant/API/UI integration~~
+5. ~~Regression and release gating~~
 
 
 ## ~~Milestone 1: Foundation Extraction And Memory Schema~~
@@ -143,127 +143,134 @@ Tests:
 Exit criteria:
 - ~~Triage result is structured and actionable, not just a list of findings.~~
 
-## Milestone 3: Quarter-Close Orchestration
-8. Epic: Quarter-close workflow service
-Goal: deliver the end-to-end plan-test-conclude workflow.
+## ~~Milestone 3: Quarter-Close Orchestration~~
+Remark: deterministic service/backend implementation is complete; public FastAPI endpoint exposure and AI tool integration remain in Milestone 4.
+
+8. ~~Epic: Quarter-close workflow service~~
+~~Goal: deliver the end-to-end plan-test-conclude workflow.~~
 Tasks:
-- Orchestrate current snapshot vs prior proxy snapshot comparison.
-- Run anomaly triage, movement diagnostics, assumption retests, targeted scenarios, and ranking in one deterministic service.
-- Use segment memory continuity checks before final recommendation.
-- Return a structured workflow result, not narrative only.
+- ~~Orchestrate current snapshot vs prior proxy snapshot comparison.~~
+- ~~Run anomaly triage, movement diagnostics, assumption retests, targeted scenarios, and ranking in one deterministic service.~~
+- ~~Use segment memory continuity checks before final recommendation.~~
+- ~~Return a structured workflow result, not narrative only.~~
 Files to add:
-- source/services/quarter_close_service.py
+- ~~source/services/quarter_close_service.py~~
 Files to change:
-- source/services/valuation_snapshot_service.py
-- source/services/assumption_review_service.py
-- source/services/segment_memory_service.py
-- source/api/adapters/reserving_adapter.py
-- source/api/schemas.py
+- ~~source/services/valuation_snapshot_service.py~~
+- ~~source/services/assumption_review_service.py~~
+- ~~source/services/segment_memory_service.py~~
+- ~~source/api/adapters/reserving_adapter.py~~
+- ~~source/api/schemas.py~~
 Tests:
-- tests/unit/test_quarter_close_service.py
+- ~~tests/unit/test_quarter_close_service.py~~
+- ~~tests/unit/test_quarter_close_backend_adapter.py~~
 Exit criteria:
-- One service call can produce a reproducible quarter-close review packet.
-9. Epic: Quarter-close pack generator
-Goal: generate a review-ready structured pack from deterministic results.
+- ~~One service call can produce a reproducible quarter-close review packet.~~
+9. ~~Epic: Quarter-close pack generator~~
+~~Goal: generate a review-ready structured pack from deterministic results.~~
 Tasks:
-- Build output sections for data changes, assumptions retested, scenarios considered, recommended changes, caveats, judgment items, and sign-off questions.
-- Include evidence ids, scenario ids, policy trace, and continuity notes.
-- Add packet metadata for generated-at time, comparison basis, and memory version.
+- ~~Build output sections for data changes, assumptions retested, scenarios considered, recommended changes, caveats, judgment items, and sign-off questions.~~
+- ~~Include evidence ids, scenario ids, policy trace, and continuity notes.~~
+- ~~Add packet metadata for generated-at time, comparison basis, and memory version.~~
 Files to change:
-- source/services/quarter_close_service.py
-- source/api/schemas.py
+- ~~source/services/quarter_close_service.py~~
+- ~~source/api/schemas.py~~
 - optionally source/ai_review.py if you want a shared packet format
 Tests:
-- tests/unit/test_quarter_close_pack_generator.py
+- ~~tests/unit/test_quarter_close_pack_generator.py~~
 Exit criteria:
-- Pack output is deterministic and exportable as JSON-compatible data.
+- ~~Pack output is deterministic and exportable as JSON-compatible data.~~
 
-## Milestone 4: Assistant, API, And UI Integration
-10. Epic: Composite API endpoints and AI tools
-Goal: expose Phase 2 review workflows as first-class tools instead of chaining many low-level calls in prompts.
+## ~~Milestone 4: Assistant, API, And UI Integration~~
+Remark: composite API exposure, deterministic control-layer integration, and structured human-decision writeback are complete. Regression benchmarking and prompt corpus refresh remain in Milestone 5.
+
+10. ~~Epic: Composite API endpoints and AI tools~~
+~~Goal: expose Phase 2 review workflows as first-class tools instead of chaining many low-level calls in prompts.~~
 Tasks:
-- Add endpoints for drop review, tail review, BF suitability review, anomaly triage v2, and quarter-close pack.
-- Add matching AI tool specs and summarized payload builders.
-- Keep current drilldown tools for evidence follow-up.
+- ~~Add endpoints for drop review, tail review, BF suitability review, anomaly triage v2, and quarter-close pack.~~
+- ~~Add matching AI tool specs and summarized payload builders.~~
+- ~~Keep current drilldown tools for evidence follow-up.~~
 Files to change:
-- source/api/schemas.py
-- source/api/main.py
-- source/api/adapters/reserving_adapter.py
-- ai/tool_payloads.py
-- ai/api_tools.py
-- ai/backend_tools.py
+- ~~source/api/schemas.py~~
+- ~~source/api/main.py~~
+- ~~source/api/adapters/reserving_adapter.py~~
+- ~~ai/tool_payloads.py~~
+- ~~ai/api_tools.py~~
+- ~~ai/backend_tools.py~~
 Tests:
-- tests/unit/test_api_app.py
-- tests/unit/test_backend_tools_new_tools.py
+- ~~tests/unit/test_api_app.py~~
+- ~~tests/unit/test_backend_tools_new_tools.py~~
 Exit criteria:
-- Planner can invoke one composite tool per review instead of reconstructing the workflow through ad hoc tool chains.
-11. Epic: Planner and policy integration
-Goal: make the assistant use the new composite deterministic reviews.
+- ~~Planner can invoke one composite tool per review instead of reconstructing the workflow through ad hoc tool chains.~~
+11. ~~Epic: Planner and policy integration~~
+~~Goal: make the assistant use the new composite deterministic reviews.~~
 Tasks:
-- Extend playbooks to use composite Phase 2 tools.
-- Add new playbook(s) for quarter-close and stronger tail/BF/drop reviews.
-- Update reviewer logic to check continuity-memory coverage where relevant.
-- Update recommendation policy to consume score breakdowns, continuity penalties, and house-preference checks.
+- ~~Extend playbooks to use composite Phase 2 tools.~~
+- ~~Add new playbook(s) for quarter-close and stronger tail/BF/drop reviews.~~
+- ~~Update reviewer logic to check continuity-memory coverage where relevant.~~
+- ~~Update recommendation policy to consume score breakdowns, continuity penalties, and house-preference checks.~~
 Files to change:
-- ai/planner.py
-- ai/playbook_registry.py
-- ai/reviewer.py
-- ai/recommendation_policy.py
-- ai/assistant_service.py
-- ai/deterministic_packet.py
+- ~~ai/planner.py~~
+- ~~ai/playbook_registry.py~~
+- ~~ai/reviewer.py~~
+- ~~ai/recommendation_policy.py~~
+- ~~ai/assistant_service.py~~
+- ~~ai/deterministic_packet.py~~
 Tests:
-- new tests/unit/test_ai_phase2_control_layer.py
-- update tests/unit/test_ai_phase1_control_layer.py
+- ~~new tests/unit/test_ai_phase2_control_layer.py~~
+- ~~update tests/unit/test_ai_phase1_control_layer.py~~
 Exit criteria:
-- Deterministic packet includes score breakdown, continuity notes, and stronger recommendation rationale.
-12. Epic: YAML-managed house preferences and human disposition writeback
-Goal: turn human decisions into structured continuity memory.
+- ~~Deterministic packet includes score breakdown, continuity notes, and stronger recommendation rationale.~~
+12. ~~Epic: YAML-managed house preferences and human disposition writeback~~
+~~Goal: turn human decisions into structured continuity memory.~~
 Tasks:
-- Extend saved human decision payload to include scenario signature, disposition, rationale, approver, signed-off time, and valuation fingerprint.
-- Write accepted/rejected scenario dispositions into AI memory v2.
-- Store YAML-managed house_preferences in the per-segment AI memory file.
-- Make policy check rejected_before and house_preference_conflict.
+- ~~Extend saved human decision payload to include scenario signature, disposition, rationale, approver, signed-off time, and valuation fingerprint.~~
+- ~~Write accepted/rejected scenario dispositions into AI memory v2.~~
+- ~~Store YAML-managed house_preferences in the per-segment AI memory file.~~
+- ~~Make policy check rejected_before and house_preference_conflict.~~
 Files to change:
-- source/dashboard.py
-- source/ai_review.py
+- ~~source/dashboard.py~~
+- ~~source/ai_review.py~~
 - source/config_manager.py
-- source/services/segment_memory_service.py
-- ai/assistant_service.py
+- ~~source/services/segment_memory_service.py~~
+- ~~ai/assistant_service.py~~
 Tests:
-- tests/unit/test_ai_review_service.py
-- tests/unit/test_dashboard_ai_review.py
-- tests/unit/test_segment_memory_service.py
+- ~~tests/unit/test_ai_review_service.py~~
+- ~~tests/unit/test_dashboard_ai_review.py~~
+- ~~tests/unit/test_segment_memory_service.py~~
 Exit criteria:
-- A saved approve/reject decision updates segment continuity memory in a reusable way.
+- ~~A saved approve/reject decision updates segment continuity memory in a reusable way.~~
 
-## Milestone 5: Regression And Release Gating
-13. Epic: Benchmark and regression harness
-Goal: make Phase 2 measurable and stable.
+## ~~Milestone 5: Regression And Release Gating~~
+Remark: benchmark fixtures, regression harness, and AI markdown context refresh are complete. Phase 2 is now fully implemented and covered by fixed benchmark and unit-test gates.
+
+13. ~~Epic: Benchmark and regression harness~~
+~~Goal: make Phase 2 measurable and stable.~~
 Tasks:
-- Add fixed benchmark fixtures for drop review, tail review, BF suitability, anomaly triage, unsupported requests, and quarter-close.
-- Score playbook correctness, tool completeness, grounding, continuity use, and recommendation quality.
-- Add regression tests for memory contradictions and rejected-before behavior.
+- ~~Add fixed benchmark fixtures for drop review, tail review, BF suitability, anomaly triage, unsupported requests, and quarter-close.~~
+- ~~Score playbook correctness, tool completeness, grounding, continuity use, and recommendation quality.~~
+- ~~Add regression tests for memory contradictions and rejected-before behavior.~~
 Files to add:
-- tests/unit/test_phase2_benchmarks.py
-- tests/fixtures/phase2/ fixture files if needed
+- ~~tests/unit/test_phase2_benchmarks.py~~
+- ~~tests/fixtures/phase2/ fixture files if needed~~
 Files to change:
-- tests/unit/test_ai_phase2_control_layer.py
-- tests/unit/test_quarter_close_service.py
+- ~~tests/unit/test_ai_phase2_control_layer.py~~
+- ~~tests/unit/test_quarter_close_service.py~~
 Exit criteria:
-- Phase 2 behavior can be compared against a fixed baseline before release.
-14. Epic: AI prompt/policy docs refresh
-Goal: keep the markdown context aligned with the implemented control layer.
+- ~~Phase 2 behavior can be compared against a fixed baseline before release.~~
+14. ~~Epic: AI prompt/policy docs refresh~~
+~~Goal: keep the markdown context aligned with the implemented control layer.~~
 Tasks:
-- Update playbook guidance for composite tools and quarter-close workflow.
-- Update policy text to reflect continuity checks, evidence tiers, and YAML-managed preferences.
-- Update README/tool documentation for new endpoints and limits.
+- ~~Update playbook guidance for composite tools and quarter-close workflow.~~
+- ~~Update policy text to reflect continuity checks, evidence tiers, and YAML-managed preferences.~~
+- ~~Update README/tool documentation for new endpoints and limits.~~
 Files to change:
-- AI_PLAYBOOKS.md
-- AI_POLICY.md
-- AI_README.md
+- ~~AI_PLAYBOOKS.md~~
+- ~~AI_POLICY.md~~
+- ~~AI_README.md~~
 - optionally AI_CONTEXT.md
 Exit criteria:
-- The prompt corpus describes the actual implemented Phase 2 behavior.
+- ~~The prompt corpus describes the actual implemented Phase 2 behavior.~~
 
 ## Recommended Build Sequence
 1. Extract scenario evaluation/scoring services.

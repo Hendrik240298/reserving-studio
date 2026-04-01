@@ -147,11 +147,7 @@ def test_playbook_planner_builds_data_anomaly_triage_plan() -> None:
 
     assert plan is not None
     assert plan.playbook == "data_anomaly_triage"
-    assert [step.tool_name for step in plan.steps] == [
-        "tool_run_diagnostics_summary",
-        "tool_run_movement_diagnostics",
-        "tool_run_ldf_consistency_diagnostics",
-    ]
+    assert [step.tool_name for step in plan.steps] == ["tool_run_anomaly_triage"]
 
 
 def test_reviewer_gate_hard_fails_on_red_governance() -> None:

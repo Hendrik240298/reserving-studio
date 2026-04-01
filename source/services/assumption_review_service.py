@@ -15,9 +15,10 @@ from source.services.segment_memory_service import SegmentMemoryService
 
 
 @dataclass(frozen=True)
-class _BaselineContext:
+class BaselineContext:
     evaluation: Any
     totals: dict[str, Any]
+    movement_diagnostics: dict[str, Any]
     ldf_consistency: dict[str, Any]
     late_emergence: dict[str, Any]
     anomaly_triage: dict[str, Any]
@@ -47,8 +48,9 @@ class AssumptionReviewService:
         baseline_params: dict[str, Any],
         segment_memory: dict[str, Any] | None = None,
         candidate_limit: int = 5,
+        baseline_context: BaselineContext | None = None,
     ) -> dict[str, Any]:
-        baseline = self._build_baseline_context(
+        baseline = baseline_context or self.build_baseline_context(
             segment=segment,
             reserving=reserving,
             baseline_params=baseline_params,
@@ -107,6 +109,9 @@ class AssumptionReviewService:
                 "baseline_drop_recommendations": self._drop_recommendation_map(
                     baseline.evaluation
                 ),
+                "baseline_movement_summary": baseline.movement_diagnostics.get(
+                    "summary", {}
+                ),
                 "baseline_late_emergence_rows": baseline.late_emergence.get("rows", [])[
                     :5
                 ],
@@ -125,8 +130,9 @@ class AssumptionReviewService:
         baseline_params: dict[str, Any],
         segment_memory: dict[str, Any] | None = None,
         candidate_limit: int = 12,
+        baseline_context: BaselineContext | None = None,
     ) -> dict[str, Any]:
-        baseline = self._build_baseline_context(
+        baseline = baseline_context or self.build_baseline_context(
             segment=segment,
             reserving=reserving,
             baseline_params=baseline_params,
@@ -179,6 +185,9 @@ class AssumptionReviewService:
                 "baseline_tail_recommendation": self._heuristic_tail_recommendation(
                     reserving
                 ),
+                "baseline_movement_summary": baseline.movement_diagnostics.get(
+                    "summary", {}
+                ),
                 "baseline_anomaly_summary": baseline.anomaly_triage.get("summary", {}),
             },
             "run_metadata": self._run_metadata(baseline.evaluation),
@@ -191,8 +200,9 @@ class AssumptionReviewService:
         reserving: Reserving,
         baseline_params: dict[str, Any],
         segment_memory: dict[str, Any] | None = None,
+        baseline_context: BaselineContext | None = None,
     ) -> dict[str, Any]:
-        baseline = self._build_baseline_context(
+        baseline = baseline_context or self.build_baseline_context(
             segment=segment,
             reserving=reserving,
             baseline_params=baseline_params,
@@ -287,26 +297,36 @@ class AssumptionReviewService:
         segment: str,
         reserving: Reserving,
         baseline_params: dict[str, Any],
+        baseline_evaluation: Any | None = None,
+        movement_payload: dict[str, Any] | None = None,
+        ldf_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        baseline_eval = self._evaluation_service.evaluate_scenario(
-            segment=segment,
-            reserving=reserving,
-            params=dict(baseline_params),
-            scenario_id="baseline",
-            summary="Current session configuration",
-            parent_scenario_id=None,
-            transform="baseline",
-            rationale_evidence_ids=[],
+        baseline_eval = (
+            baseline_evaluation
+            or self._evaluation_service.evaluate_scenario(
+                segment=segment,
+                reserving=reserving,
+                params=dict(baseline_params),
+                scenario_id="baseline",
+                summary="Current session configuration",
+                parent_scenario_id=None,
+                transform="baseline",
+                rationale_evidence_ids=[],
+            )
         )
         movement = MovementDiagnosticsService(reserving)
-        movement_payload = movement.run()
-        ldf_payload = movement.run_ldf_consistency()
+        resolved_movement_payload = movement_payload or movement.run()
+        resolved_ldf_payload = ldf_payload or movement.run_ldf_consistency()
         classified: list[dict[str, Any]] = []
         classified.extend(self._classify_diagnostic_findings(baseline_eval.findings))
         classified.extend(
-            self._classify_movement_findings(movement_payload.get("findings", []))
+            self._classify_movement_findings(
+                resolved_movement_payload.get("findings", [])
+            )
         )
-        classified.extend(self._classify_ldf_findings(ldf_payload.get("findings", [])))
+        classified.extend(
+            self._classify_ldf_findings(resolved_ldf_payload.get("findings", []))
+        )
         classified = self._dedupe_triaged_findings(classified)
         pause = any(bool(item.get("pause_recommendation")) for item in classified)
         return {
@@ -321,13 +341,13 @@ class AssumptionReviewService:
             "run_metadata": self._run_metadata(baseline_eval),
         }
 
-    def _build_baseline_context(
+    def build_baseline_context(
         self,
         *,
         segment: str,
         reserving: Reserving,
         baseline_params: dict[str, Any],
-    ) -> _BaselineContext:
+    ) -> BaselineContext:
         baseline_eval = self._evaluation_service.evaluate_scenario(
             segment=segment,
             reserving=reserving,
@@ -343,20 +363,25 @@ class AssumptionReviewService:
             params=dict(baseline_params),
         )
         movement = MovementDiagnosticsService(reserving)
+        movement_diagnostics = movement.run()
         ldf_consistency = movement.run_ldf_consistency()
         late_emergence = movement.run_late_emergence_benchmark()
         anomaly_triage = self.triage_anomalies(
             segment=segment,
             reserving=reserving,
             baseline_params=baseline_params,
+            baseline_evaluation=baseline_eval,
+            movement_payload=movement_diagnostics,
+            ldf_payload=ldf_consistency,
         )
         self._evaluation_service.apply_params_to_reserving(
             reserving=reserving,
             params=baseline_params,
         )
-        return _BaselineContext(
+        return BaselineContext(
             evaluation=baseline_eval,
             totals=totals,
+            movement_diagnostics=movement_diagnostics,
             ldf_consistency=ldf_consistency,
             late_emergence=late_emergence,
             anomaly_triage=anomaly_triage,
@@ -415,7 +440,7 @@ class AssumptionReviewService:
         *,
         segment: str,
         reserving: Reserving,
-        baseline: _BaselineContext,
+        baseline: BaselineContext,
         candidate: dict[str, Any],
         segment_memory: dict[str, Any] | None,
     ) -> dict[str, Any]:
@@ -592,7 +617,7 @@ class AssumptionReviewService:
         *,
         segment: str,
         reserving: Reserving,
-        baseline: _BaselineContext,
+        baseline: BaselineContext,
         candidate: dict[str, Any],
         segment_memory: dict[str, Any] | None,
     ) -> dict[str, Any]:

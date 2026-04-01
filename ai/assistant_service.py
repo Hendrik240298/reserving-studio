@@ -192,6 +192,9 @@ class AssistantService:
             reserve_change_summary=(working_memory or {}).get("reserve_change_summary")
             if isinstance(working_memory, dict)
             else None,
+            review_summary=(working_memory or {}).get("review_summary")
+            if isinstance(working_memory, dict)
+            else None,
             existing_scenario_ledger=(working_memory or {}).get("scenario_ledger")
             if isinstance(working_memory, dict)
             else None,
@@ -953,6 +956,16 @@ class AssistantService:
                 "Use the Movement Review workflow from AI_PLAYBOOKS.md. "
                 "Start with data-view summaries and movement-focused evidence, then answer directly."
             )
+        if playbook == "quarter_close_review":
+            return (
+                "Selected playbook: Quarter-Close Review. "
+                "Use the composite deterministic quarter-close review first, then use drilldown tools only for follow-up evidence."
+            )
+        if playbook == "drop_review":
+            return (
+                "Selected playbook: Drop Review. "
+                "Use the composite drop review first and treat its ranked candidates, continuity notes, and policy trace as the primary evidence base."
+            )
         if playbook == "scenario_recommendation":
             return (
                 "Selected playbook: Scenario Recommendation. "
@@ -972,18 +985,18 @@ class AssistantService:
         if playbook == "method_suitability_review":
             return (
                 "Selected playbook: Method Suitability Review. "
-                "Use diagnostics, a2a/LDF consistency, and incurred/premium context."
+                "Use the composite BF suitability review first and treat its UWY-level suitability conclusions as the primary evidence base."
             )
         if playbook == "tail_selection":
             return (
                 "Selected playbook: Tail Selection. "
-                "Use tested tail-fit evaluation before recommending or comparing tail methods. "
+                "Use the composite tail review first before drilldown tail-fit testing. "
                 "Proactively comment on sub-1 late selected LDFs, whether the tail smooths them from above, and whether the attachment creates too sharp a cut from the previous selected LDF."
             )
         if playbook == "data_anomaly_triage":
             return (
                 "Selected playbook: Data Anomaly Triage. "
-                "Lead with diagnostics, movement evidence, and LDF consistency before any parameter recommendation."
+                "Lead with the composite anomaly triage result before any parameter recommendation."
             )
         if playbook == "data_exploration":
             return (
@@ -1016,6 +1029,17 @@ class AssistantService:
 
     @staticmethod
     def _select_playbook(prompt: str) -> str:
+        if any(
+            keyword in prompt
+            for keyword in {
+                "quarter close",
+                "quarter-close",
+                "close pack",
+                "close review",
+                "quarterly review pack",
+            }
+        ):
+            return "quarter_close_review"
         if AssistantService._is_movement_question(prompt):
             return "movement_review"
         if any(
@@ -1043,6 +1067,20 @@ class AssistantService:
             }
         ):
             return "data_anomaly_triage"
+        if any(
+            keyword in prompt
+            for keyword in {
+                "drop review",
+                "drop any ratios",
+                "which ratios should be dropped",
+                "which ratio should be dropped",
+                "should be dropped",
+                "should we drop",
+                "should i drop",
+                "drop ratios",
+            }
+        ):
+            return "drop_review"
         if any(
             keyword in prompt
             for keyword in {
@@ -1153,6 +1191,12 @@ class AssistantService:
             "tool_compare_data_views": "Comparing data views",
             "tool_run_diagnostics": "Running diagnostics",
             "tool_run_diagnostics_summary": "Running diagnostics",
+            "tool_run_drop_review": "Running drop review",
+            "tool_run_tail_review": "Running tail review",
+            "tool_run_bf_suitability_review": "Running BF suitability review",
+            "tool_run_anomaly_triage": "Running anomaly triage",
+            "tool_run_quarter_close_review": "Running quarter-close review",
+            "tool_get_quarter_close_pack": "Building quarter-close pack",
             "tool_iterate_diagnostics": "Testing scenarios",
             "tool_run_movement_diagnostics": "Running movement diagnostics",
             "tool_run_ldf_consistency_diagnostics": "Checking LDF consistency",
@@ -1210,12 +1254,32 @@ class AssistantService:
                 data_view_summary=current.get("data_view_summary"),
                 movement_summary=current.get("movement_summary"),
                 reserve_change_summary=current.get("reserve_change_summary"),
+                review_summary=current.get("review_summary"),
                 existing_scenario_ledger=current.get("scenario_ledger"),
             )
         elif function_name in {"tool_get_results_summary", "tool_recalculate"}:
             current["results_summary"] = dict(tool_result)
         elif function_name == "tool_explain_reserve_change":
             current["reserve_change_summary"] = dict(tool_result)
+        elif function_name in {
+            "tool_run_drop_review",
+            "tool_run_tail_review",
+            "tool_run_bf_suitability_review",
+            "tool_run_anomaly_triage",
+            "tool_run_quarter_close_review",
+            "tool_get_quarter_close_pack",
+        }:
+            current = build_memory_snapshot(
+                session_summary=current.get("session_summary"),
+                diagnostics_summary=current.get("diagnostics_summary"),
+                iteration_summary=current.get("iteration_summary"),
+                results_summary=current.get("results_summary"),
+                data_view_summary=current.get("data_view_summary"),
+                movement_summary=current.get("movement_summary"),
+                reserve_change_summary=current.get("reserve_change_summary"),
+                review_summary=dict(tool_result),
+                existing_scenario_ledger=current.get("scenario_ledger"),
+            )
         elif function_name in {
             "tool_run_highest_a2a_drop_scenario",
             "tool_run_derived_drop_scenario",

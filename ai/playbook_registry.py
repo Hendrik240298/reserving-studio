@@ -16,6 +16,42 @@ def build_execution_plan(
         return None
 
     playbook = str(playbook or "").strip().lower()
+    if playbook == "quarter_close_review":
+        return ExecutionPlan(
+            playbook=playbook,
+            goal="Run the deterministic quarter-close workflow and produce a review-ready recommendation packet.",
+            segment=segment,
+            session_id=session_id,
+            steps=[
+                PlanStep(
+                    tool_name="tool_run_quarter_close_review",
+                    args={"session_id": session_id},
+                    evidence_key="quarter_close_review",
+                ),
+            ],
+            required_evidence=["quarter_close_review"],
+            minimum_evidence_count=1,
+            stopping_rule="Stop after the composite quarter-close review packet is collected unless follow-up drilldown is needed.",
+        )
+
+    if playbook == "drop_review":
+        return ExecutionPlan(
+            playbook=playbook,
+            goal="Review candidate development drops using the composite deterministic drop-review workflow.",
+            segment=segment,
+            session_id=session_id,
+            steps=[
+                PlanStep(
+                    tool_name="tool_run_drop_review",
+                    args={"session_id": session_id, "candidate_limit": 5},
+                    evidence_key="drop_review",
+                ),
+            ],
+            required_evidence=["drop_review"],
+            minimum_evidence_count=1,
+            stopping_rule="Stop after the ranked drop review result is collected unless follow-up evidence is requested.",
+        )
+
     if playbook == "scenario_recommendation":
         return ExecutionPlan(
             playbook=playbook,
@@ -103,33 +139,14 @@ def build_execution_plan(
             session_id=session_id,
             steps=[
                 PlanStep(
-                    tool_name="tool_run_diagnostics_summary",
+                    tool_name="tool_run_bf_suitability_review",
                     args={"session_id": session_id},
-                    evidence_key="diagnostics_summary",
-                ),
-                PlanStep(
-                    tool_name="tool_run_ldf_consistency_diagnostics",
-                    args={"session_id": session_id},
-                    evidence_key="ldf_consistency",
-                ),
-                PlanStep(
-                    tool_name="tool_get_data_view_summary",
-                    args={
-                        "session_id": session_id,
-                        "metric": "incurred",
-                        "view": "cumulative",
-                        "denominator": "premium",
-                    },
-                    evidence_key="incurred_on_premium",
+                    evidence_key="bf_suitability_review",
                 ),
             ],
-            required_evidence=[
-                "diagnostics_summary",
-                "ldf_consistency",
-                "incurred_on_premium",
-            ],
-            minimum_evidence_count=2,
-            stopping_rule="Stop after method-suitability evidence set is gathered.",
+            required_evidence=["bf_suitability_review"],
+            minimum_evidence_count=1,
+            stopping_rule="Stop after the composite BF suitability review is gathered unless UWY drilldown is needed.",
         )
 
     if playbook == "reserve_change_explanation":
@@ -213,28 +230,14 @@ def build_execution_plan(
             session_id=session_id,
             steps=[
                 PlanStep(
-                    tool_name="tool_run_diagnostics_summary",
+                    tool_name="tool_run_anomaly_triage",
                     args={"session_id": session_id},
-                    evidence_key="diagnostics_summary",
-                ),
-                PlanStep(
-                    tool_name="tool_run_movement_diagnostics",
-                    args={"session_id": session_id},
-                    evidence_key="movement_diagnostics",
-                ),
-                PlanStep(
-                    tool_name="tool_run_ldf_consistency_diagnostics",
-                    args={"session_id": session_id},
-                    evidence_key="ldf_consistency",
+                    evidence_key="anomaly_triage",
                 ),
             ],
-            required_evidence=[
-                "diagnostics_summary",
-                "movement_diagnostics",
-                "ldf_consistency",
-            ],
-            minimum_evidence_count=2,
-            stopping_rule="Stop when anomaly signals are triaged and governance implications are clear.",
+            required_evidence=["anomaly_triage"],
+            minimum_evidence_count=1,
+            stopping_rule="Stop when anomaly signals are triaged and pause guidance is available.",
         )
 
     if playbook == "tail_selection":
@@ -250,20 +253,15 @@ def build_execution_plan(
             session_id=session_id,
             steps=[
                 PlanStep(
-                    tool_name="tool_run_diagnostics_summary",
-                    args={"session_id": session_id},
-                    evidence_key="diagnostics_summary",
-                ),
-                PlanStep(
-                    tool_name="tool_get_results_summary",
-                    args={"session_id": session_id},
-                    evidence_key="results_summary",
+                    tool_name="tool_run_tail_review",
+                    args={"session_id": session_id, "candidate_limit": 12},
+                    evidence_key="tail_review",
                 ),
             ],
-            required_evidence=["diagnostics_summary", "results_summary"],
-            minimum_evidence_count=2,
+            required_evidence=["tail_review"],
+            minimum_evidence_count=1,
             stopping_rule=(
-                "Stop after diagnostics and current results; use segment tail memory as context when available. "
+                "Stop after the composite tail review; use segment tail memory as context when available. "
                 f"Current stored tail context: {memory_tail}."
             ),
         )

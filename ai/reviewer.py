@@ -36,8 +36,19 @@ class ReviewerGate:
         if self._has_missing_provenance(evidence_packets):
             issues.append("numeric_claim_missing_provenance")
 
+        if self._requires_continuity(plan) and not self._has_continuity_coverage(
+            evidence_packets
+        ):
+            issues.append("continuity_memory_not_evaluated")
+
         if self._has_amber_governance(evidence_packets):
             caveats.append("human_review_recommended")
+        if self._has_rejected_before_flag(evidence_packets):
+            caveats.append("rejected_before")
+        if self._has_house_preference_conflict(evidence_packets):
+            caveats.append("house_preference_conflict")
+        if self._has_pause_recommendation(evidence_packets):
+            caveats.append("pause_recommendation")
 
         if issues:
             status = "hard_fail"
@@ -145,5 +156,140 @@ class ReviewerGate:
             if not isinstance(provenance, dict):
                 return True
             if not provenance.get("session_id"):
+                return True
+        return False
+
+    @staticmethod
+    def _requires_continuity(plan: ExecutionPlan) -> bool:
+        return str(plan.playbook).strip().lower() in {
+            "drop_review",
+            "tail_selection",
+            "method_suitability_review",
+            "quarter_close_review",
+        }
+
+    @staticmethod
+    def _has_continuity_coverage(evidence_packets: list[dict[str, Any]]) -> bool:
+        for packet in evidence_packets:
+            summary = packet.get("summary") if isinstance(packet, dict) else None
+            if not isinstance(summary, dict):
+                continue
+            continuity_notes = summary.get("continuity_notes")
+            continuity = summary.get("continuity")
+            if isinstance(continuity_notes, list):
+                return True
+            if isinstance(continuity, dict) and (
+                isinstance(continuity.get("continuity_notes"), list)
+                or continuity.get("memory_schema_version") is not None
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _has_rejected_before_flag(evidence_packets: list[dict[str, Any]]) -> bool:
+        for packet in evidence_packets:
+            summary = packet.get("summary") if isinstance(packet, dict) else None
+            if not isinstance(summary, dict):
+                continue
+            if ReviewerGate._policy_trace_has_flag(summary, "rejected_before"):
+                return True
+        return False
+
+    @staticmethod
+    def _has_house_preference_conflict(evidence_packets: list[dict[str, Any]]) -> bool:
+        for packet in evidence_packets:
+            summary = packet.get("summary") if isinstance(packet, dict) else None
+            if not isinstance(summary, dict):
+                continue
+            policy_trace = (
+                summary.get("policy_trace")
+                if isinstance(summary.get("policy_trace"), dict)
+                else {}
+            )
+            conflicts = policy_trace.get("house_preference_conflicts")
+            if isinstance(conflicts, list) and conflicts:
+                return True
+            recommendation = (
+                summary.get("recommendation")
+                if isinstance(summary.get("recommendation"), dict)
+                else {}
+            )
+            recommendation_trace = (
+                recommendation.get("policy_trace")
+                if isinstance(recommendation.get("policy_trace"), dict)
+                else {}
+            )
+            recommendation_conflicts = recommendation_trace.get(
+                "house_preference_conflicts"
+            )
+            if isinstance(recommendation_conflicts, list) and recommendation_conflicts:
+                return True
+            for item in list(summary.get("top_candidates", [])) + list(
+                summary.get("top_ranked", [])
+            ):
+                if not isinstance(item, dict):
+                    continue
+                candidate_trace = (
+                    item.get("policy_trace")
+                    if isinstance(item.get("policy_trace"), dict)
+                    else {}
+                )
+                candidate_conflicts = candidate_trace.get("house_preference_conflicts")
+                if isinstance(candidate_conflicts, list) and candidate_conflicts:
+                    return True
+        return False
+
+    @staticmethod
+    def _has_pause_recommendation(evidence_packets: list[dict[str, Any]]) -> bool:
+        for packet in evidence_packets:
+            summary = packet.get("summary") if isinstance(packet, dict) else None
+            if not isinstance(summary, dict):
+                continue
+            if bool(summary.get("pause_recommendation", False)):
+                return True
+            recommendation = (
+                summary.get("recommendation")
+                if isinstance(summary.get("recommendation"), dict)
+                else {}
+            )
+            if (
+                str(recommendation.get("status", "")).strip().lower()
+                == "hold_for_review"
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _policy_trace_has_flag(summary: dict[str, Any], flag_name: str) -> bool:
+        policy_trace = (
+            summary.get("policy_trace")
+            if isinstance(summary.get("policy_trace"), dict)
+            else {}
+        )
+        if bool(policy_trace.get(flag_name)):
+            return True
+        recommendation = (
+            summary.get("recommendation")
+            if isinstance(summary.get("recommendation"), dict)
+            else {}
+        )
+        recommendation_trace = (
+            recommendation.get("policy_trace")
+            if isinstance(recommendation.get("policy_trace"), dict)
+            else {}
+        )
+        if bool(recommendation_trace.get(flag_name)):
+            return True
+        for item in list(summary.get("top_candidates", [])) + list(
+            summary.get("top_ranked", [])
+        ):
+            if not isinstance(item, dict):
+                continue
+            candidate_trace = (
+                item.get("policy_trace")
+                if isinstance(item.get("policy_trace"), dict)
+                else {}
+            )
+            if bool(candidate_trace.get(flag_name)):
                 return True
         return False

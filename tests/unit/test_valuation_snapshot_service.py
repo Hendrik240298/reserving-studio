@@ -97,3 +97,34 @@ def test_build_prior_proxy_snapshot_excludes_latest_origin_rows(monkeypatch) -> 
     assert len(captured["claims"]) == 2
     assert len(captured["premium"]) == 2
     assert evaluation.calls[0]["params"] == {"average": "volume"}
+
+
+def test_build_delta_summary_compares_snapshot_totals() -> None:
+    delta = ValuationSnapshotService().build_delta_summary(
+        current_snapshot={
+            "comparison_basis": "current",
+            "data_fingerprint": "current-fp",
+            "summary": {
+                "uwy_count": 3,
+                "total_ultimate": 150.0,
+                "total_incurred": 110.0,
+                "total_ibnr": 40.0,
+                "selected_method_counts": {"chainladder": 2, "bornhuetter_ferguson": 1},
+            },
+        },
+        prior_snapshot={
+            "comparison_basis": "latest_diagonal_excluded_proxy",
+            "data_fingerprint": "prior-fp",
+            "summary": {
+                "uwy_count": 3,
+                "total_ultimate": 145.0,
+                "total_incurred": 108.0,
+                "total_ibnr": 37.0,
+                "selected_method_counts": {"chainladder": 3},
+            },
+        },
+    )
+
+    assert delta["metrics"]["total_ibnr_delta"] == 3.0
+    assert delta["selected_method_count_delta"]["bornhuetter_ferguson"] == 1.0
+    assert delta["fingerprints"]["current"] == "current-fp"

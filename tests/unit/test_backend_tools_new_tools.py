@@ -9,16 +9,22 @@ if str(REPO_ROOT) not in sys.path:
 
 from ai.backend_tools import BackendReservingTools
 from source.api.schemas import (
+    AnomalyTriageResponse,
+    BfSuitabilityResponse,
     DataCompareResponse,
     DataViewResponse,
     DerivedDropScenarioResponse,
+    DropReviewResponse,
     HighestA2ADropResponse,
     LateEmergenceResponse,
     LdfConsistencyResponse,
     LinkRatioRankResponse,
     MovementDiagnosticsResponse,
+    QuarterClosePackResponse,
+    QuarterCloseReviewResponse,
     ReserveChangeResponse,
     TailEvaluationResponse,
+    TailReviewResponse,
 )
 
 
@@ -177,6 +183,129 @@ class _BackendStub:
             fitted_tail_ldf=[{"age": 12, "ldf": 1.18}],
         )
 
+    def run_drop_review(self, payload):
+        return DropReviewResponse(
+            session_id=payload.session_id,
+            candidates=[
+                {
+                    "candidate_id": "drop_1",
+                    "summary": "Drop AY 2022 age 24",
+                    "parameters": {"drop": [["2022", 24]]},
+                    "score": 0.8,
+                    "score_breakdown": {"total_score": 0.8},
+                    "recommendation_class": "recommend",
+                    "policy_trace": {"rejected_before": False},
+                }
+            ],
+            recommendation={
+                "recommendation_class": "recommend",
+                "candidate_id": "drop_1",
+                "summary": "Adopt tested drop",
+            },
+            continuity_notes=[],
+            policy_trace={},
+            evidence_summary={},
+            run_metadata={"run_id": "drop-run"},
+        )
+
+    def run_tail_review(self, payload):
+        return TailReviewResponse(
+            session_id=payload.session_id,
+            candidates=[
+                {
+                    "candidate_id": "tail_1",
+                    "summary": "Tail Weibull 60",
+                    "parameters": {"tail": {"curve": "weibull", "attachment_age": 60}},
+                    "score": 0.7,
+                    "score_breakdown": {"total_score": 0.7},
+                    "recommendation_class": "reasonable_alternative",
+                    "policy_trace": {
+                        "house_preference_conflicts": ["prefer stable tail"]
+                    },
+                }
+            ],
+            recommendation={
+                "recommendation_class": "reasonable_alternative",
+                "candidate_id": "tail_1",
+                "summary": "Use as sensitivity",
+            },
+            continuity_notes=[
+                {"code": "house_preference_conflict", "message": "Prefer stable tail"}
+            ],
+            policy_trace={"house_preference_conflicts": ["prefer stable tail"]},
+            evidence_summary={},
+            run_metadata={"run_id": "tail-run"},
+        )
+
+    def run_bf_suitability_review(self, payload):
+        return BfSuitabilityResponse(
+            session_id=payload.session_id,
+            rows=[{"uwy": "2022", "suitability_class": "bf_preferred"}],
+            overall_class="mixed",
+            summary={"row_count": 1},
+            apriori_guidance={"available": True},
+            continuity_notes=[],
+            policy_trace={},
+            run_metadata={"run_id": "bf-run"},
+        )
+
+    def run_anomaly_triage(self, payload):
+        return AnomalyTriageResponse(
+            session_id=payload.session_id,
+            triaged_findings=[{"type": "data_quality", "message": "check data"}],
+            summary={"finding_count": 1},
+            pause_recommendation=True,
+            run_metadata={"run_id": "triage-run"},
+        )
+
+    def run_quarter_close_review(self, payload):
+        return QuarterCloseReviewResponse(
+            session_id=payload.session_id,
+            comparison={
+                "current_snapshot": {"valuation_date": "2026-03-31"},
+                "delta_summary": {"metrics": {"total_ibnr_delta": 5.0}},
+                "limitations": [],
+            },
+            diagnostics={},
+            assumption_reviews={},
+            scenario_summary={"top_ranked": [{"candidate_id": "drop_1"}]},
+            continuity={
+                "memory_schema_version": 2,
+                "continuity_notes": [
+                    {"code": "prior_selection_tension", "message": "mixed BF view"}
+                ],
+                "recent_rejected_signatures": ["sig-1"],
+            },
+            recommendation={
+                "status": "recommended",
+                "summary": "Quarter-close changes ready.",
+                "recommended_changes": [
+                    {"candidate_id": "drop_1", "parameters": {"drop": [["2022", 24]]}}
+                ],
+                "policy_trace": {"selected_candidate_ids": ["drop_1"]},
+            },
+            evidence_ids=["ev-1"],
+            run_metadata={
+                "workflow_run_id": "wf-1",
+                "current_data_fingerprint": "fp-1",
+            },
+        )
+
+    def build_quarter_close_pack(self, payload):
+        return QuarterClosePackResponse(
+            session_id=payload.session_id,
+            pack={
+                "review_type": "quarter_close_pack",
+                "pack_metadata": {"comparison_basis": "latest_diagonal_excluded_proxy"},
+                "sections": {
+                    "recommended_changes": [{"candidate_id": "drop_1"}],
+                    "signoff_questions": ["Approve?"],
+                    "policy_trace": {"selected_candidate_ids": ["drop_1"]},
+                },
+            },
+            run_metadata={"workflow_run_id": "wf-1"},
+        )
+
 
 def test_backend_tools_support_new_ai_tools() -> None:
     tools = BackendReservingTools(backend=_BackendStub())
@@ -320,6 +449,46 @@ def test_backend_tools_support_new_ai_tools() -> None:
         },
     )
     assert tail_eval["r2"] == 0.98
+
+    drop_review = tools.call_tool(
+        "tool_run_drop_review",
+        {"session_id": "s-1", "candidate_limit": 5},
+    )
+    assert drop_review["recommendation"]["candidate_id"] == "drop_1"
+
+    tail_review = tools.call_tool(
+        "tool_run_tail_review",
+        {"session_id": "s-1", "candidate_limit": 8},
+    )
+    assert tail_review["recommendation"]["candidate_id"] == "tail_1"
+
+    bf_review = tools.call_tool(
+        "tool_run_bf_suitability_review",
+        {"session_id": "s-1"},
+    )
+    assert bf_review["overall_class"] == "mixed"
+
+    anomaly_review = tools.call_tool(
+        "tool_run_anomaly_triage",
+        {"session_id": "s-1"},
+    )
+    assert anomaly_review["pause_recommendation"] is True
+
+    quarter_close_review = tools.call_tool(
+        "tool_run_quarter_close_review",
+        {"session_id": "s-1"},
+    )
+    assert quarter_close_review["recommendation"]["status"] == "recommended"
+    assert quarter_close_review["continuity"]["memory_schema_version"] == 2
+
+    quarter_close_pack = tools.call_tool(
+        "tool_get_quarter_close_pack",
+        {"session_id": "s-1"},
+    )
+    assert (
+        quarter_close_pack["pack_metadata"]["comparison_basis"]
+        == "latest_diagonal_excluded_proxy"
+    )
 
     reserve_change_sanitized = tools.call_tool(
         "tool_explain_reserve_change",

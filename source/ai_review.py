@@ -5,6 +5,7 @@ from typing import Any
 
 from source.config_manager import ConfigManager
 from source.reserving import Reserving
+from source.services.segment_memory_service import SegmentMemoryService
 
 
 class AIReviewService:
@@ -258,9 +259,60 @@ class AIReviewService:
             "uncertainty": review_data.get("uncertainty", {}),
             "scenario_matrix": review_data.get("scenario_matrix", []),
             "evidence_trace": review_data.get("evidence_trace", []),
+            "deterministic_packet": review_data.get("deterministic_packet", {}),
             "ai_evidence_refs": review_data.get("ai_evidence_refs", []),
             "ai_override": review_data.get("ai_override", {}),
         }
+
+    @staticmethod
+    def build_scenario_dispositions(
+        review_data: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        if not isinstance(review_data, dict):
+            return []
+        override = (
+            review_data.get("ai_override")
+            if isinstance(review_data.get("ai_override"), dict)
+            else {}
+        )
+        decision = AIReviewService._normalize_human_decision(
+            override.get("decision", "pending")
+        )
+        if decision == "pending":
+            return []
+        deterministic_packet = (
+            review_data.get("deterministic_packet")
+            if isinstance(review_data.get("deterministic_packet"), dict)
+            else {}
+        )
+        recommended_changes = (
+            deterministic_packet.get("recommended_changes")
+            if isinstance(deterministic_packet.get("recommended_changes"), list)
+            else []
+        )
+        output: list[dict[str, Any]] = []
+        for item in recommended_changes:
+            if not isinstance(item, dict):
+                continue
+            params = (
+                item.get("parameters")
+                if isinstance(item.get("parameters"), dict)
+                else {}
+            )
+            signature = (
+                SegmentMemoryService.scenario_signature(params) if params else ""
+            )
+            output.append(
+                {
+                    "scenario_signature": signature or item.get("candidate_id"),
+                    "scenario_id": item.get("candidate_id") or item.get("scenario_id"),
+                    "decision": decision,
+                    "rationale": str(override.get("rationale", "")).strip(),
+                    "approver": str(override.get("approver", "")).strip(),
+                    "signed_off_at": override.get("signed_off_at"),
+                }
+            )
+        return output
 
     def persist_review(self, review_data: dict[str, Any]) -> None:
         if self._config is None:
@@ -374,3 +426,14 @@ class AIReviewService:
     @staticmethod
     def _utc_now() -> str:
         return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    @staticmethod
+    def _normalize_human_decision(value: object) -> str:
+        normalized = str(value or "").strip().lower()
+        mapping = {
+            "approve": "accepted",
+            "approve_with_conditions": "accepted",
+            "reject": "rejected",
+            "escalate": "escalated",
+        }
+        return mapping.get(normalized, normalized or "pending")

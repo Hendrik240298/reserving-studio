@@ -4,6 +4,7 @@
 - Use these playbooks as preferred workflows rather than inventing a new workflow on each turn.
 - Pick the playbook that best matches the user intent.
 - These are guides, not rigid chains. Adapt when evidence clearly requires it.
+- For Phase 2 reviews, prefer one composite deterministic review tool first and use low-level tools only for drilldown or follow-up evidence.
 
 ## Movement Review
 - Use for observational questions about movements, volatility, unexpected changes, current quarter, latest diagonal, or in-quarter behavior.
@@ -25,10 +26,19 @@
   2. Run scenario iteration.
   3. Drill into top scenario evidence if needed.
   4. Explain tradeoffs, uncertainty, and why the preferred scenario is better than baseline.
+- Use this playbook when there is no more specific composite review playbook for the request.
 - Only recommend scenarios or parameter settings that were actually run/tested in the current conversation, unless you explicitly label them as untested ideas.
 - Do not recommend drops or assumption changes without comparative evidence unless the evidence is already overwhelming.
 - If the user explicitly asks to derive drops from a rule over observed age-to-age factors, first rank the link ratios using the requested rule, then run a derived drop scenario from that rule.
 - The rule framework can combine multiple rules, for example: highest factor per development period plus all factors below 1.0.
+
+## Drop Review
+- Use for questions asking whether any ratios should be dropped, which drop is best, or whether an existing drop recommendation is strong enough.
+- Preferred workflow:
+  1. Run `tool_run_drop_review`.
+  2. Treat its ranked candidates, continuity notes, and policy trace as the primary evidence base.
+  3. Use low-level drilldowns only if the user asks why a specific candidate is ranked the way it is.
+- Comment explicitly on `rejected_before`, reserve impact, fragility, and governance penalties when they appear.
 
 ## Reserve Change Explanation
 - Use for questions about why the reserve changed, what is driving movement, or how a bespoke scenario compares to baseline.
@@ -48,19 +58,35 @@
 ## Method Suitability Review
 - Use for questions comparing CL vs BF or asking whether BF is more appropriate for newer years.
 - Preferred workflow:
-  1. Use diagnostics summary.
-  2. Use a2a / LDF consistency.
-  3. Use incurred / premium context.
-  4. If the user asks for a change recommendation, run scenario iteration before final recommendation.
+  1. Run `tool_run_bf_suitability_review`.
+  2. Treat UWY-level suitability conclusions plus continuity notes as the primary evidence base.
+  3. Use data views or diagnostics drilldown only if the user asks for supporting detail.
 
 ## Tail Selection
 - Use for questions about how to set, estimate, compare, or validate the tail.
 - Supported tail curve method names are `exponential`, `inverse_power`, and `weibull`.
 - If the user says `power` or `power_curve`, interpret that as `inverse_power`.
+- Prefer the composite tail review first: run `tool_run_tail_review` before low-level tail-fit drilldowns.
 - Prefer tested tail scenarios or explicit tail-fit evaluation over untested narrative recommendations.
-- Before recommending a tail method or answering a tail-fit comparison question, run a tested tail evaluation for the proposed setting.
+- Before recommending a tail method or answering a tail-fit comparison question, run a tested tail evaluation for the proposed setting if the composite review does not already answer the question.
 - If the question is a follow-up after a recommended scenario, reuse the tested scenario parameters first, then vary only the tail settings being compared.
 - When discussing fit periods or maximum observed development, speak in months/quarters for development age and in years for AY/UWY. Do not treat a development age like `45` as 45 years.
+
+## Data Anomaly Triage
+- Use for questions about data quality, anomalies, impossible factors, missing diagonals, calendar distortions, or large-loss contamination.
+- Preferred workflow:
+  1. Run `tool_run_anomaly_triage`.
+  2. Treat pause guidance as binding for the recommendation layer.
+  3. Use movement or LDF drilldowns only to explain the anomaly, not to replace the triage result.
+
+## Quarter-Close Review
+- Use for quarter-close, close pack, sign-off review, or full plan-test-conclude prompts.
+- Preferred workflow:
+  1. Run `tool_run_quarter_close_review`.
+  2. Treat the quarter-close review packet as the primary deterministic evidence base.
+  3. If the user wants a review-ready artifact, run `tool_get_quarter_close_pack`.
+  4. Use low-level tools only for follow-up drilldown into a specific assumption or diagnostic.
+- Comment explicitly on continuity notes, recommended changes, caveats, judgment items, and sign-off questions.
 
 ## Data Exploration
 - Use for direct requests to inspect a triangle, ratio view, or compare two quantities.
@@ -82,5 +108,6 @@
 ## Priority Rules
 - Prefer the smallest workflow that answers the question.
 - Use summary tools first.
+- Prefer composite review tools before low-level chains when a playbook-specific review tool exists.
 - Do not jump from an observational question to recommendations unless the user asks.
 - Keep recommendations evidence-led.

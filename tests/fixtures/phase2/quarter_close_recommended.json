@@ -1,0 +1,111 @@
+{
+  "name": "quarter_close_recommended",
+  "prompt": "Run the quarter-close review pack.",
+  "session_context": {
+    "segment": "industrial",
+    "session_id": "s-quarter"
+  },
+  "segment_memory": {
+    "last_selection": {
+      "method_by_uwy": {
+        "2022": "chainladder"
+      }
+    }
+  },
+  "tool_outputs": {
+    "tool_run_quarter_close_review": {
+      "session_id": "s-quarter",
+      "review_type": "quarter_close",
+      "comparison": {
+        "current_valuation_date": "2026-03-31",
+        "delta_summary": {
+          "metrics": {
+            "total_ibnr_delta": 5.0
+          }
+        },
+        "limitations": []
+      },
+      "top_ranked": [
+        {
+          "candidate_id": "drop_1",
+          "summary": "Drop AY 2022 age 24",
+          "score": 0.8,
+          "evidence_id": "ev-quarter-1",
+          "score_breakdown": {
+            "total_score": 0.8
+          },
+          "policy_trace": {
+            "rejected_before": false
+          },
+          "parameters": {
+            "drop": [["2022", 24]]
+          }
+        }
+      ],
+      "recommendation": {
+        "status": "recommended",
+        "summary": "Quarter-close review supports a tested drop change.",
+        "recommended_changes": [
+          {
+            "candidate_id": "drop_1",
+            "parameters": {
+              "drop": [["2022", 24]]
+            },
+            "score_breakdown": {
+              "total_score": 0.8
+            },
+            "policy_trace": {
+              "rejected_before": false
+            }
+          }
+        ],
+        "why_reasonable": [
+          "Tested change improved diagnostics."
+        ],
+        "policy_trace": {
+          "selected_candidate_ids": [
+            "drop_1"
+          ]
+        }
+      },
+      "continuity": {
+        "memory_schema_version": 2,
+        "continuity_notes": [
+          {
+            "code": "prior_selection_tension",
+            "message": "Prior quarter stayed at baseline assumptions."
+          }
+        ],
+        "recent_rejected_signatures": [],
+        "house_preferences": [
+          {
+            "type": "max_drop_count",
+            "value": 1
+          }
+        ]
+      },
+      "run_metadata": {
+        "workflow_run_id": "wf-quarter",
+        "current_data_fingerprint": "fp-quarter"
+      }
+    }
+  },
+  "expected": {
+    "playbook": "quarter_close_review",
+    "tool_sequence": [
+      "tool_run_quarter_close_review"
+    ],
+    "review_status": "pass",
+    "recommendation_status": "recommended",
+    "continuity_contains": [
+      "prior_selection_tension"
+    ],
+    "policy_trace_flags": [
+      "selected_candidate_ids"
+    ],
+    "evidence_used_contains": [
+      "ev-quarter-1"
+    ],
+    "recommended_id": "drop_1"
+  }
+}

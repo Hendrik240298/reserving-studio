@@ -1,0 +1,76 @@
+{
+  "name": "drop_review_rejected_before",
+  "prompt": "Review whether any ratios should be dropped.",
+  "session_context": {
+    "segment": "industrial",
+    "session_id": "s-drop"
+  },
+  "segment_memory": {
+    "scenario_dispositions": [
+      {
+        "scenario_signature": "sig-drop-1",
+        "decision": "rejected"
+      }
+    ]
+  },
+  "tool_outputs": {
+    "tool_run_drop_review": {
+      "session_id": "s-drop",
+      "review_type": "drop_review",
+      "candidate_count": 1,
+      "top_candidates": [
+        {
+          "candidate_id": "drop_1",
+          "summary": "Drop AY 2022 age 24",
+          "score": 0.82,
+          "evidence_id": "ev-drop-1",
+          "recommendation_class": "recommend",
+          "score_breakdown": {
+            "total_score": 0.82
+          },
+          "policy_trace": {
+            "rejected_before": true
+          }
+        }
+      ],
+      "recommendation": {
+        "recommendation_class": "recommend",
+        "candidate_id": "drop_1",
+        "summary": "Adopt tested drop"
+      },
+      "continuity_notes": [
+        {
+          "code": "rejected_before",
+          "message": "Previously rejected."
+        }
+      ],
+      "policy_trace": {
+        "rejected_before": true
+      },
+      "run_metadata": {
+        "run_id": "drop-run"
+      }
+    }
+  },
+  "expected": {
+    "playbook": "drop_review",
+    "tool_sequence": [
+      "tool_run_drop_review"
+    ],
+    "review_status": "pass_with_caveats",
+    "recommendation_status": "reasonable_alternative",
+    "review_caveats_contains": [
+      "rejected_before"
+    ],
+    "continuity_contains": [
+      "rejected_before"
+    ],
+    "policy_trace_flags": [
+      "rejected_before"
+    ],
+    "evidence_used_contains": [
+      "ev-drop-1"
+    ],
+    "recommended_id": "drop_1"
+  }
+}

@@ -46,6 +46,7 @@ def test_build_decision_packet_contains_core_sections() -> None:
             "uncertainty": {"baseline": {}},
             "scenario_matrix": [{"scenario_id": "baseline"}],
             "evidence_trace": [{"evidence_id": "ev1"}],
+            "deterministic_packet": {"recommendation": {"status": "recommended"}},
             "ai_evidence_refs": ["ev1"],
             "ai_override": {"decision": "approve"},
         }
@@ -54,3 +55,30 @@ def test_build_decision_packet_contains_core_sections() -> None:
     assert packet["ai_model_meta"]["engine"] == "deterministic-ai-review"
     assert packet["governance"]["tier"] == "green"
     assert packet["scenario_matrix"][0]["scenario_id"] == "baseline"
+    assert packet["deterministic_packet"]["recommendation"]["status"] == "recommended"
+
+
+def test_build_scenario_dispositions_uses_recommended_changes() -> None:
+    dispositions = AIReviewService.build_scenario_dispositions(
+        {
+            "ai_override": {
+                "decision": "approve_with_conditions",
+                "approver": "A. Actuary",
+                "rationale": "Monitor next quarter",
+                "signed_off_at": "2026-04-01T00:00:00Z",
+            },
+            "deterministic_packet": {
+                "recommended_changes": [
+                    {
+                        "candidate_id": "tail_1",
+                        "parameters": {
+                            "tail": {"curve": "weibull", "attachment_age": 60}
+                        },
+                    }
+                ]
+            },
+        }
+    )
+
+    assert dispositions[0]["scenario_id"] == "tail_1"
+    assert dispositions[0]["decision"] == "accepted"

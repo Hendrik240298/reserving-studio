@@ -62,6 +62,38 @@ def test_build_ai_decision_packet_contains_required_sections() -> None:
     assert packet["deterministic_packet"]["recommendation"]["status"] == "recommended"
 
 
+def test_build_scenario_dispositions_from_review_uses_recommended_changes() -> None:
+    dispositions = Dashboard._build_scenario_dispositions_from_review(
+        {
+            "ai_override": {
+                "decision": "reject",
+                "approver": "A. Actuary",
+                "rationale": "Too fragile",
+                "signed_off_at": "2026-04-01T00:00:00Z",
+            },
+            "deterministic_packet": {
+                "recommended_changes": [
+                    {
+                        "candidate_id": "drop_1",
+                        "parameters": {"drop": [["2022", 24]]},
+                    }
+                ],
+                "composite_review": {
+                    "summary": {
+                        "comparison": {"current_valuation_date": "2026-03-31"},
+                        "run_metadata": {"current_data_fingerprint": "fp-1"},
+                    }
+                },
+            },
+        }
+    )
+
+    assert dispositions[0]["scenario_id"] == "drop_1"
+    assert dispositions[0]["decision"] == "rejected"
+    assert dispositions[0]["valuation_date"] == "2026-03-31"
+    assert dispositions[0]["data_fingerprint"] == "fp-1"
+
+
 def test_build_ai_decision_packet_preserves_packet_presentation() -> None:
     packet = Dashboard._build_ai_decision_packet(
         {

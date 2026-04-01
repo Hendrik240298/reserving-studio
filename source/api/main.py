@@ -17,6 +17,10 @@ from source.api.schemas import (
     AIChatMessageRequest,
     AIChatMessageResponse,
     AIChatSessionResponse,
+    AnomalyTriageRequest,
+    AnomalyTriageResponse,
+    BfSuitabilityRequest,
+    BfSuitabilityResponse,
     DataCompareRequest,
     DataCompareResponse,
     DataViewRequest,
@@ -27,6 +31,8 @@ from source.api.schemas import (
     DiagnosticsIterateResponse,
     DiagnosticsRequest,
     DiagnosticsResponse,
+    DropReviewRequest,
+    DropReviewResponse,
     HighestA2ADropRequest,
     HighestA2ADropResponse,
     LateEmergenceRequest,
@@ -37,12 +43,18 @@ from source.api.schemas import (
     LdfConsistencyResponse,
     MovementDiagnosticsRequest,
     MovementDiagnosticsResponse,
+    QuarterClosePackRequest,
+    QuarterClosePackResponse,
+    QuarterCloseReviewRequest,
+    QuarterCloseReviewResponse,
     RecalculateRequest,
     RecalculateResponse,
     ReserveChangeRequest,
     ReserveChangeResponse,
     TailEvaluationRequest,
     TailEvaluationResponse,
+    TailReviewRequest,
+    TailReviewResponse,
     ResultsResponse,
     SessionSaveRequest,
     SessionSaveResponse,
@@ -122,6 +134,30 @@ class ReservingApiBackend(Protocol):
         self,
         payload: TailEvaluationRequest,
     ) -> TailEvaluationResponse: ...
+
+    def run_drop_review(self, payload: DropReviewRequest) -> DropReviewResponse: ...
+
+    def run_tail_review(self, payload: TailReviewRequest) -> TailReviewResponse: ...
+
+    def run_bf_suitability_review(
+        self,
+        payload: BfSuitabilityRequest,
+    ) -> BfSuitabilityResponse: ...
+
+    def run_anomaly_triage(
+        self,
+        payload: AnomalyTriageRequest,
+    ) -> AnomalyTriageResponse: ...
+
+    def run_quarter_close_review(
+        self,
+        payload: QuarterCloseReviewRequest,
+    ) -> QuarterCloseReviewResponse: ...
+
+    def build_quarter_close_pack(
+        self,
+        payload: QuarterClosePackRequest,
+    ) -> QuarterClosePackResponse: ...
 
 
 class NotImplementedBackend:
@@ -215,6 +251,36 @@ class NotImplementedBackend:
         payload: TailEvaluationRequest,
     ) -> TailEvaluationResponse:
         raise NotImplementedError("Tail evaluation backend not wired yet")
+
+    def run_drop_review(self, payload: DropReviewRequest) -> DropReviewResponse:
+        raise NotImplementedError("Drop review backend not wired yet")
+
+    def run_tail_review(self, payload: TailReviewRequest) -> TailReviewResponse:
+        raise NotImplementedError("Tail review backend not wired yet")
+
+    def run_bf_suitability_review(
+        self,
+        payload: BfSuitabilityRequest,
+    ) -> BfSuitabilityResponse:
+        raise NotImplementedError("BF suitability backend not wired yet")
+
+    def run_anomaly_triage(
+        self,
+        payload: AnomalyTriageRequest,
+    ) -> AnomalyTriageResponse:
+        raise NotImplementedError("Anomaly triage backend not wired yet")
+
+    def run_quarter_close_review(
+        self,
+        payload: QuarterCloseReviewRequest,
+    ) -> QuarterCloseReviewResponse:
+        raise NotImplementedError("Quarter-close review backend not wired yet")
+
+    def build_quarter_close_pack(
+        self,
+        payload: QuarterClosePackRequest,
+    ) -> QuarterClosePackResponse:
+        raise NotImplementedError("Quarter-close pack backend not wired yet")
 
 
 def _raise_not_implemented(error: NotImplementedError) -> NoReturn:
@@ -382,6 +448,132 @@ def create_app(backend: ReservingApiBackend | None = None) -> FastAPI:
         if response is None:
             raise HTTPException(status_code=404, detail="Session results not found")
         return response
+
+    @app.post(
+        "/v1/reviews/drop",
+        response_model=DropReviewResponse,
+        tags=["Reviews"],
+    )
+    def run_drop_review(
+        payload: DropReviewRequest,
+        backend_service: ReservingApiBackend = Depends(get_backend),
+    ) -> DropReviewResponse:
+        try:
+            return backend_service.run_drop_review(payload)
+        except NotImplementedError as error:
+            _raise_not_implemented(error)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(status_code=500, detail="Unexpected drop review error")
+
+    @app.post(
+        "/v1/reviews/tail",
+        response_model=TailReviewResponse,
+        tags=["Reviews"],
+    )
+    def run_tail_review(
+        payload: TailReviewRequest,
+        backend_service: ReservingApiBackend = Depends(get_backend),
+    ) -> TailReviewResponse:
+        try:
+            return backend_service.run_tail_review(payload)
+        except NotImplementedError as error:
+            _raise_not_implemented(error)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(status_code=500, detail="Unexpected tail review error")
+
+    @app.post(
+        "/v1/reviews/bf-suitability",
+        response_model=BfSuitabilityResponse,
+        tags=["Reviews"],
+    )
+    def run_bf_suitability_review(
+        payload: BfSuitabilityRequest,
+        backend_service: ReservingApiBackend = Depends(get_backend),
+    ) -> BfSuitabilityResponse:
+        try:
+            return backend_service.run_bf_suitability_review(payload)
+        except NotImplementedError as error:
+            _raise_not_implemented(error)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(
+            status_code=500,
+            detail="Unexpected BF suitability review error",
+        )
+
+    @app.post(
+        "/v1/reviews/anomaly-triage",
+        response_model=AnomalyTriageResponse,
+        tags=["Reviews"],
+    )
+    def run_anomaly_triage(
+        payload: AnomalyTriageRequest,
+        backend_service: ReservingApiBackend = Depends(get_backend),
+    ) -> AnomalyTriageResponse:
+        try:
+            return backend_service.run_anomaly_triage(payload)
+        except NotImplementedError as error:
+            _raise_not_implemented(error)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(
+            status_code=500,
+            detail="Unexpected anomaly triage review error",
+        )
+
+    @app.post(
+        "/v1/reviews/quarter-close",
+        response_model=QuarterCloseReviewResponse,
+        tags=["Reviews"],
+    )
+    def run_quarter_close_review(
+        payload: QuarterCloseReviewRequest,
+        backend_service: ReservingApiBackend = Depends(get_backend),
+    ) -> QuarterCloseReviewResponse:
+        try:
+            return backend_service.run_quarter_close_review(payload)
+        except NotImplementedError as error:
+            _raise_not_implemented(error)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(
+            status_code=500,
+            detail="Unexpected quarter-close review error",
+        )
+
+    @app.post(
+        "/v1/reviews/quarter-close/pack",
+        response_model=QuarterClosePackResponse,
+        tags=["Reviews"],
+    )
+    def build_quarter_close_pack(
+        payload: QuarterClosePackRequest,
+        backend_service: ReservingApiBackend = Depends(get_backend),
+    ) -> QuarterClosePackResponse:
+        try:
+            return backend_service.build_quarter_close_pack(payload)
+        except NotImplementedError as error:
+            _raise_not_implemented(error)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(
+            status_code=500,
+            detail="Unexpected quarter-close pack error",
+        )
 
     @app.post(
         "/v1/data/view",

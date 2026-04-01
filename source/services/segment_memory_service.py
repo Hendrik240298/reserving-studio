@@ -99,6 +99,62 @@ class SegmentMemoryService:
         normalized["valuation_history"] = history[: self._VALUATION_HISTORY_LIMIT]
         return normalized
 
+    def continuity_summary(self, memory: dict[str, Any] | None) -> dict[str, Any]:
+        normalized = self.load(
+            memory if isinstance(memory, dict) else {},
+            segment=(memory or {}).get("segment_id")
+            if isinstance(memory, dict)
+            else None,
+        )
+        return {
+            "segment_id": normalized.get("segment_id", ""),
+            "memory_schema_version": normalized.get("schema_version"),
+            "known_issues": list(normalized.get("known_issues", [])),
+            "house_preferences": list(normalized.get("house_preferences", [])),
+            "last_selection": dict(normalized.get("last_selection", {})),
+            "last_human_decision": dict(normalized.get("last_human_decision", {})),
+            "last_recommendation": dict(normalized.get("last_recommendation", {})),
+            "last_review": dict(normalized.get("last_review", {})),
+            "valuation_history_count": len(normalized.get("valuation_history", [])),
+            "recent_rejected_signatures": [
+                str(item.get("scenario_signature", "")).strip()
+                for item in normalized.get("scenario_dispositions", [])
+                if isinstance(item, dict)
+                and str(item.get("decision", "")).strip().lower() == "rejected"
+                and str(item.get("scenario_signature", "")).strip()
+            ][:5],
+        }
+
+    def append_scenario_disposition(
+        self,
+        *,
+        memory: dict[str, Any],
+        disposition: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        normalized = self.load(memory, segment=memory.get("segment_id"))
+        if not isinstance(disposition, dict) or not disposition:
+            return normalized
+        candidate = dict(disposition)
+        signature = str(candidate.get("scenario_signature", "")).strip()
+        scenario_id = str(candidate.get("scenario_id", "")).strip()
+        if not signature and not scenario_id:
+            return normalized
+        existing = self._dict_list(normalized.get("scenario_dispositions"))
+        filtered = []
+        for item in existing:
+            existing_signature = str(item.get("scenario_signature", "")).strip()
+            existing_id = str(item.get("scenario_id", "")).strip()
+            if signature and existing_signature == signature:
+                continue
+            if scenario_id and existing_id == scenario_id:
+                continue
+            filtered.append(item)
+        filtered.insert(0, candidate)
+        normalized["scenario_dispositions"] = filtered[
+            : self._SCENARIO_DISPOSITION_LIMIT
+        ]
+        return normalized
+
     @classmethod
     def scenario_signature(cls, params: dict[str, Any] | None) -> str:
         import hashlib

@@ -22,6 +22,12 @@ SuitabilityClass = Literal[
     "mixed",
     "inconclusive",
 ]
+QuarterCloseStatus = Literal[
+    "hold_for_review",
+    "recommended",
+    "reasonable_alternative",
+    "watch",
+]
 
 
 class TailConfig(BaseModel):
@@ -249,6 +255,36 @@ class AnomalyTriageResponse(BaseModel):
     triaged_findings: list[dict] = Field(default_factory=list)
     summary: dict = Field(default_factory=dict)
     pause_recommendation: bool = False
+    run_metadata: dict = Field(default_factory=dict)
+
+
+class QuarterCloseReviewRequest(BaseModel):
+    session_id: str
+
+
+class QuarterCloseReviewResponse(BaseModel):
+    schema_version: str = SCHEMA_VERSION
+    session_id: str
+    review_type: Literal["quarter_close"] = "quarter_close"
+    comparison: dict = Field(default_factory=dict)
+    diagnostics: dict = Field(default_factory=dict)
+    assumption_reviews: dict = Field(default_factory=dict)
+    scenario_summary: dict = Field(default_factory=dict)
+    continuity: dict = Field(default_factory=dict)
+    recommendation: dict = Field(default_factory=dict)
+    evidence_ids: list[str] = Field(default_factory=list)
+    run_metadata: dict = Field(default_factory=dict)
+
+
+class QuarterClosePackRequest(BaseModel):
+    session_id: str
+
+
+class QuarterClosePackResponse(BaseModel):
+    schema_version: str = SCHEMA_VERSION
+    session_id: str
+    review_type: Literal["quarter_close_pack"] = "quarter_close_pack"
+    pack: dict = Field(default_factory=dict)
     run_metadata: dict = Field(default_factory=dict)
 
 

@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from dash import Dash, Input, Output, State, dcc, html, dash_table, no_update
+from dash import Dash, Input, Output, State, ctx, dcc, html, dash_table, no_update
 
 from ai.chat_service import AIChatService
 from source.config_manager import ConfigManager
@@ -23,6 +23,44 @@ SHADOW_SOFT = "0 8px 24px rgba(15, 23, 42, 0.06)"
 RADIUS_LG = "14px"
 RADIUS_MD = "10px"
 TURTUARY_AVATAR_SRC = "/assets/turtuary.png"
+PRESET_PROMPTS = [
+    {
+        "id": "ai-prompt-quarter-close",
+        "label": "Quarter-Close Review",
+        "description": "Compare against the prior proxy, surface blockers, rank changes, and prepare sign-off.",
+        "prompt": "Run a quarter-close review pack. Compare the current valuation against the prior proxy, flag any recommendation blockers, rank the strongest assumption changes, and tell me what should go to sign-off.",
+    },
+    {
+        "id": "ai-prompt-drop-review",
+        "label": "Drop Review",
+        "description": "Rank the strongest drop candidates and separate selection-worthy changes from sensitivities.",
+        "prompt": "Review whether any ratios should be dropped. Rank the strongest drop candidates, explain reserve impact and fragility, and tell me which candidate is selection-worthy versus sensitivity-only.",
+    },
+    {
+        "id": "ai-prompt-tail-review",
+        "label": "Tail Review",
+        "description": "Rank tail options, explain attachment continuity, sub-1.0 factors, and stability risk.",
+        "prompt": "Review the tail assumptions. Rank the best tail candidates, explain attachment continuity, sub-1.0 late factors, and stability risk, and recommend the strongest selection versus sensitivity.",
+    },
+    {
+        "id": "ai-prompt-bf-review",
+        "label": "BF Suitability",
+        "description": "Assess CL versus BF by UWY and highlight continuity or apriori blockers.",
+        "prompt": "Assess Chain Ladder versus Bornhuetter-Ferguson by UWY. Tell me where BF is genuinely more appropriate, where CL should stay, and what continuity or apriori concerns would block a method change.",
+    },
+    {
+        "id": "ai-prompt-anomaly-triage",
+        "label": "Anomaly Triage",
+        "description": "Classify the main issues, explain reserve relevance, and say whether recommendations should pause.",
+        "prompt": "Run anomaly triage before any assumption changes. Classify the main issues, explain reserve relevance, say whether recommendations should pause, and tell me the next diagnostic to run.",
+    },
+    {
+        "id": "ai-prompt-movement-review",
+        "label": "Movement Review",
+        "description": "Separate observed evidence from inference and identify whether the move is data or selection driven.",
+        "prompt": "Explain the biggest reserve movement this quarter. Separate observed evidence from inference, identify the main drivers by UWY or assumption, and tell me whether the movement points to a data issue or a selection issue.",
+    },
+]
 
 
 class AIDashboard:
@@ -49,6 +87,8 @@ class AIDashboard:
         self._register_callbacks()
 
     def _register_callbacks(self) -> None:
+        preset_inputs = [Input(spec["id"], "n_clicks") for spec in PRESET_PROMPTS]
+
         @self.app.callback(
             Output("ai-sidebar-open", "data"),
             Output("ai-sidebar", "style"),
@@ -101,12 +141,19 @@ class AIDashboard:
             Output("ai-scenario-ledger", "data", allow_duplicate=True),
             Output("ai-chat-poll", "disabled", allow_duplicate=True),
             Input("ai-chat-send", "n_clicks"),
+            *preset_inputs,
             State("ai-chat-input", "value"),
             State("ai-chat-history-store", "data"),
             prevent_initial_call=True,
         )
-        def _chat(_n_clicks, prompt, history):
-            prompt_text = str(prompt or "").strip()
+        def _chat(_n_clicks, *_args):
+            prompt = _args[-2] if len(_args) >= 2 else ""
+            history = _args[-1] if _args else []
+            triggered_id = ctx.triggered_id
+            prompt_text = self._prompt_text_for_trigger(
+                triggered_id=triggered_id,
+                typed_prompt=prompt,
+            )
             if not prompt_text:
                 return (
                     no_update,
@@ -336,7 +383,7 @@ class AIDashboard:
                                     "Actuarial Chat",
                                     [
                                         html.Div(
-                                            "Ask about deterioration, method changes, scenario alternatives, uncertainty, or evidence and the assistant will answer using reserving API calls.",
+                                            "Ask about movements, assumptions, anomalies, scenarios, or evidence and Turtuary will inspect the current reserving data and use the available toolset to help you.",
                                             style={
                                                 "color": COLOR_MUTED,
                                                 "fontSize": "13px",
@@ -344,8 +391,18 @@ class AIDashboard:
                                             },
                                         ),
                                         html.Div(
-                                            self._render_chat_messages(history),
-                                            id="ai-chat-transcript",
+                                            [
+                                                self._intro_chat_message(),
+                                                html.Div(
+                                                    self._render_chat_messages(history),
+                                                    id="ai-chat-transcript",
+                                                    style={
+                                                        "display": "flex",
+                                                        "flexDirection": "column",
+                                                        "gap": "22px",
+                                                    },
+                                                ),
+                                            ],
                                             style={
                                                 "flex": "1 1 auto",
                                                 "minHeight": "0",
@@ -667,9 +724,28 @@ class AIDashboard:
                 return [dict(item) for item in session.scenario_ledger]
         return []
 
+    @staticmethod
+    def _preset_prompt_specs() -> list[dict[str, str]]:
+        return [dict(item) for item in PRESET_PROMPTS]
+
+    @classmethod
+    def _prompt_text_for_trigger(
+        cls,
+        *,
+        triggered_id: object,
+        typed_prompt: object,
+    ) -> str:
+        trigger = str(triggered_id or "").strip()
+        if trigger == "ai-chat-send":
+            return str(typed_prompt or "").strip()
+        for spec in cls._preset_prompt_specs():
+            if spec["id"] == trigger:
+                return spec["prompt"]
+        return str(typed_prompt or "").strip()
+
     def _render_chat_messages(self, history: list[dict[str, Any]]) -> list:
         items = [item for item in history if isinstance(item, dict)]
-        rendered: list = [self._intro_chat_message()]
+        rendered: list = []
         if not items:
             return rendered
 
@@ -802,9 +878,10 @@ class AIDashboard:
                                     },
                                 ),
                                 html.Div(
-                                    "Hi, I'm Turtuary. Ask me a reserving question and I'll inspect diagnostics, compare scenarios, and explain the evidence step by step.",
+                                    "Hi, I'm Turtuary. I can inspect your current reserving data, run the available workflows and diagnostics, and help you work through the evidence.",
                                     style={"lineHeight": "1.6"},
                                 ),
+                                AIDashboard._preset_prompt_grid(),
                             ],
                             style={"minWidth": "0"},
                         ),
@@ -824,6 +901,52 @@ class AIDashboard:
                 "border": f"1px solid {COLOR_BORDER}",
                 "borderRadius": "22px",
                 "boxShadow": SHADOW_SOFT,
+            },
+        )
+
+    @staticmethod
+    def _preset_prompt_grid():
+        return html.Div(
+            [
+                html.Button(
+                    [
+                        html.Div(
+                            spec["label"],
+                            style={
+                                "fontSize": "13px",
+                                "fontWeight": 700,
+                                "marginBottom": "4px",
+                                "color": COLOR_TEXT,
+                            },
+                        ),
+                        html.Div(
+                            spec["description"],
+                            style={
+                                "fontSize": "12px",
+                                "lineHeight": "1.45",
+                                "color": COLOR_MUTED,
+                            },
+                        ),
+                    ],
+                    id=spec["id"],
+                    n_clicks=0,
+                    style={
+                        "textAlign": "left",
+                        "padding": "12px 12px",
+                        "border": f"1px solid {COLOR_BORDER}",
+                        "borderRadius": RADIUS_MD,
+                        "background": COLOR_ACCENT_SOFT,
+                        "cursor": "pointer",
+                        "boxShadow": "none",
+                    },
+                )
+                for spec in PRESET_PROMPTS
+            ],
+            style={
+                "display": "grid",
+                "gridTemplateColumns": "repeat(2, minmax(0, 1fr))",
+                "gap": "10px",
+                "marginTop": "14px",
             },
         )
 

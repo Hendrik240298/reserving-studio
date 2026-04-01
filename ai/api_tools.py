@@ -19,15 +19,21 @@ from ai.tool_payloads import (
     summarize_data_view_payload,
     summarize_diagnostics_payload,
     summarize_derived_drop_payload,
+    summarize_drop_review_payload,
     summarize_iteration_payload,
+    summarize_bf_suitability_payload,
     summarize_link_ratio_rank_payload,
     summarize_late_emergence_payload,
     summarize_ldf_consistency_payload,
     summarize_movement_diagnostics_payload,
+    summarize_anomaly_triage_review_payload,
+    summarize_quarter_close_pack_payload,
+    summarize_quarter_close_review_payload,
     summarize_recalculate_payload,
     summarize_highest_a2a_drop_payload,
     summarize_reserve_change_payload,
     summarize_tail_evaluation_payload,
+    summarize_tail_review_payload,
     summarize_results_payload,
     summarize_session_payload,
 )
@@ -56,6 +62,12 @@ class ReservingApiTools:
             "link_ratio_rank": {},
             "derived_drop": {},
             "tail_evaluation": {},
+            "drop_review": {},
+            "tail_review": {},
+            "bf_suitability": {},
+            "anomaly_triage": {},
+            "quarter_close_review": {},
+            "quarter_close_pack": {},
         }
 
     @property
@@ -102,6 +114,72 @@ class ReservingApiTools:
             if session_id:
                 self._raw_cache["diagnostics"][session_id] = payload
             return summarize_diagnostics_payload(payload)
+        if name == "tool_run_drop_review":
+            payload = self.request_json(
+                "POST",
+                "/v1/reviews/drop",
+                {
+                    "session_id": arguments["session_id"],
+                    "candidate_limit": int(arguments.get("candidate_limit", 5)),
+                },
+            )
+            session_id = str(payload.get("session_id", ""))
+            if session_id:
+                self._raw_cache["drop_review"][session_id] = payload
+            return summarize_drop_review_payload(payload)
+        if name == "tool_run_tail_review":
+            payload = self.request_json(
+                "POST",
+                "/v1/reviews/tail",
+                {
+                    "session_id": arguments["session_id"],
+                    "candidate_limit": int(arguments.get("candidate_limit", 12)),
+                },
+            )
+            session_id = str(payload.get("session_id", ""))
+            if session_id:
+                self._raw_cache["tail_review"][session_id] = payload
+            return summarize_tail_review_payload(payload)
+        if name == "tool_run_bf_suitability_review":
+            payload = self.request_json(
+                "POST",
+                "/v1/reviews/bf-suitability",
+                {"session_id": arguments["session_id"]},
+            )
+            session_id = str(payload.get("session_id", ""))
+            if session_id:
+                self._raw_cache["bf_suitability"][session_id] = payload
+            return summarize_bf_suitability_payload(payload)
+        if name == "tool_run_anomaly_triage":
+            payload = self.request_json(
+                "POST",
+                "/v1/reviews/anomaly-triage",
+                {"session_id": arguments["session_id"]},
+            )
+            session_id = str(payload.get("session_id", ""))
+            if session_id:
+                self._raw_cache["anomaly_triage"][session_id] = payload
+            return summarize_anomaly_triage_review_payload(payload)
+        if name == "tool_run_quarter_close_review":
+            payload = self.request_json(
+                "POST",
+                "/v1/reviews/quarter-close",
+                {"session_id": arguments["session_id"]},
+            )
+            session_id = str(payload.get("session_id", ""))
+            if session_id:
+                self._raw_cache["quarter_close_review"][session_id] = payload
+            return summarize_quarter_close_review_payload(payload)
+        if name == "tool_get_quarter_close_pack":
+            payload = self.request_json(
+                "POST",
+                "/v1/reviews/quarter-close/pack",
+                {"session_id": arguments["session_id"]},
+            )
+            session_id = str(payload.get("session_id", ""))
+            if session_id:
+                self._raw_cache["quarter_close_pack"][session_id] = payload
+            return summarize_quarter_close_pack_payload(payload)
         if name == "tool_iterate_diagnostics_summary":
             payload = self.request_json(
                 "POST",

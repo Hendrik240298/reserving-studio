@@ -70,3 +70,44 @@ def test_segment_memory_append_valuation_snapshot_dedupes_same_basis() -> None:
     )
 
     assert len(updated["valuation_history"]) == 1
+
+
+def test_segment_memory_continuity_summary_surfaces_rejections() -> None:
+    summary = SegmentMemoryService().continuity_summary(
+        {
+            "segment_id": "industrial",
+            "scenario_dispositions": [
+                {
+                    "scenario_signature": "sig-1",
+                    "decision": "rejected",
+                }
+            ],
+        }
+    )
+
+    assert summary["segment_id"] == "industrial"
+    assert summary["recent_rejected_signatures"] == ["sig-1"]
+
+
+def test_segment_memory_append_scenario_disposition_replaces_same_signature() -> None:
+    service = SegmentMemoryService()
+    memory = service.load({}, segment="industrial")
+    updated = service.append_scenario_disposition(
+        memory=memory,
+        disposition={
+            "scenario_signature": "sig-1",
+            "scenario_id": "drop_1",
+            "decision": "rejected",
+        },
+    )
+    updated = service.append_scenario_disposition(
+        memory=updated,
+        disposition={
+            "scenario_signature": "sig-1",
+            "scenario_id": "drop_1",
+            "decision": "accepted",
+        },
+    )
+
+    assert len(updated["scenario_dispositions"]) == 1
+    assert updated["scenario_dispositions"][0]["decision"] == "accepted"

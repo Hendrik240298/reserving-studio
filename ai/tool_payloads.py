@@ -171,6 +171,92 @@ def build_tool_specs() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "tool_run_drop_review",
+                "description": "Run the composite deterministic drop review and return ranked tested drop candidates with continuity and policy context.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string"},
+                        "candidate_limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 20,
+                        },
+                    },
+                    "required": ["session_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "tool_run_tail_review",
+                "description": "Run the composite deterministic tail review and return ranked tested tail candidates with continuity and policy context.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string"},
+                        "candidate_limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 30,
+                        },
+                    },
+                    "required": ["session_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "tool_run_bf_suitability_review",
+                "description": "Run the composite BF suitability review and return UWY-level and overall CL versus BF suitability conclusions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"session_id": {"type": "string"}},
+                    "required": ["session_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "tool_run_anomaly_triage",
+                "description": "Run the composite anomaly triage review and return structured anomaly classes, reserve relevance, and pause guidance.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"session_id": {"type": "string"}},
+                    "required": ["session_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "tool_run_quarter_close_review",
+                "description": "Run the composite quarter-close review and return the deterministic plan-test-conclude packet for the current session.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"session_id": {"type": "string"}},
+                    "required": ["session_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "tool_get_quarter_close_pack",
+                "description": "Build the structured quarter-close pack for export-style review after the quarter-close review is available.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"session_id": {"type": "string"}},
+                    "required": ["session_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "tool_iterate_diagnostics_summary",
                 "description": "Run scenario search and return a compact leaderboard. Use this before recommending drops, tail assumptions, or BF apriori changes.",
                 "parameters": {
@@ -841,6 +927,152 @@ def summarize_tail_evaluation_payload(payload: dict[str, Any]) -> dict[str, Any]
     }
 
 
+def summarize_drop_review_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    candidates = (
+        payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
+    )
+    recommendation = (
+        payload.get("recommendation")
+        if isinstance(payload.get("recommendation"), dict)
+        else {}
+    )
+    return {
+        "session_id": payload.get("session_id"),
+        "review_type": payload.get("review_type"),
+        "candidate_count": len(candidates),
+        "top_candidates": [_compact_review_candidate(item) for item in candidates[:5]],
+        "recommendation": _compact_review_recommendation(recommendation),
+        "continuity_notes": _top_continuity_notes(payload.get("continuity_notes")),
+        "policy_trace": payload.get("policy_trace", {}),
+        "evidence_summary": payload.get("evidence_summary", {}),
+        "run_metadata": payload.get("run_metadata", {}),
+    }
+
+
+def summarize_tail_review_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    candidates = (
+        payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
+    )
+    recommendation = (
+        payload.get("recommendation")
+        if isinstance(payload.get("recommendation"), dict)
+        else {}
+    )
+    return {
+        "session_id": payload.get("session_id"),
+        "review_type": payload.get("review_type"),
+        "candidate_count": len(candidates),
+        "top_candidates": [_compact_review_candidate(item) for item in candidates[:5]],
+        "recommendation": _compact_review_recommendation(recommendation),
+        "continuity_notes": _top_continuity_notes(payload.get("continuity_notes")),
+        "policy_trace": payload.get("policy_trace", {}),
+        "evidence_summary": payload.get("evidence_summary", {}),
+        "run_metadata": payload.get("run_metadata", {}),
+    }
+
+
+def summarize_bf_suitability_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    return {
+        "session_id": payload.get("session_id"),
+        "review_type": payload.get("review_type"),
+        "overall_class": payload.get("overall_class"),
+        "row_count": len(rows),
+        "top_rows": rows[:5],
+        "apriori_guidance": payload.get("apriori_guidance", {}),
+        "continuity_notes": _top_continuity_notes(payload.get("continuity_notes")),
+        "policy_trace": payload.get("policy_trace", {}),
+        "run_metadata": payload.get("run_metadata", {}),
+    }
+
+
+def summarize_anomaly_triage_review_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    findings = (
+        payload.get("triaged_findings")
+        if isinstance(payload.get("triaged_findings"), list)
+        else []
+    )
+    return {
+        "session_id": payload.get("session_id"),
+        "review_type": payload.get("review_type"),
+        "finding_count": len(findings),
+        "pause_recommendation": bool(payload.get("pause_recommendation", False)),
+        "top_findings": findings[:5],
+        "summary": payload.get("summary", {}),
+        "run_metadata": payload.get("run_metadata", {}),
+    }
+
+
+def summarize_quarter_close_review_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    recommendation = (
+        payload.get("recommendation")
+        if isinstance(payload.get("recommendation"), dict)
+        else {}
+    )
+    scenario_summary = (
+        payload.get("scenario_summary")
+        if isinstance(payload.get("scenario_summary"), dict)
+        else {}
+    )
+    continuity = (
+        payload.get("continuity") if isinstance(payload.get("continuity"), dict) else {}
+    )
+    comparison = (
+        payload.get("comparison") if isinstance(payload.get("comparison"), dict) else {}
+    )
+    return {
+        "session_id": payload.get("session_id"),
+        "review_type": payload.get("review_type"),
+        "comparison": {
+            "delta_summary": comparison.get("delta_summary", {}),
+            "limitations": comparison.get("limitations", []),
+            "current_valuation_date": comparison.get("current_snapshot", {}).get(
+                "valuation_date"
+            )
+            if isinstance(comparison.get("current_snapshot"), dict)
+            else None,
+            "prior_valuation_date": comparison.get("prior_proxy_snapshot", {}).get(
+                "valuation_date"
+            )
+            if isinstance(comparison.get("prior_proxy_snapshot"), dict)
+            else None,
+        },
+        "top_ranked": scenario_summary.get("top_ranked", [])[:5],
+        "recommendation": recommendation,
+        "continuity": {
+            "segment_id": continuity.get("segment_id"),
+            "memory_schema_version": continuity.get("memory_schema_version"),
+            "continuity_notes": _top_continuity_notes(
+                continuity.get("continuity_notes")
+            ),
+            "recent_rejected_signatures": continuity.get(
+                "recent_rejected_signatures", []
+            ),
+            "house_preferences": continuity.get("house_preferences", []),
+        },
+        "evidence_ids": payload.get("evidence_ids", []),
+        "run_metadata": payload.get("run_metadata", {}),
+    }
+
+
+def summarize_quarter_close_pack_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    pack = payload.get("pack") if isinstance(payload.get("pack"), dict) else {}
+    metadata = (
+        pack.get("pack_metadata") if isinstance(pack.get("pack_metadata"), dict) else {}
+    )
+    sections = pack.get("sections") if isinstance(pack.get("sections"), dict) else {}
+    return {
+        "session_id": payload.get("session_id"),
+        "review_type": payload.get("review_type"),
+        "pack_metadata": metadata,
+        "recommended_changes": sections.get("recommended_changes", [])[:5],
+        "signoff_questions": sections.get("signoff_questions", [])[:5],
+        "policy_trace": sections.get("policy_trace", {}),
+        "continuity_notes": sections.get("continuity_notes", [])[:5],
+        "run_metadata": payload.get("run_metadata", {}),
+    }
+
+
 def extract_last_derived_drop_detail(
     derived_payload: dict[str, Any] | None,
     highest_a2a_payload: dict[str, Any] | None,
@@ -1200,6 +1432,7 @@ def build_memory_snapshot(
     data_view_summary: dict[str, Any] | None = None,
     movement_summary: dict[str, Any] | None = None,
     reserve_change_summary: dict[str, Any] | None = None,
+    review_summary: dict[str, Any] | None = None,
     existing_scenario_ledger: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     scenario_ledger = list(existing_scenario_ledger or [])
@@ -1207,6 +1440,10 @@ def build_memory_snapshot(
         entries = iteration_summary.get("top_scenarios")
         baseline = iteration_summary.get("baseline")
         scenario_ledger = _merge_scenario_entries(scenario_ledger, baseline, entries)
+    if isinstance(review_summary, dict):
+        scenario_ledger = _merge_review_scenario_entries(
+            scenario_ledger, review_summary
+        )
     return {
         "session_summary": session_summary or {},
         "diagnostics_summary": diagnostics_summary or {},
@@ -1215,6 +1452,7 @@ def build_memory_snapshot(
         "data_view_summary": data_view_summary or {},
         "movement_summary": movement_summary or {},
         "reserve_change_summary": reserve_change_summary or {},
+        "review_summary": review_summary or {},
         "scenario_ledger": scenario_ledger,
     }
 
@@ -1263,6 +1501,17 @@ def render_memory_hint(memory: dict[str, Any] | None) -> str:
         parts.append(
             "Latest reserve-change memory: "
             f"delta_ibnr={reserve_change.get('delta_ibnr')}"
+        )
+    review_summary = memory.get("review_summary")
+    if isinstance(review_summary, dict) and review_summary:
+        recommendation = (
+            review_summary.get("recommendation")
+            if isinstance(review_summary.get("recommendation"), dict)
+            else {}
+        )
+        parts.append(
+            "Latest composite review memory: "
+            f"type={review_summary.get('review_type')}, recommendation={recommendation.get('status') or recommendation.get('recommendation_class')}"
         )
     ledger = memory.get("scenario_ledger")
     if isinstance(ledger, list) and ledger:
@@ -1374,6 +1623,40 @@ def _compact_scenario(item: object) -> dict[str, Any]:
     }
 
 
+def _compact_review_candidate(item: object) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return {}
+    return {
+        "candidate_id": item.get("candidate_id"),
+        "summary": item.get("summary"),
+        "score": item.get("score"),
+        "recommendation_class": item.get("recommendation_class"),
+        "rank": item.get("rank"),
+        "score_breakdown": item.get("score_breakdown", {}),
+        "policy_trace": item.get("policy_trace", {}),
+        "continuity_notes": _top_continuity_notes(item.get("continuity_notes")),
+        "parameters": item.get("parameters", {}),
+    }
+
+
+def _compact_review_recommendation(item: object) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return {}
+    return {
+        "recommendation_class": item.get("recommendation_class"),
+        "candidate_id": item.get("candidate_id"),
+        "summary": item.get("summary"),
+        "caveats": item.get("caveats", []),
+        "alternatives": item.get("alternatives", []),
+    }
+
+
+def _top_continuity_notes(items: object) -> list[dict[str, Any]]:
+    if not isinstance(items, list):
+        return []
+    return [dict(item) for item in items[:5] if isinstance(item, dict)]
+
+
 def _match_findings(
     findings: object,
     recommendations: object,
@@ -1474,3 +1757,108 @@ def _merge_scenario_entries(
     ordered = list(merged.values())
     ordered.sort(key=lambda item: float(item.get("score", 0.0) or 0.0))
     return ordered[:12]
+
+
+def _merge_review_scenario_entries(
+    existing: list[dict[str, Any]],
+    review_summary: dict[str, Any],
+) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {
+        str(item.get("scenario_id")): dict(item)
+        for item in existing
+        if isinstance(item, dict) and item.get("scenario_id")
+    }
+    for candidate in _review_candidates_for_ledger(review_summary):
+        scenario_id = str(candidate.get("scenario_id", "")).strip()
+        if not scenario_id:
+            continue
+        merged[scenario_id] = candidate
+    ordered = list(merged.values())
+    ordered.sort(
+        key=lambda item: float(item.get("score", 0.0) or 0.0),
+        reverse=True,
+    )
+    return ordered[:12]
+
+
+def _review_candidates_for_ledger(
+    review_summary: dict[str, Any],
+) -> list[dict[str, Any]]:
+    review_type = str(review_summary.get("review_type", "")).strip()
+    candidates: list[dict[str, Any]] = []
+    top_candidates = review_summary.get("top_candidates")
+    if isinstance(top_candidates, list):
+        for item in top_candidates[:5]:
+            compact = _compact_review_candidate_for_ledger(item, transform=review_type)
+            if compact:
+                candidates.append(compact)
+    top_ranked = review_summary.get("top_ranked")
+    if isinstance(top_ranked, list):
+        for item in top_ranked[:5]:
+            compact = _compact_review_candidate_for_ledger(item, transform=review_type)
+            if compact:
+                candidates.append(compact)
+    recommendation = (
+        review_summary.get("recommendation")
+        if isinstance(review_summary.get("recommendation"), dict)
+        else {}
+    )
+    recommended_changes = recommendation.get("recommended_changes")
+    if isinstance(recommended_changes, list):
+        for item in recommended_changes[:5]:
+            compact = _compact_review_candidate_for_ledger(item, transform=review_type)
+            if compact:
+                candidates.append(compact)
+    deduped: dict[str, dict[str, Any]] = {}
+    for item in candidates:
+        scenario_id = str(item.get("scenario_id", "")).strip()
+        if not scenario_id:
+            continue
+        deduped[scenario_id] = item
+    return list(deduped.values())
+
+
+def _compact_review_candidate_for_ledger(
+    item: object,
+    *,
+    transform: str,
+) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return {}
+    candidate_id = str(
+        item.get("candidate_id") or item.get("scenario_id") or ""
+    ).strip()
+    if not candidate_id:
+        return {}
+    policy_trace = (
+        item.get("policy_trace") if isinstance(item.get("policy_trace"), dict) else {}
+    )
+    recommendation_class = str(item.get("recommendation_class", "")).strip()
+    continuity_notes = (
+        item.get("continuity_notes")
+        if isinstance(item.get("continuity_notes"), list)
+        else []
+    )
+    continuity_text = ", ".join(
+        str(note.get("code", "")).strip()
+        for note in continuity_notes
+        if isinstance(note, dict) and str(note.get("code", "")).strip()
+    )
+    summary = str(item.get("summary", "")).strip()
+    if recommendation_class:
+        summary = f"{summary} [{recommendation_class}]".strip()
+    if continuity_text:
+        summary = f"{summary} ({continuity_text})".strip()
+    tier = None
+    metrics = item.get("metrics") if isinstance(item.get("metrics"), dict) else {}
+    if metrics:
+        tier = metrics.get("governance_tier")
+    if tier is None:
+        tier = policy_trace.get("governance_tier")
+    return {
+        "scenario_id": candidate_id,
+        "score": item.get("score"),
+        "tier": tier,
+        "transform": transform or "composite_review",
+        "summary": summary,
+    }

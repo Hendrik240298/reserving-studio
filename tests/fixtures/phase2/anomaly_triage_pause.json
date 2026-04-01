@@ -1,0 +1,43 @@
+{
+  "name": "anomaly_triage_pause",
+  "prompt": "Please triage this data anomaly before we change assumptions.",
+  "session_context": {
+    "segment": "industrial",
+    "session_id": "s-triage"
+  },
+  "segment_memory": {},
+  "tool_outputs": {
+    "tool_run_anomaly_triage": {
+      "session_id": "s-triage",
+      "review_type": "anomaly_triage",
+      "pause_recommendation": true,
+      "top_findings": [
+        {
+          "type": "data_quality",
+          "message": "Missing latest diagonal should be reconciled before selection changes.",
+          "evidence_id": "ev-triage-1"
+        }
+      ],
+      "summary": {
+        "finding_count": 1
+      },
+      "run_metadata": {
+        "run_id": "triage-run"
+      }
+    }
+  },
+  "expected": {
+    "playbook": "data_anomaly_triage",
+    "tool_sequence": [
+      "tool_run_anomaly_triage"
+    ],
+    "review_status": "pass_with_caveats",
+    "recommendation_status": "hold_for_review",
+    "review_caveats_contains": [
+      "pause_recommendation"
+    ],
+    "evidence_used_contains": [
+      "ev-triage-1"
+    ]
+  }
+}

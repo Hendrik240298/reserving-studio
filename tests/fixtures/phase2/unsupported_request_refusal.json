@@ -1,0 +1,65 @@
+{
+  "name": "unsupported_request_refusal",
+  "prompt": "Recommend a Cape Cod booking scenario.",
+  "session_context": {
+    "segment": "industrial",
+    "session_id": "s-unsupported"
+  },
+  "segment_memory": {},
+  "tool_outputs": {
+    "tool_run_diagnostics_summary": {
+      "session_id": "s-unsupported",
+      "top_findings": [],
+      "top_recommendations": [
+        {
+          "message": "Use Cape Cod for the final selection.",
+          "evidence_id": "ev-unsupported-1",
+          "proposed_parameters": {
+            "final_ultimate": "cape_cod"
+          }
+        }
+      ],
+      "governance": {
+        "tier": "green"
+      },
+      "metrics": {}
+    },
+    "tool_iterate_diagnostics_summary": {
+      "session_id": "s-unsupported",
+      "baseline": {
+        "scenario_id": "baseline",
+        "score": 1.0,
+        "governance_tier": "green"
+      },
+      "top_scenarios": [
+        {
+          "scenario_id": "cape_cod_1",
+          "score": 0.4,
+          "governance_tier": "green"
+        }
+      ]
+    },
+    "tool_get_results_summary": {
+      "session_id": "s-unsupported",
+      "summary": {
+        "total_ibnr": 100.0
+      }
+    }
+  },
+  "expected": {
+    "playbook": "scenario_recommendation",
+    "tool_sequence": [
+      "tool_run_diagnostics_summary",
+      "tool_iterate_diagnostics_summary",
+      "tool_get_results_summary"
+    ],
+    "review_status": "hard_fail",
+    "recommendation_status": "hold_for_review",
+    "review_issues_contains": [
+      "unsupported_method_or_parameter"
+    ],
+    "evidence_used_contains": [
+      "ev-unsupported-1"
+    ]
+  }
+}

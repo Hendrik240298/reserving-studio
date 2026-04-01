@@ -2007,6 +2007,13 @@ class Dashboard:
                     recommendation = deterministic_packet.get("recommendation", {})
                     if isinstance(recommendation, dict):
                         ai_memory["last_recommendation"] = recommendation
+                for disposition in self._build_scenario_dispositions_from_review(
+                    updated
+                ):
+                    ai_memory = memory_service.append_scenario_disposition(
+                        memory=ai_memory,
+                        disposition=disposition,
+                    )
                 ai_memory = memory_service.merge(
                     existing_memory=self._config.load_ai_segment_memory(
                         segment=segment_key
@@ -2567,6 +2574,133 @@ class Dashboard:
             "ai_evidence_refs": review_data.get("ai_evidence_refs", []),
             "ai_override": review_data.get("ai_override", {}),
         }
+
+    @staticmethod
+    def _build_scenario_dispositions_from_review(review_data: dict) -> list[dict]:
+        if not isinstance(review_data, dict):
+            return []
+        override = (
+            review_data.get("ai_override")
+            if isinstance(review_data.get("ai_override"), dict)
+            else {}
+        )
+        decision = Dashboard._normalize_human_decision(
+            override.get("decision", "pending")
+        )
+        if decision == "pending":
+            return []
+        deterministic_packet = (
+            review_data.get("deterministic_packet")
+            if isinstance(review_data.get("deterministic_packet"), dict)
+            else {}
+        )
+        candidate_items = Dashboard._recommended_candidate_items(deterministic_packet)
+        if not candidate_items:
+            return []
+        valuation_date, data_fingerprint = Dashboard._valuation_context_from_packet(
+            deterministic_packet
+        )
+        output: list[dict] = []
+        for item in candidate_items:
+            params = (
+                item.get("parameters")
+                if isinstance(item.get("parameters"), dict)
+                else {}
+            )
+            scenario_signature = (
+                SegmentMemoryService.scenario_signature(params) if params else ""
+            )
+            output.append(
+                {
+                    "scenario_signature": scenario_signature
+                    or item.get("candidate_id"),
+                    "scenario_id": item.get("candidate_id") or item.get("scenario_id"),
+                    "decision": decision,
+                    "rationale": str(override.get("rationale", "")).strip(),
+                    "approver": str(override.get("approver", "")).strip(),
+                    "signed_off_at": override.get("signed_off_at"),
+                    "valuation_date": valuation_date,
+                    "data_fingerprint": data_fingerprint,
+                }
+            )
+        return output
+
+    @staticmethod
+    def _recommended_candidate_items(deterministic_packet: dict) -> list[dict]:
+        if not isinstance(deterministic_packet, dict):
+            return []
+        recommended_changes = deterministic_packet.get("recommended_changes")
+        if isinstance(recommended_changes, list) and recommended_changes:
+            return [
+                dict(item) for item in recommended_changes if isinstance(item, dict)
+            ]
+        composite_review = (
+            deterministic_packet.get("composite_review")
+            if isinstance(deterministic_packet.get("composite_review"), dict)
+            else {}
+        )
+        summary = (
+            composite_review.get("summary")
+            if isinstance(composite_review.get("summary"), dict)
+            else {}
+        )
+        recommendation = (
+            summary.get("recommendation")
+            if isinstance(summary.get("recommendation"), dict)
+            else {}
+        )
+        candidate_id = str(recommendation.get("candidate_id", "")).strip()
+        top_candidates = (
+            summary.get("top_candidates")
+            if isinstance(summary.get("top_candidates"), list)
+            else []
+        )
+        if candidate_id:
+            for item in top_candidates:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("candidate_id", "")).strip() == candidate_id:
+                    return [dict(item)]
+        return []
+
+    @staticmethod
+    def _valuation_context_from_packet(
+        deterministic_packet: dict,
+    ) -> tuple[str | None, str | None]:
+        composite_review = (
+            deterministic_packet.get("composite_review")
+            if isinstance(deterministic_packet.get("composite_review"), dict)
+            else {}
+        )
+        summary = (
+            composite_review.get("summary")
+            if isinstance(composite_review.get("summary"), dict)
+            else {}
+        )
+        run_metadata = (
+            summary.get("run_metadata")
+            if isinstance(summary.get("run_metadata"), dict)
+            else {}
+        )
+        comparison = (
+            summary.get("comparison")
+            if isinstance(summary.get("comparison"), dict)
+            else {}
+        )
+        valuation_date = comparison.get("current_valuation_date")
+        data_fingerprint = run_metadata.get("current_data_fingerprint")
+        return valuation_date, data_fingerprint
+
+    @staticmethod
+    def _normalize_human_decision(value: object) -> str:
+        normalized = str(value or "").strip().lower()
+        mapping = {
+            "approve": "accepted",
+            "approve_with_conditions": "accepted",
+            "reject": "rejected",
+            "escalate": "escalated",
+        }
+        return mapping.get(normalized, normalized or "pending")
 
     def _build_ai_recommendation_panel(self, review_data: dict):
         deterministic_packet = (

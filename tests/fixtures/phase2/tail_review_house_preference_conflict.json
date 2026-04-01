@@ -1,0 +1,80 @@
+{
+  "name": "tail_review_house_preference_conflict",
+  "prompt": "Recommend the tail selection for this segment.",
+  "session_context": {
+    "segment": "industrial",
+    "session_id": "s-tail"
+  },
+  "segment_memory": {
+    "house_preferences": [
+      {
+        "type": "prefer_stable_tail",
+        "enabled": true
+      }
+    ]
+  },
+  "tool_outputs": {
+    "tool_run_tail_review": {
+      "session_id": "s-tail",
+      "review_type": "tail_review",
+      "candidate_count": 1,
+      "top_candidates": [
+        {
+          "candidate_id": "tail_1",
+          "summary": "Weibull tail attachment 60",
+          "score": 0.71,
+          "evidence_id": "ev-tail-1",
+          "recommendation_class": "recommend",
+          "score_breakdown": {
+            "total_score": 0.71
+          },
+          "policy_trace": {
+            "house_preference_conflicts": [
+              "prefer stable tail"
+            ]
+          }
+        }
+      ],
+      "recommendation": {
+        "recommendation_class": "recommend",
+        "candidate_id": "tail_1",
+        "summary": "Use the tested tail candidate"
+      },
+      "continuity_notes": [
+        {
+          "code": "house_preference_conflict",
+          "message": "Conflicts with preference to prefer stable tail behavior."
+        }
+      ],
+      "policy_trace": {
+        "house_preference_conflicts": [
+          "prefer stable tail"
+        ]
+      },
+      "run_metadata": {
+        "run_id": "tail-run"
+      }
+    }
+  },
+  "expected": {
+    "playbook": "tail_selection",
+    "tool_sequence": [
+      "tool_run_tail_review"
+    ],
+    "review_status": "pass_with_caveats",
+    "recommendation_status": "reasonable_alternative",
+    "review_caveats_contains": [
+      "house_preference_conflict"
+    ],
+    "continuity_contains": [
+      "house_preference_conflict"
+    ],
+    "policy_trace_flags": [
+      "house_preference_conflicts"
+    ],
+    "evidence_used_contains": [
+      "ev-tail-1"
+    ],
+    "recommended_id": "tail_1"
+  }
+}

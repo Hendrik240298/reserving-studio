@@ -14,6 +14,17 @@ class PlaybookPlanner:
         if any(
             keyword in prompt
             for keyword in {
+                "quarter close",
+                "quarter-close",
+                "close pack",
+                "close review",
+                "quarterly review pack",
+            }
+        ):
+            return "quarter_close_review"
+        if any(
+            keyword in prompt
+            for keyword in {
                 "data quality",
                 "anomaly",
                 "triage",
@@ -24,6 +35,20 @@ class PlaybookPlanner:
             }
         ):
             return "data_anomaly_triage"
+        if any(
+            keyword in prompt
+            for keyword in {
+                "drop review",
+                "drop any ratios",
+                "which ratios should be dropped",
+                "which ratio should be dropped",
+                "should be dropped",
+                "should we drop",
+                "should i drop",
+                "drop ratios",
+            }
+        ):
+            return "drop_review"
         if any(
             keyword in prompt
             for keyword in {

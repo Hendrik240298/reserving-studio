@@ -48,6 +48,10 @@ from source.api.schemas import (
     MovementDiagnosticsRequest,
     MovementDiagnosticsResponse,
     ParamsStore,
+    QuarterClosePackRequest,
+    QuarterClosePackResponse,
+    QuarterCloseReviewRequest,
+    QuarterCloseReviewResponse,
     RecalculateRequest,
     RecalculateResponse,
     ReserveChangeRequest,
@@ -79,6 +83,7 @@ from source.services.movement_diagnostics_service import MovementDiagnosticsServ
 from source.services.scenario_evaluation_service import ScenarioEvaluationService
 from source.services.scenario_scoring_service import ScenarioScoringService
 from source.services.segment_memory_service import SegmentMemoryService
+from source.services.quarter_close_service import QuarterCloseService
 from source.services.uncertainty_service import UncertaintyService
 from source.services.valuation_snapshot_service import ValuationSnapshotService
 
@@ -153,6 +158,11 @@ class InMemoryReservingBackend:
         )
         self._valuation_snapshot_service = ValuationSnapshotService(
             evaluation_service=self._scenario_evaluation_service,
+        )
+        self._quarter_close_service = QuarterCloseService(
+            evaluation_service=self._scenario_evaluation_service,
+            assumption_review_service=self._assumption_review_service,
+            valuation_snapshot_service=self._valuation_snapshot_service,
         )
 
     def create_workflow_from_dataframes(
@@ -1130,6 +1140,73 @@ class InMemoryReservingBackend:
                 pause_recommendation=bool(review.get("pause_recommendation", False)),
                 run_metadata=review.get("run_metadata", {}),
             )
+
+    def run_quarter_close_review(
+        self,
+        payload: QuarterCloseReviewRequest,
+    ) -> QuarterCloseReviewResponse:
+        with self._lock:
+            context = self._get_context_by_session_id(payload.session_id)
+            if context is None:
+                raise LookupError(f"Session not found: {payload.session_id}")
+            review = self._run_quarter_close_review_payload(context)
+            context.last_results_payload = self._build_results_payload(
+                context.reserving
+            )
+            return QuarterCloseReviewResponse(
+                session_id=context.session_id,
+                comparison=review.get("comparison", {}),
+                diagnostics=review.get("diagnostics", {}),
+                assumption_reviews=review.get("assumption_reviews", {}),
+                scenario_summary=review.get("scenario_summary", {}),
+                continuity=review.get("continuity", {}),
+                recommendation=review.get("recommendation", {}),
+                evidence_ids=review.get("evidence_ids", []),
+                run_metadata=review.get("run_metadata", {}),
+            )
+
+    def build_quarter_close_pack(
+        self,
+        payload: QuarterClosePackRequest,
+    ) -> QuarterClosePackResponse:
+        with self._lock:
+            context = self._get_context_by_session_id(payload.session_id)
+            if context is None:
+                raise LookupError(f"Session not found: {payload.session_id}")
+            review = self._run_quarter_close_review_payload(context)
+            pack = self._get_quarter_close_service().build_pack(review_result=review)
+            context.last_results_payload = self._build_results_payload(
+                context.reserving
+            )
+            return QuarterClosePackResponse(
+                session_id=context.session_id,
+                pack=pack,
+                run_metadata=review.get("run_metadata", {}),
+            )
+
+    def _run_quarter_close_review_payload(
+        self,
+        context: SessionContext,
+    ) -> dict[str, Any]:
+        if not context.source_claims_rows or not context.source_premium_rows:
+            raise ValueError(
+                "Quarter-close review requires source claims_rows and premium_rows in the session context"
+            )
+        claims_df = pd.DataFrame(context.source_claims_rows)
+        premium_df = pd.DataFrame(context.source_premium_rows)
+        if claims_df.empty or premium_df.empty:
+            raise ValueError(
+                "Quarter-close review requires non-empty source claims and premium data"
+            )
+        return self._get_quarter_close_service().run_review(
+            segment=context.segment,
+            reserving=context.reserving,
+            claims_df=claims_df,
+            premium_df=premium_df,
+            baseline_params=self._params_from_store(context),
+            config=self._config,
+            segment_memory=self._load_segment_memory(context.segment),
+        )
 
     def _build_results_payload(self, reserving: Reserving) -> dict:
         results_df = reserving.get_results()
@@ -2109,6 +2186,18 @@ class InMemoryReservingBackend:
             evaluation_service=self._get_scenario_evaluation_service(),
         )
         self._valuation_snapshot_service = service
+        return service
+
+    def _get_quarter_close_service(self) -> QuarterCloseService:
+        service = getattr(self, "_quarter_close_service", None)
+        if isinstance(service, QuarterCloseService):
+            return service
+        service = QuarterCloseService(
+            evaluation_service=self._get_scenario_evaluation_service(),
+            assumption_review_service=self._get_assumption_review_service(),
+            valuation_snapshot_service=self._get_valuation_snapshot_service(),
+        )
+        self._quarter_close_service = service
         return service
 
     @staticmethod

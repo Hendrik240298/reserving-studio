@@ -87,6 +87,66 @@ class ValuationSnapshotService:
             },
         }
 
+    def build_delta_summary(
+        self,
+        *,
+        current_snapshot: dict[str, Any] | None,
+        prior_snapshot: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        current = current_snapshot if isinstance(current_snapshot, dict) else {}
+        prior = prior_snapshot if isinstance(prior_snapshot, dict) else {}
+        current_summary = (
+            current.get("summary") if isinstance(current.get("summary"), dict) else {}
+        )
+        prior_summary = (
+            prior.get("summary") if isinstance(prior.get("summary"), dict) else {}
+        )
+        current_methods = (
+            current_summary.get("selected_method_counts")
+            if isinstance(current_summary.get("selected_method_counts"), dict)
+            else {}
+        )
+        prior_methods = (
+            prior_summary.get("selected_method_counts")
+            if isinstance(prior_summary.get("selected_method_counts"), dict)
+            else {}
+        )
+        return {
+            "comparison_basis": str(
+                prior.get("comparison_basis") or current.get("comparison_basis") or ""
+            ),
+            "current_valuation_date": current.get("valuation_date"),
+            "prior_valuation_date": prior.get("valuation_date"),
+            "metrics": {
+                "uwy_count_delta": self._rounded_delta(
+                    current_summary.get("uwy_count"),
+                    prior_summary.get("uwy_count"),
+                ),
+                "total_ultimate_delta": self._rounded_delta(
+                    current_summary.get("total_ultimate"),
+                    prior_summary.get("total_ultimate"),
+                ),
+                "total_incurred_delta": self._rounded_delta(
+                    current_summary.get("total_incurred"),
+                    prior_summary.get("total_incurred"),
+                ),
+                "total_ibnr_delta": self._rounded_delta(
+                    current_summary.get("total_ibnr"),
+                    prior_summary.get("total_ibnr"),
+                ),
+            },
+            "selected_method_count_delta": {
+                key: self._rounded_delta(
+                    current_methods.get(key, 0), prior_methods.get(key, 0)
+                )
+                for key in sorted(set(current_methods) | set(prior_methods))
+            },
+            "fingerprints": {
+                "current": current.get("data_fingerprint"),
+                "prior_proxy": prior.get("data_fingerprint"),
+            },
+        }
+
     def exclude_latest_diagonal(
         self,
         *,
@@ -196,3 +256,11 @@ class ValuationSnapshotService:
     @staticmethod
     def _utc_now() -> str:
         return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    @staticmethod
+    def _rounded_delta(current_value: object, prior_value: object) -> float | None:
+        current = pd.to_numeric(current_value, errors="coerce")
+        prior = pd.to_numeric(prior_value, errors="coerce")
+        if pd.isna(current) or pd.isna(prior):
+            return None
+        return round(float(current) - float(prior), 6)

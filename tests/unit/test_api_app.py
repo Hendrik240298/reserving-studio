@@ -12,20 +12,26 @@ if str(REPO_ROOT) not in sys.path:
 
 from source.api.main import create_app
 from source.api.schemas import (
+    AnomalyTriageResponse,
+    BfSuitabilityResponse,
     DiagnosticsIterateResponse,
     DiagnosticsResponse,
     DataCompareResponse,
     DataViewResponse,
     DerivedDropScenarioResponse,
+    DropReviewResponse,
     HighestA2ADropResponse,
     LateEmergenceResponse,
     LdfConsistencyResponse,
     LinkRatioRankResponse,
     MovementDiagnosticsResponse,
+    QuarterClosePackResponse,
+    QuarterCloseReviewResponse,
     ParamsStore,
     RecalculateResponse,
     ReserveChangeResponse,
     TailEvaluationResponse,
+    TailReviewResponse,
     ResultsResponse,
     RunMetadata,
     ResultsStoreMeta,
@@ -201,6 +207,100 @@ class FakeBackend:
             ],
             observed_ldf=[{"age": 12, "ldf": 1.2}],
             fitted_tail_ldf=[{"age": 12, "ldf": 1.18}],
+        )
+
+    def run_drop_review(self, payload):
+        return DropReviewResponse(
+            session_id=payload.session_id,
+            candidates=[
+                {
+                    "candidate_id": "drop_1",
+                    "summary": "Drop AY 2022 age 24",
+                    "parameters": {"drop": [["2022", 24]]},
+                    "score": 0.8,
+                    "recommendation_class": "recommend",
+                }
+            ],
+            recommendation={
+                "recommendation_class": "recommend",
+                "candidate_id": "drop_1",
+                "summary": "Adopt tested drop",
+            },
+            continuity_notes=[],
+            policy_trace={},
+            evidence_summary={},
+            run_metadata={"run_id": "drop-run"},
+        )
+
+    def run_tail_review(self, payload):
+        return TailReviewResponse(
+            session_id=payload.session_id,
+            candidates=[
+                {
+                    "candidate_id": "tail_1",
+                    "summary": "Tail Weibull 60",
+                    "parameters": {"tail": {"curve": "weibull", "attachment_age": 60}},
+                    "score": 0.7,
+                    "recommendation_class": "reasonable_alternative",
+                }
+            ],
+            recommendation={
+                "recommendation_class": "reasonable_alternative",
+                "candidate_id": "tail_1",
+                "summary": "Use as sensitivity",
+            },
+            continuity_notes=[],
+            policy_trace={},
+            evidence_summary={},
+            run_metadata={"run_id": "tail-run"},
+        )
+
+    def run_bf_suitability_review(self, payload):
+        return BfSuitabilityResponse(
+            session_id=payload.session_id,
+            rows=[{"uwy": "2022", "suitability_class": "bf_preferred"}],
+            overall_class="mixed",
+            summary={"row_count": 1},
+            apriori_guidance={"available": True},
+            continuity_notes=[],
+            policy_trace={},
+            run_metadata={"run_id": "bf-run"},
+        )
+
+    def run_anomaly_triage(self, payload):
+        return AnomalyTriageResponse(
+            session_id=payload.session_id,
+            triaged_findings=[{"type": "data_quality", "message": "check data"}],
+            summary={"finding_count": 1},
+            pause_recommendation=True,
+            run_metadata={"run_id": "triage-run"},
+        )
+
+    def run_quarter_close_review(self, payload):
+        return QuarterCloseReviewResponse(
+            session_id=payload.session_id,
+            comparison={"delta_summary": {"metrics": {"total_ibnr_delta": 5.0}}},
+            diagnostics={},
+            assumption_reviews={},
+            scenario_summary={"top_ranked": [{"candidate_id": "drop_1"}]},
+            continuity={"memory_schema_version": 2},
+            recommendation={
+                "status": "recommended",
+                "recommended_changes": [{"candidate_id": "drop_1"}],
+            },
+            evidence_ids=["ev-1"],
+            run_metadata={"workflow_run_id": "wf-1"},
+        )
+
+    def build_quarter_close_pack(self, payload):
+        return QuarterClosePackResponse(
+            session_id=payload.session_id,
+            pack={
+                "review_type": "quarter_close_pack",
+                "pack_metadata": {"comparison_basis": "latest_diagonal_excluded_proxy"},
+                "sections": {"recommended_changes": [{"candidate_id": "drop_1"}]},
+            },
+            run_metadata={"workflow_run_id": "wf-1"},
         )
 
 
@@ -394,3 +494,48 @@ def test_api_scaffold_endpoints() -> None:
     )
     assert tail_response.status_code == 200
     assert tail_response.json()["r2"] == 0.98
+
+    drop_review_response = client.post(
+        "/v1/reviews/drop",
+        json={"session_id": "s-1", "candidate_limit": 5},
+    )
+    assert drop_review_response.status_code == 200
+    assert drop_review_response.json()["recommendation"]["candidate_id"] == "drop_1"
+
+    tail_review_response = client.post(
+        "/v1/reviews/tail",
+        json={"session_id": "s-1", "candidate_limit": 8},
+    )
+    assert tail_review_response.status_code == 200
+    assert tail_review_response.json()["recommendation"]["candidate_id"] == "tail_1"
+
+    bf_review_response = client.post(
+        "/v1/reviews/bf-suitability",
+        json={"session_id": "s-1"},
+    )
+    assert bf_review_response.status_code == 200
+    assert bf_review_response.json()["overall_class"] == "mixed"
+
+    anomaly_review_response = client.post(
+        "/v1/reviews/anomaly-triage",
+        json={"session_id": "s-1"},
+    )
+    assert anomaly_review_response.status_code == 200
+    assert anomaly_review_response.json()["pause_recommendation"] is True
+
+    quarter_close_response = client.post(
+        "/v1/reviews/quarter-close",
+        json={"session_id": "s-1"},
+    )
+    assert quarter_close_response.status_code == 200
+    assert quarter_close_response.json()["recommendation"]["status"] == "recommended"
+
+    quarter_close_pack_response = client.post(
+        "/v1/reviews/quarter-close/pack",
+        json={"session_id": "s-1"},
+    )
+    assert quarter_close_pack_response.status_code == 200
+    assert (
+        quarter_close_pack_response.json()["pack"]["review_type"]
+        == "quarter_close_pack"
+    )

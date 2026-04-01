@@ -1,0 +1,57 @@
+{
+  "name": "bf_suitability_mixed",
+  "prompt": "Is BF better than chainladder for newer years?",
+  "session_context": {
+    "segment": "industrial",
+    "session_id": "s-bf"
+  },
+  "segment_memory": {
+    "last_selection": {
+      "method_by_uwy": {
+        "2022": "chainladder"
+      }
+    }
+  },
+  "tool_outputs": {
+    "tool_run_bf_suitability_review": {
+      "session_id": "s-bf",
+      "review_type": "bf_suitability",
+      "overall_class": "mixed",
+      "rows": [
+        {
+          "uwy": "2022",
+          "suitability_class": "bf_preferred",
+          "evidence_id": "ev-bf-1"
+        }
+      ],
+      "summary": {
+        "overall_class": "mixed",
+        "row_count": 1
+      },
+      "continuity_notes": [
+        {
+          "code": "prior_selection_tension",
+          "message": "Current BF suitability conflicts with prior all-CL selection."
+        }
+      ],
+      "policy_trace": {},
+      "run_metadata": {
+        "run_id": "bf-run"
+      }
+    }
+  },
+  "expected": {
+    "playbook": "method_suitability_review",
+    "tool_sequence": [
+      "tool_run_bf_suitability_review"
+    ],
+    "review_status": "pass",
+    "recommendation_status": "reasonable_alternative",
+    "continuity_contains": [
+      "prior_selection_tension"
+    ],
+    "evidence_used_contains": [
+      "ev-bf-1"
+    ]
+  }
+}
