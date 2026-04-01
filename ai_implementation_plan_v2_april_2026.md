@@ -335,6 +335,8 @@ Then let the assistant say:
 
 ## Phase 2 - Decision quality and actuarial depth
 
+Check out: ai_implementation_plan_v2_april_2026_phase2.md
+
 Once Phase 1 control-layer reliability is stable, deepen the actuarial engines and quarter-close workflow.
 
 ### 8. Deepen segment-aware persistent memory

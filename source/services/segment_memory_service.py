@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from typing import Any
+
+
+class SegmentMemoryService:
+    SCHEMA_VERSION = 2
+    _VALUATION_HISTORY_LIMIT = 12
+    _SCENARIO_DISPOSITION_LIMIT = 40
+
+    def load(
+        self, raw_memory: dict[str, Any] | None, *, segment: str | None
+    ) -> dict[str, Any]:
+        normalized = self._base_memory(segment=segment)
+        if not isinstance(raw_memory, dict):
+            return normalized
+
+        for key, value in raw_memory.items():
+            if key == "updated_at":
+                continue
+            normalized[key] = deepcopy(value)
+
+        normalized["schema_version"] = self.SCHEMA_VERSION
+        normalized["segment_id"] = str(segment or normalized.get("segment_id") or "")
+        normalized["house_preferences"] = self._string_list(
+            normalized.get("house_preferences")
+        )
+        normalized["known_issues"] = self._string_list(normalized.get("known_issues"))
+        normalized["last_selection"] = self._dict(normalized.get("last_selection"))
+        normalized["last_human_decision"] = self._dict(
+            normalized.get("last_human_decision")
+        )
+        normalized["last_recommendation"] = self._dict(
+            normalized.get("last_recommendation")
+        )
+        normalized["last_review"] = self._dict(normalized.get("last_review"))
+        normalized["scenario_ledger"] = self._dict_list(
+            normalized.get("scenario_ledger")
+        )
+        normalized["scenario_dispositions"] = self._migrate_scenario_dispositions(
+            raw_memory
+        )
+        normalized["valuation_history"] = self._trim_dict_list(
+            normalized.get("valuation_history"),
+            limit=self._VALUATION_HISTORY_LIMIT,
+        )
+        return normalized
+
+    def merge(
+        self,
+        *,
+        existing_memory: dict[str, Any] | None,
+        incoming_memory: dict[str, Any] | None,
+        segment: str | None,
+    ) -> dict[str, Any]:
+        current = self.load(existing_memory, segment=segment)
+        merged = dict(current)
+        raw_incoming = incoming_memory if isinstance(incoming_memory, dict) else {}
+        for key, value in raw_incoming.items():
+            if key in {"schema_version", "segment_id", "updated_at"}:
+                continue
+            normalized_piece = self.load({key: value}, segment=segment)
+            merged[key] = deepcopy(normalized_piece.get(key))
+
+        merged["schema_version"] = self.SCHEMA_VERSION
+        merged["segment_id"] = str(segment or merged.get("segment_id") or "")
+        merged["scenario_dispositions"] = self._trim_dict_list(
+            merged.get("scenario_dispositions"),
+            limit=self._SCENARIO_DISPOSITION_LIMIT,
+        )
+        merged["valuation_history"] = self._trim_dict_list(
+            merged.get("valuation_history"),
+            limit=self._VALUATION_HISTORY_LIMIT,
+        )
+        return merged
+
+    def append_valuation_snapshot(
+        self,
+        *,
+        memory: dict[str, Any],
+        snapshot: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        normalized = self.load(memory, segment=memory.get("segment_id"))
+        if not isinstance(snapshot, dict) or not snapshot:
+            return normalized
+        history = self._dict_list(normalized.get("valuation_history"))
+        fingerprint = str(snapshot.get("data_fingerprint", "")).strip()
+        basis = str(snapshot.get("comparison_basis", "")).strip()
+        history = [
+            item
+            for item in history
+            if not (
+                str(item.get("data_fingerprint", "")).strip() == fingerprint
+                and str(item.get("comparison_basis", "")).strip() == basis
+            )
+        ]
+        history.insert(0, deepcopy(snapshot))
+        normalized["valuation_history"] = history[: self._VALUATION_HISTORY_LIMIT]
+        return normalized
+
+    @classmethod
+    def scenario_signature(cls, params: dict[str, Any] | None) -> str:
+        import hashlib
+        import json
+
+        canonical = json.dumps(params or {}, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+    @staticmethod
+    def _base_memory(*, segment: str | None) -> dict[str, Any]:
+        return {
+            "schema_version": SegmentMemoryService.SCHEMA_VERSION,
+            "segment_id": str(segment or ""),
+            "house_preferences": [],
+            "known_issues": [],
+            "last_selection": {},
+            "last_human_decision": {},
+            "last_recommendation": {},
+            "last_review": {},
+            "scenario_ledger": [],
+            "scenario_dispositions": [],
+            "valuation_history": [],
+        }
+
+    def _migrate_scenario_dispositions(
+        self,
+        raw_memory: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        existing = self._dict_list(raw_memory.get("scenario_dispositions"))
+        rejected = self._dict_list(raw_memory.get("rejected_scenarios"))
+        migrated: list[dict[str, Any]] = [dict(item) for item in existing]
+        for item in rejected:
+            candidate = {
+                "scenario_signature": item.get("scenario_signature")
+                or item.get("scenario_hash")
+                or item.get("scenario_id"),
+                "scenario_id": item.get("scenario_id"),
+                "decision": "rejected",
+                "reason": item.get("reason", ""),
+                "valuation_date": item.get("valuation_date"),
+                "data_fingerprint": item.get("data_fingerprint"),
+            }
+            migrated.append(candidate)
+        return self._trim_dict_list(migrated, limit=self._SCENARIO_DISPOSITION_LIMIT)
+
+    @staticmethod
+    def _string_list(value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if str(item).strip()]
+
+    @staticmethod
+    def _dict(value: object) -> dict[str, Any]:
+        return dict(value) if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _dict_list(value: object) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        return [dict(item) for item in value if isinstance(item, dict)]
+
+    @classmethod
+    def _trim_dict_list(cls, value: object, *, limit: int) -> list[dict[str, Any]]:
+        items = cls._dict_list(value)
+        return items[:limit]

@@ -26,6 +26,7 @@ from source.services import (
     CacheService,
     ParamsService,
     ReservingService,
+    SegmentMemoryService,
     SessionSyncService,
 )
 
@@ -1995,14 +1996,24 @@ class Dashboard:
                 )
                 self._config.save_session_with_version(session_payload)
                 segment_key = self._get_segment_key()
-                ai_memory = self._config.load_ai_segment_memory(segment=segment_key)
-                ai_memory["segment_id"] = segment_key
+                memory_service = SegmentMemoryService()
+                ai_memory = memory_service.load(
+                    self._config.load_ai_segment_memory(segment=segment_key),
+                    segment=segment_key,
+                )
                 ai_memory["last_human_decision"] = updated.get("ai_override", {})
                 deterministic_packet = updated.get("deterministic_packet", {})
                 if isinstance(deterministic_packet, dict):
                     recommendation = deterministic_packet.get("recommendation", {})
                     if isinstance(recommendation, dict):
                         ai_memory["last_recommendation"] = recommendation
+                ai_memory = memory_service.merge(
+                    existing_memory=self._config.load_ai_segment_memory(
+                        segment=segment_key
+                    ),
+                    incoming_memory=ai_memory,
+                    segment=segment_key,
+                )
                 self._config.save_ai_segment_memory(ai_memory, segment=segment_key)
                 return updated, "AI decision saved to session."
             return updated, "AI decision saved in current run state."

@@ -64,6 +64,7 @@ class SessionStateResponse(BaseModel):
     segment: str
     params_store: ParamsStore
     results_store_meta: ResultsStoreMeta = Field(default_factory=ResultsStoreMeta)
+    valuation_context: dict = Field(default_factory=dict)
     sync_version: int = 0
 
 

@@ -551,12 +551,14 @@ def build_tool_specs() -> list[dict[str, Any]]:
 def summarize_session_payload(payload: dict[str, Any]) -> dict[str, Any]:
     params = payload.get("params_store")
     result_meta = payload.get("results_store_meta")
+    valuation_context = payload.get("valuation_context")
     summary = {
         "session_id": payload.get("session_id"),
         "segment": payload.get("segment"),
         "sync_version": payload.get("sync_version"),
         "params": {},
         "results_meta": {},
+        "valuation_context": {},
     }
     if isinstance(params, dict):
         summary["params"] = {
@@ -576,6 +578,11 @@ def summarize_session_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "figure_version": result_meta.get("figure_version"),
             "sync_version": result_meta.get("sync_version"),
             "cache_key_present": bool(result_meta.get("cache_key")),
+        }
+    if isinstance(valuation_context, dict):
+        summary["valuation_context"] = {
+            "current": valuation_context.get("current", {}),
+            "prior_proxy": valuation_context.get("prior_proxy", {}),
         }
     return summary
 

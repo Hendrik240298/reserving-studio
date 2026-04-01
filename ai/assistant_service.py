@@ -19,6 +19,7 @@ from ai.recommendation_policy import RecommendationPolicy
 from ai.reviewer import ReviewerGate
 from ai.tool_payloads import build_memory_snapshot, build_tool_specs, render_memory_hint
 from ai.tool_contract import normalize_tool_result
+from source.services.segment_memory_service import SegmentMemoryService
 
 
 logger = logging.getLogger(__name__)
@@ -679,15 +680,28 @@ class AssistantService:
             parts.append(
                 "Known issues: " + ", ".join(str(item) for item in known_issues[:4])
             )
-        rejected = segment_memory.get("rejected_scenarios")
-        if isinstance(rejected, list) and rejected:
+        dispositions = segment_memory.get("scenario_dispositions")
+        if isinstance(dispositions, list) and dispositions:
+            rejected = [
+                item
+                for item in dispositions
+                if isinstance(item, dict)
+                and str(item.get("decision", "")).strip().lower() == "rejected"
+            ]
+        else:
+            rejected = []
+        if rejected:
             parts.append(
                 "Previously rejected scenarios: "
                 + "; ".join(
-                    str(item.get("scenario_hash") or item.get("scenario_id"))
+                    str(item.get("scenario_signature") or item.get("scenario_id"))
                     for item in rejected[:3]
-                    if isinstance(item, dict)
                 )
+            )
+        preferences = segment_memory.get("house_preferences")
+        if isinstance(preferences, list) and preferences:
+            parts.append(
+                "House preferences: " + ", ".join(str(item) for item in preferences[:3])
             )
         return "\n".join(part for part in parts if part)
 
@@ -730,6 +744,7 @@ class AssistantService:
             return
         next_memory = dict(segment_memory)
         next_memory["segment_id"] = segment.strip()
+        next_memory["schema_version"] = SegmentMemoryService.SCHEMA_VERSION
         session_summary = (
             memory_state.get("session_summary")
             if isinstance(memory_state.get("session_summary"), dict)
@@ -760,6 +775,30 @@ class AssistantService:
         review = deterministic_packet.get("review")
         if isinstance(review, dict):
             next_memory["last_review"] = review
+        valuation_context = (
+            session_summary.get("valuation_context")
+            if isinstance(session_summary.get("valuation_context"), dict)
+            else {}
+        )
+        memory_service = SegmentMemoryService()
+        current_snapshot = (
+            valuation_context.get("current")
+            if isinstance(valuation_context.get("current"), dict)
+            else None
+        )
+        prior_proxy_snapshot = (
+            valuation_context.get("prior_proxy")
+            if isinstance(valuation_context.get("prior_proxy"), dict)
+            else None
+        )
+        next_memory = memory_service.append_valuation_snapshot(
+            memory=next_memory,
+            snapshot=current_snapshot,
+        )
+        next_memory = memory_service.append_valuation_snapshot(
+            memory=next_memory,
+            snapshot=prior_proxy_snapshot,
+        )
         try:
             store.save(segment=segment.strip(), memory=next_memory)
         except Exception:
