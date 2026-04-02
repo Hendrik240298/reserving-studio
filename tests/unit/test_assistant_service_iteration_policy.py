@@ -436,3 +436,131 @@ def test_exact_factor_question_prefetches_assumption_detail() -> None:
     assert result["content"] == "ok"
     tool_names = [name for name, _ in fake_tools.calls]
     assert tool_names[0] == "tool_get_assumption_context_detail"
+
+
+def test_exact_follow_up_uses_bound_recommended_scenario_basis() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ok",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", _FakeClient(responses))
+    fake_tools = _FakeTools()
+    setattr(service, "_tools", fake_tools)
+    service._observability_enabled = False
+
+    result = service.run_turn(
+        user_prompt="What are the fitted tail LDFs from 27 to 45 in your recommended scenario?",
+        session_context={"segment": "seg", "session_id": "s-1"},
+        working_memory={
+            "analysis_basis": {
+                "basis_type": "review_candidate",
+                "session_id": "s-1",
+                "scenario_id": "drop_combo_1",
+                "is_active_session": False,
+                "parameters": {
+                    "average": "volume",
+                    "drop": [["2003", 9], ["2002", 21], ["2002", 39]],
+                    "drop_valuation": [],
+                    "tail": {
+                        "curve": "weibull",
+                        "attachment_age": 27,
+                        "projection_period": 0,
+                        "fit_period": [12, 108],
+                    },
+                    "bf_apriori": {"2005": 0.5988, "2006": 0.5824},
+                    "final_ultimate": "chainladder",
+                    "selected_ultimate_by_uwy": {
+                        "2005": "bornhuetter_ferguson",
+                        "2006": "bornhuetter_ferguson",
+                    },
+                },
+            }
+        },
+    )
+
+    assert result["content"] == "ok"
+    tool_name, args = fake_tools.calls[0]
+    assert tool_name == "tool_get_assumption_context_detail"
+    assert args["scenario_id"] == "drop_combo_1"
+    assert args["basis_type"] == "review_candidate"
+    assert args["parameters"]["tail"]["attachment_age"] == 27
+
+
+def test_exact_follow_up_can_switch_back_to_baseline() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ok",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", _FakeClient(responses))
+    fake_tools = _FakeTools()
+    setattr(service, "_tools", fake_tools)
+    service._observability_enabled = False
+
+    result = service.run_turn(
+        user_prompt="What are the fitted tail LDFs from 27 to 45 in the baseline?",
+        session_context={"segment": "seg", "session_id": "s-1"},
+        working_memory={
+            "session_summary": {
+                "session_id": "s-1",
+                "segment": "seg",
+                "params": {
+                    "average": "volume",
+                    "tail_curve": "weibull",
+                    "tail_attachment_age": 30,
+                    "tail_projection_months": 0,
+                    "tail_fit_period_selection": [12, 45],
+                    "drop_store": [],
+                    "drop_count": 0,
+                    "bf_apriori_by_uwy": {},
+                    "selected_ultimate_by_uwy": {},
+                },
+            },
+            "analysis_basis": {
+                "basis_type": "review_candidate",
+                "session_id": "s-1",
+                "scenario_id": "drop_combo_1",
+                "is_active_session": False,
+                "parameters": {
+                    "average": "volume",
+                    "drop": [["2003", 9]],
+                    "drop_valuation": [],
+                    "tail": {
+                        "curve": "weibull",
+                        "attachment_age": 27,
+                        "projection_period": 0,
+                        "fit_period": [12, 108],
+                    },
+                    "bf_apriori": {},
+                    "final_ultimate": "chainladder",
+                    "selected_ultimate_by_uwy": {},
+                },
+            },
+        },
+    )
+
+    assert result["content"] == "ok"
+    tool_name, args = fake_tools.calls[0]
+    assert tool_name == "tool_get_assumption_context_detail"
+    assert args["scenario_id"] == "baseline"
+    assert args["basis_type"] == "baseline"
+    assert args["parameters"]["tail"]["attachment_age"] == 30

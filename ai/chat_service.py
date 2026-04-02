@@ -155,6 +155,11 @@ class AIChatService:
         return self._build_response(session)
 
     def _build_response(self, refreshed: ChatSession) -> dict[str, Any]:
+        analysis_basis = (
+            refreshed.working_memory.get("analysis_basis")
+            if isinstance(refreshed.working_memory.get("analysis_basis"), dict)
+            else {}
+        )
         return {
             "chat_id": refreshed.chat_id,
             "segment": refreshed.segment,
@@ -164,6 +169,7 @@ class AIChatService:
             "tool_events": [dict(item) for item in refreshed.tool_events],
             "messages": [dict(item) for item in refreshed.messages],
             "working_memory": dict(refreshed.working_memory),
+            "analysis_basis": dict(analysis_basis),
             "scenario_ledger": [dict(item) for item in refreshed.scenario_ledger],
             "deterministic_packet": dict(refreshed.deterministic_packet),
             "streaming": bool(refreshed.metadata.get("streaming")),

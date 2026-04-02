@@ -142,6 +142,25 @@ class ConfigManager:
     def get_session_path(self) -> Path:
         return self._session_path
 
+    def is_ai_chat_logging_enabled(self) -> bool:
+        ai_config = self._config.get("ai", {})
+        if not isinstance(ai_config, dict):
+            return False
+        chat_logging = ai_config.get("chat_logging", {})
+        if not isinstance(chat_logging, dict):
+            return False
+        return bool(chat_logging.get("enabled", False))
+
+    def get_ai_chat_logging_path(self) -> Path:
+        ai_config = self._config.get("ai", {})
+        if not isinstance(ai_config, dict):
+            return Path("chats")
+        chat_logging = ai_config.get("chat_logging", {})
+        if not isinstance(chat_logging, dict):
+            return Path("chats")
+        raw_path = str(chat_logging.get("path", "chats")).strip() or "chats"
+        return Path(raw_path)
+
     def _ai_segment_memory_path(self, segment: str | None = None) -> Path:
         target_segment = str(segment or self._segment).strip() or self._segment
         safe_segment = re.sub(r"[^A-Za-z0-9_\-]", "_", target_segment)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 
@@ -115,7 +117,7 @@ def build_tool_specs() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "tool_get_assumption_context_detail",
-                "description": "Get exact current reserving assumption detail for the active scenario, including selected LDFs, fitted tail LDFs, BF apriori by UWY, selected methods by UWY, and the observed a2a vector for one development period when requested. Use this for exact numeric follow-up questions instead of answering from memory.",
+                "description": "Get exact reserving assumption detail for the active session, a recommended scenario, or a bespoke parameter basis, including selected LDFs, fitted tail LDFs, BF apriori by UWY, selected methods by UWY, and the observed a2a vector for one development period when requested. Use this for exact numeric follow-up questions instead of answering from memory.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -123,6 +125,9 @@ def build_tool_specs() -> list[dict[str, Any]]:
                         "start_age": {"type": ["integer", "null"]},
                         "end_age": {"type": ["integer", "null"]},
                         "development_period": {"type": ["integer", "null"]},
+                        "basis_type": {"type": ["string", "null"]},
+                        "scenario_id": {"type": ["string", "null"]},
+                        "parameters": {"type": ["object", "null"]},
                     },
                     "required": ["session_id"],
                 },
@@ -670,8 +675,11 @@ def summarize_session_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "tail_attachment_age": params.get("tail_attachment_age"),
             "tail_projection_months": params.get("tail_projection_months"),
             "tail_fit_period_selection": params.get("tail_fit_period_selection", []),
+            "drop_store": params.get("drop_store", []),
             "drop_count": len(params.get("drop_store", []) or []),
+            "bf_apriori_by_uwy": params.get("bf_apriori_by_uwy", {}),
             "bf_apriori_year_count": len(params.get("bf_apriori_by_uwy", {}) or {}),
+            "selected_ultimate_by_uwy": params.get("selected_ultimate_by_uwy", {}),
             "selected_ultimate_overrides": len(
                 params.get("selected_ultimate_by_uwy", {}) or {}
             ),
@@ -1440,6 +1448,140 @@ def extract_result_row_detail(
     return {"error": f"Underwriting year not found: {uwy}"}
 
 
+def build_analysis_basis(
+    *,
+    session_id: str | None,
+    basis_type: str,
+    parameters: dict[str, Any] | None,
+    scenario_id: str | None = None,
+    source_tool: str | None = None,
+    source_review_type: str | None = None,
+    is_active_session: bool | None = None,
+) -> dict[str, Any]:
+    normalized_parameters = _normalize_basis_parameters(parameters)
+    signature = _scenario_signature(normalized_parameters)
+    return {
+        "basis_type": str(basis_type or "baseline"),
+        "session_id": str(session_id or "").strip(),
+        "scenario_id": str(scenario_id or "").strip() or None,
+        "scenario_signature": signature,
+        "source_tool": str(source_tool or "").strip() or None,
+        "source_review_type": str(source_review_type or "").strip() or None,
+        "is_active_session": bool(is_active_session),
+        "parameters": normalized_parameters,
+    }
+
+
+def build_baseline_analysis_basis(
+    session_summary: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(session_summary, dict):
+        return {}
+    params = (
+        session_summary.get("params")
+        if isinstance(session_summary.get("params"), dict)
+        else {}
+    )
+    parameters = {
+        "average": params.get("average", "volume"),
+        "drop": params.get("drop_store", []),
+        "drop_valuation": [],
+        "tail": {
+            "curve": params.get("tail_curve", "weibull"),
+            "attachment_age": params.get("tail_attachment_age"),
+            "projection_period": params.get("tail_projection_months", 0),
+            "fit_period": params.get("tail_fit_period_selection", []),
+        },
+        "bf_apriori": params.get("bf_apriori_by_uwy", {}),
+        "final_ultimate": "chainladder",
+        "selected_ultimate_by_uwy": params.get("selected_ultimate_by_uwy", {}),
+    }
+    return build_analysis_basis(
+        session_id=str(session_summary.get("session_id", "")).strip() or None,
+        basis_type="baseline",
+        scenario_id="baseline",
+        source_tool="tool_get_session_summary",
+        is_active_session=True,
+        parameters=parameters,
+    )
+
+
+def merge_scenario_basis_cache(
+    *,
+    session_summary: dict[str, Any] | None,
+    iteration_summary: dict[str, Any] | None,
+    review_summary: dict[str, Any] | None,
+    existing_cache: dict[str, Any] | None,
+) -> dict[str, Any]:
+    cache: dict[str, Any] = {}
+    if isinstance(existing_cache, dict):
+        for key, value in existing_cache.items():
+            if isinstance(value, dict):
+                cache[str(key)] = dict(value)
+
+    baseline_basis = build_baseline_analysis_basis(session_summary)
+    if baseline_basis:
+        cache["baseline"] = baseline_basis
+
+    iteration = iteration_summary if isinstance(iteration_summary, dict) else {}
+    session_id = (
+        str(
+            iteration.get("session_id") or baseline_basis.get("session_id") or ""
+        ).strip()
+        or None
+    )
+    baseline = iteration.get("baseline")
+    if isinstance(baseline, dict):
+        _store_basis_candidate(
+            cache,
+            session_id=session_id,
+            item=baseline,
+            basis_type="scenario",
+            source_tool="tool_iterate_diagnostics_summary",
+        )
+    scenarios = iteration.get("top_scenarios")
+    if isinstance(scenarios, list):
+        for item in scenarios:
+            _store_basis_candidate(
+                cache,
+                session_id=session_id,
+                item=item,
+                basis_type="scenario",
+                source_tool="tool_iterate_diagnostics_summary",
+            )
+
+    review = review_summary if isinstance(review_summary, dict) else {}
+    review_type = str(review.get("review_type", "")).strip() or None
+    session_id = str(review.get("session_id") or session_id or "").strip() or None
+    for key in ("top_candidates", "top_ranked"):
+        items = review.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            _store_basis_candidate(
+                cache,
+                session_id=session_id,
+                item=item,
+                basis_type="review_candidate",
+                source_tool=_review_source_tool(review_type),
+                source_review_type=review_type,
+            )
+    recommendation = review.get("recommendation")
+    if isinstance(recommendation, dict):
+        recommended_changes = recommendation.get("recommended_changes")
+        if isinstance(recommended_changes, list):
+            for item in recommended_changes:
+                _store_basis_candidate(
+                    cache,
+                    session_id=session_id,
+                    item=item,
+                    basis_type="review_candidate",
+                    source_tool=_review_source_tool(review_type),
+                    source_review_type=review_type,
+                )
+    return cache
+
+
 def build_memory_snapshot(
     *,
     session_summary: dict[str, Any] | None = None,
@@ -1451,8 +1593,17 @@ def build_memory_snapshot(
     reserve_change_summary: dict[str, Any] | None = None,
     review_summary: dict[str, Any] | None = None,
     existing_scenario_ledger: list[dict[str, Any]] | None = None,
+    existing_analysis_basis: dict[str, Any] | None = None,
+    existing_scenario_basis_cache: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     scenario_ledger = list(existing_scenario_ledger or [])
+    scenario_basis_cache = merge_scenario_basis_cache(
+        session_summary=session_summary,
+        iteration_summary=iteration_summary,
+        review_summary=review_summary,
+        existing_cache=existing_scenario_basis_cache,
+    )
+    analysis_basis = dict(existing_analysis_basis or {})
     if isinstance(iteration_summary, dict):
         entries = iteration_summary.get("top_scenarios")
         baseline = iteration_summary.get("baseline")
@@ -1471,6 +1622,8 @@ def build_memory_snapshot(
         "reserve_change_summary": reserve_change_summary or {},
         "review_summary": review_summary or {},
         "scenario_ledger": scenario_ledger,
+        "analysis_basis": analysis_basis,
+        "scenario_basis_cache": scenario_basis_cache,
     }
 
 
@@ -1485,6 +1638,14 @@ def render_memory_hint(memory: dict[str, Any] | None) -> str:
             "Session memory: "
             f"segment={session_summary.get('segment')}, average={params.get('average')}, "
             f"tail_curve={params.get('tail_curve')}, drop_count={params.get('drop_count')}"
+        )
+    analysis_basis = memory.get("analysis_basis")
+    if isinstance(analysis_basis, dict) and analysis_basis:
+        parts.append(
+            "Current analysis basis: "
+            f"type={analysis_basis.get('basis_type')}, "
+            f"scenario_id={analysis_basis.get('scenario_id')}, "
+            f"active_session={analysis_basis.get('is_active_session')}"
         )
     diagnostics = memory.get("diagnostics_summary")
     if isinstance(diagnostics, dict) and diagnostics:
@@ -1542,6 +1703,62 @@ def render_memory_hint(memory: dict[str, Any] | None) -> str:
             )
         )
     return "\n".join(part for part in parts if part)
+
+
+def _store_basis_candidate(
+    cache: dict[str, Any],
+    *,
+    session_id: str | None,
+    item: object,
+    basis_type: str,
+    source_tool: str | None,
+    source_review_type: str | None = None,
+) -> None:
+    if not isinstance(item, dict):
+        return
+    scenario_id = str(item.get("scenario_id") or item.get("candidate_id") or "").strip()
+    parameters = (
+        item.get("parameters") if isinstance(item.get("parameters"), dict) else {}
+    )
+    if not scenario_id or not parameters:
+        return
+    cache[scenario_id] = build_analysis_basis(
+        session_id=session_id,
+        basis_type=basis_type,
+        scenario_id=scenario_id,
+        source_tool=source_tool,
+        source_review_type=source_review_type,
+        is_active_session=scenario_id == "baseline",
+        parameters=parameters,
+    )
+
+
+def _review_source_tool(review_type: str | None) -> str | None:
+    mapping = {
+        "drop_review": "tool_run_drop_review",
+        "tail_review": "tool_run_tail_review",
+        "bf_suitability_review": "tool_run_bf_suitability_review",
+        "quarter_close_review": "tool_run_quarter_close_review",
+        "anomaly_triage": "tool_run_anomaly_triage",
+    }
+    return mapping.get(str(review_type or "").strip())
+
+
+def _normalize_basis_parameters(parameters: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(parameters, dict) or not parameters:
+        return {}
+    try:
+        return json.loads(json.dumps(parameters, sort_keys=True))
+    except (TypeError, ValueError):
+        return dict(parameters)
+
+
+def _scenario_signature(parameters: dict[str, Any] | None) -> str | None:
+    normalized = _normalize_basis_parameters(parameters)
+    if not normalized:
+        return None
+    canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 def _top_findings(items: object) -> list[dict[str, Any]]:
@@ -1637,6 +1854,7 @@ def _compact_scenario(item: object) -> dict[str, Any]:
         "tier": governance.get("tier"),
         "transform": lineage.get("transform"),
         "rationale_evidence_ids": lineage.get("rationale_evidence_ids", [])[:5],
+        "parameters": item.get("parameters", {}),
     }
 
 

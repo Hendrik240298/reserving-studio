@@ -1039,85 +1039,154 @@ class InMemoryReservingBackend:
             context = self._get_context_by_session_id(payload.session_id)
             if context is None:
                 raise LookupError(f"Session not found: {payload.session_id}")
-
-            heatmap_data = context.reserving.get_triangle_heatmap_data()
-            link_ratios_raw = heatmap_data.get("link_ratios")
-            if not isinstance(link_ratios_raw, pd.DataFrame) or link_ratios_raw.empty:
-                raise ValueError("Assumption detail requires link ratio data")
-
-            observed_row = link_ratios_raw.loc[
-                link_ratios_raw.index.astype(str) == "LDF"
-            ]
-            fitted_row = link_ratios_raw.loc[
-                link_ratios_raw.index.astype(str) == "Tail"
-            ]
-            if observed_row.empty or fitted_row.empty:
-                raise ValueError("Assumption detail requires both LDF and Tail rows")
-
-            triangle_only = link_ratios_raw.loc[
-                ~link_ratios_raw.index.astype(str).isin(["LDF", "Tail"])
-            ]
-            selected_ldf: list[dict[str, Any]] = []
-            fitted_tail_ldf: list[dict[str, Any]] = []
-            observed_a2a: list[dict[str, Any]] = []
-
-            for col in link_ratios_raw.columns:
-                age = Reserving._parse_cdf_label_to_age(col)
-                if not self._age_in_window(
-                    age,
-                    start_age=payload.start_age,
-                    end_age=payload.end_age,
-                ):
-                    continue
-                label = str(col)
-                selected_value = self._to_optional_float(observed_row.iloc[0].get(col))
-                fitted_value = self._to_optional_float(fitted_row.iloc[0].get(col))
-                if selected_value is not None:
-                    selected_ldf.append(
-                        {
-                            "age": age,
-                            "development_label": label,
-                            "ldf": round(selected_value, 6),
-                        }
-                    )
-                if fitted_value is not None:
-                    fitted_tail_ldf.append(
-                        {
-                            "age": age,
-                            "development_label": label,
-                            "ldf": round(fitted_value, 6),
-                        }
-                    )
-                if (
-                    payload.development_period is None
-                    or age != payload.development_period
-                ):
-                    continue
-                for origin in triangle_only.index:
-                    a2a_value = self._to_optional_float(triangle_only.loc[origin, col])
-                    if a2a_value is None:
-                        continue
-                    observed_a2a.append(
-                        {
-                            "origin": self._origin_label(origin),
-                            "age": age,
-                            "development_label": label,
-                            "a2a": round(a2a_value, 6),
-                        }
-                    )
-
-            params = self._params_from_store(context)
-            return AssumptionDetailResponse(
-                session_id=context.session_id,
-                parameters=params,
-                selected_ldf=selected_ldf,
-                fitted_tail_ldf=fitted_tail_ldf,
-                observed_a2a=observed_a2a,
-                bf_apriori_by_uwy=dict(params.get("bf_apriori", {})),
-                selected_ultimate_by_uwy=dict(
-                    params.get("selected_ultimate_by_uwy", {})
-                ),
+            original_params = self._params_from_store(context)
+            params, analysis_basis = self._resolve_assumption_detail_basis(
+                context=context,
+                payload=payload,
+                original_params=original_params,
             )
+            self._apply_params_to_reserving(context, params)
+            try:
+                heatmap_data = context.reserving.get_triangle_heatmap_data()
+                link_ratios_raw = heatmap_data.get("link_ratios")
+                if (
+                    not isinstance(link_ratios_raw, pd.DataFrame)
+                    or link_ratios_raw.empty
+                ):
+                    raise ValueError("Assumption detail requires link ratio data")
+
+                observed_row = link_ratios_raw.loc[
+                    link_ratios_raw.index.astype(str) == "LDF"
+                ]
+                fitted_row = link_ratios_raw.loc[
+                    link_ratios_raw.index.astype(str) == "Tail"
+                ]
+                if observed_row.empty or fitted_row.empty:
+                    raise ValueError(
+                        "Assumption detail requires both LDF and Tail rows"
+                    )
+
+                triangle_only = link_ratios_raw.loc[
+                    ~link_ratios_raw.index.astype(str).isin(["LDF", "Tail"])
+                ]
+                selected_ldf: list[dict[str, Any]] = []
+                fitted_tail_ldf: list[dict[str, Any]] = []
+                observed_a2a: list[dict[str, Any]] = []
+
+                for col in link_ratios_raw.columns:
+                    age = Reserving._parse_cdf_label_to_age(col)
+                    if not self._age_in_window(
+                        age,
+                        start_age=payload.start_age,
+                        end_age=payload.end_age,
+                    ):
+                        continue
+                    label = str(col)
+                    selected_value = self._to_optional_float(
+                        observed_row.iloc[0].get(col)
+                    )
+                    fitted_value = self._to_optional_float(fitted_row.iloc[0].get(col))
+                    if selected_value is not None:
+                        selected_ldf.append(
+                            {
+                                "age": age,
+                                "development_label": label,
+                                "ldf": round(selected_value, 6),
+                            }
+                        )
+                    if fitted_value is not None:
+                        fitted_tail_ldf.append(
+                            {
+                                "age": age,
+                                "development_label": label,
+                                "ldf": round(fitted_value, 6),
+                            }
+                        )
+                    if (
+                        payload.development_period is None
+                        or age != payload.development_period
+                    ):
+                        continue
+                    for origin in triangle_only.index:
+                        a2a_value = self._to_optional_float(
+                            triangle_only.loc[origin, col]
+                        )
+                        if a2a_value is None:
+                            continue
+                        observed_a2a.append(
+                            {
+                                "origin": self._origin_label(origin),
+                                "age": age,
+                                "development_label": label,
+                                "a2a": round(a2a_value, 6),
+                            }
+                        )
+
+                return AssumptionDetailResponse(
+                    session_id=context.session_id,
+                    analysis_basis=analysis_basis,
+                    parameters=params,
+                    selected_ldf=selected_ldf,
+                    fitted_tail_ldf=fitted_tail_ldf,
+                    observed_a2a=observed_a2a,
+                    bf_apriori_by_uwy=dict(params.get("bf_apriori", {})),
+                    selected_ultimate_by_uwy=dict(
+                        params.get("selected_ultimate_by_uwy", {})
+                    ),
+                )
+            finally:
+                self._apply_params_to_reserving(context, original_params)
+
+    def _resolve_assumption_detail_basis(
+        self,
+        *,
+        context: SessionContext,
+        payload: AssumptionDetailRequest,
+        original_params: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        scenario_id = str(payload.scenario_id or "").strip() or None
+        if isinstance(payload.parameters, dict) and payload.parameters:
+            params = self._clone_params(payload.parameters)
+            return params, self._build_analysis_basis_payload(
+                session_id=context.session_id,
+                basis_type=str(payload.basis_type or "scenario"),
+                scenario_id=scenario_id,
+                parameters=params,
+                is_active_session=params == self._clone_params(original_params),
+            )
+        if scenario_id and scenario_id != "baseline":
+            raise ValueError(
+                "Scenario-bound assumption detail requires explicit parameters for this request"
+            )
+        params = self._clone_params(original_params)
+        return params, self._build_analysis_basis_payload(
+            session_id=context.session_id,
+            basis_type=str(payload.basis_type or "baseline"),
+            scenario_id=scenario_id or "baseline",
+            parameters=params,
+            is_active_session=True,
+        )
+
+    @staticmethod
+    def _build_analysis_basis_payload(
+        *,
+        session_id: str,
+        basis_type: str,
+        scenario_id: str | None,
+        parameters: dict[str, Any],
+        is_active_session: bool,
+    ) -> dict[str, Any]:
+        canonical = json.dumps(parameters, sort_keys=True, separators=(",", ":"))
+        return {
+            "basis_type": str(basis_type or "baseline"),
+            "session_id": session_id,
+            "scenario_id": scenario_id,
+            "scenario_signature": hashlib.sha256(canonical.encode("utf-8")).hexdigest()[
+                :16
+            ],
+            "is_active_session": bool(is_active_session),
+            "parameters": InMemoryReservingBackend._clone_params(parameters),
+        }
 
     def run_drop_review(self, payload: DropReviewRequest) -> DropReviewResponse:
         with self._lock:

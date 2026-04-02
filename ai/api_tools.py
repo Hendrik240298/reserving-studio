@@ -230,6 +230,9 @@ class ReservingApiTools:
                     "start_age": arguments.get("start_age"),
                     "end_age": arguments.get("end_age"),
                     "development_period": arguments.get("development_period"),
+                    "basis_type": arguments.get("basis_type"),
+                    "scenario_id": arguments.get("scenario_id"),
+                    "parameters": arguments.get("parameters", {}),
                 },
             )
             self._raw_cache["assumption_detail"][session_id] = payload

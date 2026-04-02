@@ -68,3 +68,28 @@ def test_render_chat_messages_excludes_intro_shell() -> None:
     rendered = AIDashboard.__new__(AIDashboard)._render_chat_messages([])
 
     assert rendered == []
+
+
+def test_analysis_basis_rows_show_bound_scenario_and_session_match() -> None:
+    rows = AIDashboard._analysis_basis_rows(
+        {
+            "basis_type": "review_candidate",
+            "scenario_id": "drop_combo_1",
+            "is_active_session": False,
+            "parameters": {
+                "average": "volume",
+                "drop": [["2003", 9], ["2002", 21], ["2002", 39]],
+                "tail": {
+                    "curve": "weibull",
+                    "attachment_age": 27,
+                    "fit_period": [12, 108],
+                },
+                "bf_apriori": {"2005": 0.5988},
+                "selected_ultimate_by_uwy": {"2005": "bornhuetter_ferguson"},
+            },
+        }
+    )
+
+    assert rows[0] == {"field": "Basis Type", "value": "review_candidate"}
+    assert rows[1] == {"field": "Scenario", "value": "drop_combo_1"}
+    assert rows[2] == {"field": "Matches Active Session", "value": "no"}

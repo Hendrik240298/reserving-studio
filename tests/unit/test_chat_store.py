@@ -21,6 +21,12 @@ def test_file_chat_store_persists_completed_chat_turn(tmp_path: Path) -> None:
                 "fallback_used": False,
                 "session_id": "s-1",
                 "memory_snapshot": {
+                    "analysis_basis": {
+                        "basis_type": "review_candidate",
+                        "scenario_id": "drop_1",
+                        "is_active_session": False,
+                        "parameters": {"drop": [["2022", 12]]},
+                    },
                     "scenario_ledger": [{"scenario_id": "drop_1", "score": 1.0}],
                     "deterministic_packet": {
                         "plan": {"playbook": "scenario_recommendation"}
@@ -48,11 +54,13 @@ def test_file_chat_store_persists_completed_chat_turn(tmp_path: Path) -> None:
     assert payload["chat_id"] == session.chat_id
     assert payload["messages"][-1]["content"] == "Recommendation ready."
     assert payload["scenario_ledger"][0]["scenario_id"] == "drop_1"
+    assert payload["working_memory"]["analysis_basis"]["scenario_id"] == "drop_1"
 
     reloaded_store = FileChatStore(tmp_path / "chats")
     reloaded_session = reloaded_store.get_chat(session.chat_id)
     assert reloaded_session is not None
     assert reloaded_session.messages[-1]["content"] == "Recommendation ready."
+    assert reloaded_session.working_memory["analysis_basis"]["scenario_id"] == "drop_1"
 
 
 def test_create_app_uses_file_chat_store_when_enabled(tmp_path: Path) -> None:

@@ -187,6 +187,10 @@ class _BackendStub:
     def get_assumption_context_detail(self, payload):
         return AssumptionDetailResponse(
             session_id=payload.session_id,
+            analysis_basis={
+                "basis_type": payload.basis_type or "baseline",
+                "scenario_id": payload.scenario_id or "baseline",
+            },
             parameters={
                 "average": "volume",
                 "tail": {"curve": "weibull", "attachment_age": 30},
@@ -494,11 +498,32 @@ def test_backend_tools_support_new_ai_tools() -> None:
 
     assumption_detail = tools.call_tool(
         "tool_get_assumption_context_detail",
-        {"session_id": "s-1", "start_age": 21, "end_age": 45},
+        {
+            "session_id": "s-1",
+            "start_age": 21,
+            "end_age": 45,
+            "basis_type": "scenario",
+            "scenario_id": "drop_combo_1",
+            "parameters": {
+                "average": "volume",
+                "drop": [["2003", 9]],
+                "drop_valuation": [],
+                "tail": {
+                    "curve": "weibull",
+                    "attachment_age": 27,
+                    "projection_period": 0,
+                    "fit_period": [12, 108],
+                },
+                "bf_apriori": {},
+                "final_ultimate": "chainladder",
+                "selected_ultimate_by_uwy": {},
+            },
+        },
     )
     assert assumption_detail["selected_ldf"][0]["ldf"] == 1.058
     assert assumption_detail["fitted_tail_ldf"][0]["ldf"] == 1.048
     assert assumption_detail["bf_apriori_by_uwy"]["2005"] == 0.5988
+    assert assumption_detail["analysis_basis"]["scenario_id"] == "drop_combo_1"
 
     anomaly_review = tools.call_tool(
         "tool_run_anomaly_triage",

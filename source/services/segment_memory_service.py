@@ -34,6 +34,9 @@ class SegmentMemoryService:
         normalized["last_recommendation"] = self._dict(
             normalized.get("last_recommendation")
         )
+        normalized["last_analysis_basis"] = self._dict(
+            normalized.get("last_analysis_basis")
+        )
         normalized["last_review"] = self._dict(normalized.get("last_review"))
         normalized["scenario_ledger"] = self._dict_list(
             normalized.get("scenario_ledger")
@@ -173,6 +176,7 @@ class SegmentMemoryService:
             "last_selection": {},
             "last_human_decision": {},
             "last_recommendation": {},
+            "last_analysis_basis": {},
             "last_review": {},
             "scenario_ledger": [],
             "scenario_dispositions": [],

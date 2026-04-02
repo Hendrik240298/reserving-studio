@@ -153,12 +153,16 @@ class AssumptionDetailRequest(BaseModel):
     start_age: int | None = Field(default=None, ge=0)
     end_age: int | None = Field(default=None, ge=0)
     development_period: int | None = Field(default=None, ge=0)
+    basis_type: str | None = None
+    scenario_id: str | None = None
+    parameters: dict = Field(default_factory=dict)
 
 
 class AssumptionDetailResponse(BaseModel):
     schema_version: str = SCHEMA_VERSION
     session_id: str
     metric: Literal["incurred"] = "incurred"
+    analysis_basis: dict = Field(default_factory=dict)
     parameters: dict = Field(default_factory=dict)
     selected_ldf: list[dict] = Field(default_factory=list)
     fitted_tail_ldf: list[dict] = Field(default_factory=list)

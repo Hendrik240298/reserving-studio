@@ -12,3 +12,7 @@ workflow:
   quarterly_premium_csv: data/quarterly_premium.csv
 session:
   path: sessions/quarterly.yml
+ai:
+  chat_logging:
+    enabled: true
+    path: chats

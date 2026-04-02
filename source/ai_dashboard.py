@@ -109,36 +109,43 @@ class AIDashboard:
             Output("ai-chat-history-store", "data"),
             Output("ai-chat-tool-events-store", "data"),
             Output("ai-chat-scenario-ledger-store", "data"),
+            Output("ai-chat-analysis-basis-store", "data"),
             Output("ai-chat-transcript", "children"),
             Output("ai-analysis-trace", "data"),
             Output("ai-chat-evidence-trace", "data"),
             Output("ai-scenario-ledger", "data"),
+            Output("ai-analysis-basis", "data"),
             Input("ai-refresh-review", "n_clicks"),
         )
         def _refresh_review(_n_clicks):
             history = self._initial_chat_history()
             tool_events = self._initial_tool_events()
             scenario_ledger = self._initial_scenario_ledger()
+            analysis_basis = self._initial_analysis_basis()
             return (
                 history,
                 tool_events,
                 scenario_ledger,
+                analysis_basis,
                 self._render_chat_messages(history),
                 self._tool_event_rows(tool_events),
                 self._chat_evidence_rows(tool_events),
                 self._scenario_ledger_rows(scenario_ledger),
+                self._analysis_basis_rows(analysis_basis),
             )
 
         @self.app.callback(
             Output("ai-chat-history-store", "data", allow_duplicate=True),
             Output("ai-chat-tool-events-store", "data", allow_duplicate=True),
             Output("ai-chat-scenario-ledger-store", "data", allow_duplicate=True),
+            Output("ai-chat-analysis-basis-store", "data", allow_duplicate=True),
             Output("ai-chat-transcript", "children", allow_duplicate=True),
             Output("ai-chat-input", "value"),
             Output("ai-chat-status", "children"),
             Output("ai-analysis-trace", "data", allow_duplicate=True),
             Output("ai-chat-evidence-trace", "data", allow_duplicate=True),
             Output("ai-scenario-ledger", "data", allow_duplicate=True),
+            Output("ai-analysis-basis", "data", allow_duplicate=True),
             Output("ai-chat-poll", "disabled", allow_duplicate=True),
             Input("ai-chat-send", "n_clicks"),
             *preset_inputs,
@@ -166,6 +173,8 @@ class AIDashboard:
                     no_update,
                     no_update,
                     no_update,
+                    no_update,
+                    no_update,
                 )
             if self._chat_service is None or not self._chat_id:
                 return (
@@ -175,6 +184,7 @@ class AIDashboard:
                     no_update,
                     no_update,
                     "AI chat backend is not configured.",
+                    no_update,
                     no_update,
                     no_update,
                     no_update,
@@ -196,12 +206,14 @@ class AIDashboard:
                     normalized,
                     self._initial_tool_events(),
                     self._initial_scenario_ledger(),
+                    self._initial_analysis_basis(),
                     self._render_chat_messages(normalized),
                     "",
                     "AI response failed.",
                     self._tool_event_rows(self._initial_tool_events()),
                     self._chat_evidence_rows(self._initial_tool_events()),
                     self._scenario_ledger_rows(self._initial_scenario_ledger()),
+                    self._analysis_basis_rows(self._initial_analysis_basis()),
                     True,
                 )
             messages = response.get("messages")
@@ -211,8 +223,10 @@ class AIDashboard:
                     no_update,
                     no_update,
                     no_update,
+                    no_update,
                     "",
                     "AI response did not contain a transcript.",
+                    no_update,
                     no_update,
                     no_update,
                     no_update,
@@ -220,6 +234,7 @@ class AIDashboard:
                 )
             tool_events = response.get("tool_events")
             scenario_ledger = response.get("scenario_ledger")
+            analysis_basis = response.get("analysis_basis")
             normalized_tool_events = (
                 [dict(item) for item in tool_events if isinstance(item, dict)]
                 if isinstance(tool_events, list)
@@ -230,6 +245,9 @@ class AIDashboard:
                 if isinstance(scenario_ledger, list)
                 else []
             )
+            normalized_analysis_basis = (
+                dict(analysis_basis) if isinstance(analysis_basis, dict) else {}
+            )
             status = (
                 "AI fallback summary used." if response.get("fallback_used") else ""
             )
@@ -237,12 +255,14 @@ class AIDashboard:
                 messages,
                 normalized_tool_events,
                 normalized_scenario_ledger,
+                normalized_analysis_basis,
                 self._render_chat_messages(messages),
                 "",
                 status,
                 self._tool_event_rows(normalized_tool_events),
                 self._chat_evidence_rows(normalized_tool_events),
                 self._scenario_ledger_rows(normalized_scenario_ledger),
+                self._analysis_basis_rows(normalized_analysis_basis),
                 not bool(response.get("streaming")),
             )
 
@@ -250,11 +270,13 @@ class AIDashboard:
             Output("ai-chat-history-store", "data", allow_duplicate=True),
             Output("ai-chat-tool-events-store", "data", allow_duplicate=True),
             Output("ai-chat-scenario-ledger-store", "data", allow_duplicate=True),
+            Output("ai-chat-analysis-basis-store", "data", allow_duplicate=True),
             Output("ai-chat-transcript", "children", allow_duplicate=True),
             Output("ai-chat-status", "children", allow_duplicate=True),
             Output("ai-analysis-trace", "data", allow_duplicate=True),
             Output("ai-chat-evidence-trace", "data", allow_duplicate=True),
             Output("ai-scenario-ledger", "data", allow_duplicate=True),
+            Output("ai-analysis-basis", "data", allow_duplicate=True),
             Output("ai-chat-poll", "disabled", allow_duplicate=True),
             Input("ai-chat-poll", "n_intervals"),
             prevent_initial_call=True,
@@ -270,14 +292,19 @@ class AIDashboard:
                     no_update,
                     no_update,
                     no_update,
+                    no_update,
+                    no_update,
                     True,
                 )
             response = self._chat_service.build_chat_response(self._chat_id)
             messages = response.get("messages")
             tool_events = response.get("tool_events")
             scenario_ledger = response.get("scenario_ledger")
+            analysis_basis = response.get("analysis_basis")
             if not isinstance(messages, list):
                 return (
+                    no_update,
+                    no_update,
                     no_update,
                     no_update,
                     no_update,
@@ -298,6 +325,9 @@ class AIDashboard:
                 if isinstance(scenario_ledger, list)
                 else []
             )
+            normalized_analysis_basis = (
+                dict(analysis_basis) if isinstance(analysis_basis, dict) else {}
+            )
             status = (
                 "AI fallback summary used." if response.get("fallback_used") else ""
             )
@@ -305,11 +335,13 @@ class AIDashboard:
                 messages,
                 normalized_tool_events,
                 normalized_scenario_ledger,
+                normalized_analysis_basis,
                 self._render_chat_messages(messages),
                 status,
                 self._tool_event_rows(normalized_tool_events),
                 self._chat_evidence_rows(normalized_tool_events),
                 self._scenario_ledger_rows(normalized_scenario_ledger),
+                self._analysis_basis_rows(normalized_analysis_basis),
                 not bool(response.get("streaming")),
             )
 
@@ -325,6 +357,10 @@ class AIDashboard:
                 dcc.Store(
                     id="ai-chat-scenario-ledger-store",
                     data=self._initial_scenario_ledger(),
+                ),
+                dcc.Store(
+                    id="ai-chat-analysis-basis-store",
+                    data=self._initial_analysis_basis(),
                 ),
                 dcc.Interval(
                     id="ai-chat-poll", interval=1000, n_intervals=0, disabled=True
@@ -620,6 +656,32 @@ class AIDashboard:
                                                             ],
                                                         ),
                                                         self._panel(
+                                                            "Analysis Basis",
+                                                            [
+                                                                dash_table.DataTable(
+                                                                    id="ai-analysis-basis",
+                                                                    columns=[
+                                                                        {
+                                                                            "name": "Field",
+                                                                            "id": "field",
+                                                                        },
+                                                                        {
+                                                                            "name": "Value",
+                                                                            "id": "value",
+                                                                        },
+                                                                    ],
+                                                                    data=self._analysis_basis_rows(
+                                                                        self._initial_analysis_basis()
+                                                                    ),
+                                                                    style_table={
+                                                                        "overflowX": "auto"
+                                                                    },
+                                                                    style_cell=self._table_cell_style(),
+                                                                    style_header=self._table_header_style(),
+                                                                )
+                                                            ],
+                                                        ),
+                                                        self._panel(
                                                             "Scenario Ledger",
                                                             [
                                                                 dash_table.DataTable(
@@ -723,6 +785,18 @@ class AIDashboard:
             if session is not None:
                 return [dict(item) for item in session.scenario_ledger]
         return []
+
+    def _initial_analysis_basis(self) -> dict[str, Any]:
+        if self._chat_service is not None and self._chat_id:
+            session = self._chat_service.get_chat(self._chat_id)
+            if session is not None:
+                basis = (
+                    session.working_memory.get("analysis_basis")
+                    if isinstance(session.working_memory.get("analysis_basis"), dict)
+                    else {}
+                )
+                return dict(basis)
+        return {}
 
     @staticmethod
     def _preset_prompt_specs() -> list[dict[str, str]]:
@@ -1097,6 +1171,54 @@ class AIDashboard:
                 "summary": "Scenario searches and bespoke scenario tests launched from the chat will accumulate here.",
             }
         ]
+
+    @staticmethod
+    def _analysis_basis_rows(analysis_basis: dict[str, Any]) -> list[dict[str, str]]:
+        if not isinstance(analysis_basis, dict) or not analysis_basis:
+            return [
+                {
+                    "field": "Status",
+                    "value": "No chat basis locked yet. After a recommendation or exact numeric follow-up, the active analysis basis will appear here.",
+                }
+            ]
+        parameters = (
+            analysis_basis.get("parameters")
+            if isinstance(analysis_basis.get("parameters"), dict)
+            else {}
+        )
+        tail = (
+            parameters.get("tail") if isinstance(parameters.get("tail"), dict) else {}
+        )
+        rows = [
+            {"field": "Basis Type", "value": str(analysis_basis.get("basis_type", ""))},
+            {
+                "field": "Scenario",
+                "value": str(analysis_basis.get("scenario_id") or "baseline"),
+            },
+            {
+                "field": "Matches Active Session",
+                "value": "yes"
+                if bool(analysis_basis.get("is_active_session"))
+                else "no",
+            },
+            {"field": "Average", "value": str(parameters.get("average", ""))},
+            {"field": "Drops", "value": str(parameters.get("drop", []))},
+            {"field": "Tail Curve", "value": str(tail.get("curve", ""))},
+            {
+                "field": "Tail Attachment",
+                "value": str(tail.get("attachment_age", "")),
+            },
+            {"field": "Tail Fit Period", "value": str(tail.get("fit_period", []))},
+            {
+                "field": "BF Apriori",
+                "value": str(parameters.get("bf_apriori", {})),
+            },
+            {
+                "field": "Method Overrides",
+                "value": str(parameters.get("selected_ultimate_by_uwy", {})),
+            },
+        ]
+        return rows
 
     @staticmethod
     def _panel(title: str, children: list, extra_style: dict | None = None):

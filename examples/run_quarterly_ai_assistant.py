@@ -12,6 +12,7 @@ if str(REPO_ROOT) not in sys.path:
 from ai.env_loader import load_dotenv
 from ai.assistant_service import AssistantService
 from ai.chat_service import AIChatService
+from ai.chat_store import FileChatStore
 from source.api.adapters.reserving_adapter import InMemoryReservingBackend
 from source.api.schemas import WorkflowFromDataframesRequest
 from source.ai_dashboard import launch_ai_dashboard
@@ -65,8 +66,14 @@ def main() -> None:
             granularity=config.get_granularity(),
         )
     )
+    chat_store = (
+        FileChatStore(config.get_ai_chat_logging_path())
+        if config.is_ai_chat_logging_enabled()
+        else None
+    )
     chat_service = AIChatService(
-        assistant_factory=lambda: AssistantService.from_backend(backend=backend)
+        assistant_factory=lambda: AssistantService.from_backend(backend=backend),
+        store=chat_store,
     )
     chat = chat_service.create_chat(
         segment=config.get_segment(),

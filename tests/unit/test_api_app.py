@@ -43,6 +43,9 @@ from source.api.schemas import (
 
 
 class FakeBackend:
+    def __init__(self) -> None:
+        self.last_assumption_detail_payload = None
+
     def create_workflow_from_dataframes(self, payload):
         return WorkflowInitializationResponse(
             session_id="s-1",
@@ -211,8 +214,13 @@ class FakeBackend:
         )
 
     def get_assumption_context_detail(self, payload):
+        self.last_assumption_detail_payload = payload
         return AssumptionDetailResponse(
             session_id=payload.session_id,
+            analysis_basis={
+                "basis_type": payload.basis_type or "baseline",
+                "scenario_id": payload.scenario_id or "baseline",
+            },
             parameters={"average": "volume"},
             selected_ldf=[{"age": 21, "development_label": "21-24", "ldf": 1.058}],
             fitted_tail_ldf=[{"age": 30, "development_label": "30-33", "ldf": 1.048}],
@@ -324,7 +332,8 @@ class FakeBackend:
 
 
 def test_api_scaffold_endpoints() -> None:
-    app = create_app(backend=FakeBackend())
+    backend = FakeBackend()
+    app = create_app(backend=backend)
     client = TestClient(app)
 
     health_response = client.get("/healthz")
@@ -516,10 +525,35 @@ def test_api_scaffold_endpoints() -> None:
 
     assumption_detail_response = client.post(
         "/v1/reserving/assumption-detail",
-        json={"session_id": "s-1", "start_age": 21, "end_age": 45},
+        json={
+            "session_id": "s-1",
+            "start_age": 21,
+            "end_age": 45,
+            "basis_type": "scenario",
+            "scenario_id": "drop_combo_1",
+            "parameters": {
+                "average": "volume",
+                "drop": [["2003", 9]],
+                "drop_valuation": [],
+                "tail": {
+                    "curve": "weibull",
+                    "attachment_age": 27,
+                    "projection_period": 0,
+                    "fit_period": [12, 108],
+                },
+                "bf_apriori": {},
+                "final_ultimate": "chainladder",
+                "selected_ultimate_by_uwy": {},
+            },
+        },
     )
     assert assumption_detail_response.status_code == 200
     assert assumption_detail_response.json()["selected_ldf"][0]["ldf"] == 1.058
+    assert (
+        assumption_detail_response.json()["analysis_basis"]["scenario_id"]
+        == "drop_combo_1"
+    )
+    assert backend.last_assumption_detail_payload.scenario_id == "drop_combo_1"
 
     drop_review_response = client.post(
         "/v1/reviews/drop",

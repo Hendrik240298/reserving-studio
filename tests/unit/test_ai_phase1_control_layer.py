@@ -254,6 +254,31 @@ segment: "industrial"
     assert loaded["known_issues"] == ["Large refinery loss in 2021"]
 
 
+def test_config_manager_ai_chat_logging_settings_round_trip(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        """
+paths:
+  results: "results/"
+  plots: "plots/"
+  data: "data/"
+  sessions: "sessions/"
+last date: "March 2026"
+segment: "industrial"
+ai:
+  chat_logging:
+    enabled: true
+    path: "chats"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    manager = ConfigManager.from_yaml(config_path)
+
+    assert manager.is_ai_chat_logging_enabled() is True
+    assert manager.get_ai_chat_logging_path() == Path("chats")
+
+
 def test_assistant_runs_deterministic_playbook_before_model_answer() -> None:
     responses = [
         {
