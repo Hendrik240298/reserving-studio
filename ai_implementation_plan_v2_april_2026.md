@@ -1,4 +1,4 @@
-# AI implementation phase 2 
+# AI implementation roadmap and current status
 
 Remark: already implemended is ~~crossed out~~ 
 
@@ -21,6 +21,27 @@ Your best roadmap is to evolve the assistant from a **tool-using analyst** into 
 5. It stays deterministic-first, with stochastic features only as optional sensitivity and volatility overlays. `chainladder` supports workflow composition via `Pipeline`, multiple tail estimators, and bootstrap/Mack components, so you can add structure without replacing your engine. ([chainladder-python.readthedocs.io][1])
 
 For specialty industrial reserving, I would **not** start with full RAG. I would start with **curated markdown context plus structured memory plus strong tool orchestration**. RAG becomes worthwhile later when you have enough internal methodology content, prior committee notes, and reserving policy documents that retrieval improves decisions rather than adding noise. Retrieval helps when governance and policy text matter, but it only pays off once the source base is stable and curated. ([Actuarial Standards Board][2])
+
+# Current implementation status (Apr 2026)
+
+This document started as a forward-looking plan. Parts of Phase 1 and Phase 2 are now implemented, so the current AI state is ahead of some wording below.
+
+Implemented today:
+
+* deterministic playbook planner / executor / reviewer / recommendation-policy control layer
+* compact segment memory with continuity and human-decision writeback
+* composite reviews for drop review, tail review, BF suitability, anomaly triage, and quarter-close
+* quarter-close pack generation
+* scenario ledger and scenario-detail drilldown
+* bespoke recalculation, reserve-change explanation, and rule-based derived-drop workflows
+* `Analysis Basis` / current conversation model behavior for basis-aware reserving workflows
+
+`Analysis Basis` means the current reserving setup the user and AI are actively working from in the conversation. For basis-aware reserving tools, future analysis should reuse that basis unless the user explicitly switches to `baseline` or `current session`.
+
+Historical wording note:
+
+* older references below to comparing a scenario "against baseline" should now be read as "against the current analysis basis unless baseline/current session is explicitly requested" for basis-aware workflows
+* raw data exploration and movement-inspection workflows are still intentionally more session/data scoped and should not be forced into scenario-carry-forward behavior when that would blur observed data with modeled assumption state
 
 # Recommended target architecture
 

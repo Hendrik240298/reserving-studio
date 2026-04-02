@@ -23,6 +23,7 @@ from source.api.schemas import (
     MovementDiagnosticsResponse,
     QuarterClosePackResponse,
     QuarterCloseReviewResponse,
+    RecalculateResponse,
     ReserveChangeResponse,
     TailEvaluationResponse,
     TailReviewResponse,
@@ -184,6 +185,24 @@ class _BackendStub:
             fitted_tail_ldf=[{"age": 12, "ldf": 1.18}],
         )
 
+    def recalculate(self, payload):
+        return RecalculateResponse(
+            session_id=payload.session_id,
+            analysis_basis={
+                "basis_type": "bespoke",
+                "scenario_id": None,
+                "is_active_session": True,
+            },
+            results_table_rows=[
+                {
+                    "uwy": "2006",
+                    "ultimate_display": "1,126.00",
+                    "ibnr_display": "1,026.00",
+                    "selected_method": "bornhuetter_ferguson",
+                }
+            ],
+        )
+
     def get_assumption_context_detail(self, payload):
         return AssumptionDetailResponse(
             session_id=payload.session_id,
@@ -336,7 +355,8 @@ class _BackendStub:
 
 
 def test_backend_tools_support_new_ai_tools() -> None:
-    tools = BackendReservingTools(backend=_BackendStub())
+    backend = _BackendStub()
+    tools = BackendReservingTools(backend=backend)
 
     data_summary = tools.call_tool(
         "tool_get_data_view_summary",
@@ -547,10 +567,53 @@ def test_backend_tools_support_new_ai_tools() -> None:
         == "latest_diagonal_excluded_proxy"
     )
 
+    recalc = tools.call_tool(
+        "tool_recalculate",
+        {
+            "session_id": "s-1",
+            "average": "volume",
+            "drop": [],
+            "drop_valuation": [],
+            "tail": {
+                "curve": "weibull",
+                "attachment_age": 27,
+                "projection_period": 0,
+                "fit_period": [12, 108],
+            },
+            "bf_apriori": {"2006": 0.563},
+            "final_ultimate": "chainladder",
+            "selected_ultimate_by_uwy": {"2006": "bornhuetter_ferguson"},
+        },
+    )
+    assert recalc["analysis_basis"]["basis_type"] == "bespoke"
+
+    result_row = tools.call_tool(
+        "tool_get_result_for_uwy",
+        {"session_id": "s-1", "uwy": "2006"},
+    )
+    assert result_row["selected_method"] == "bornhuetter_ferguson"
+    assert result_row["ibnr_display"] == "1,026.00"
+
     reserve_change_sanitized = tools.call_tool(
         "tool_explain_reserve_change",
         {
             "session_id": "s-1",
+            "basis_type": "review_candidate",
+            "scenario_id": "tail_weibull_27_12_108",
+            "basis_parameters": {
+                "average": "volume",
+                "drop": [["2003", 9]],
+                "drop_valuation": [],
+                "tail": {
+                    "curve": "weibull",
+                    "attachment_age": 27,
+                    "projection_period": 0,
+                    "fit_period": [12, 108],
+                },
+                "bf_apriori": {},
+                "final_ultimate": "chainladder",
+                "selected_ultimate_by_uwy": {},
+            },
             "average": "weighted_average_3_year",
             "drop": [],
             "drop_valuation": [],
@@ -576,6 +639,9 @@ def test_backend_tools_support_new_ai_tools() -> None:
         "Collapsed tail.fit_period to [12, 48].",
         "Dropped 2 invalid selected_ultimate_by_uwy override(s) and kept only method values.",
     ]
+    assert backend.last_reserve_change_payload.basis_type == "review_candidate"
+    assert backend.last_reserve_change_payload.scenario_id == "tail_weibull_27_12_108"
+    assert backend.last_reserve_change_payload.basis_parameters["drop"] == [["2003", 9]]
 
 
 def test_explain_reserve_change_drops_invalid_drop_entries() -> None:

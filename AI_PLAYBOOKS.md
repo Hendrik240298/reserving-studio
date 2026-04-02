@@ -25,12 +25,13 @@
   1. Run diagnostics summary.
   2. Run scenario iteration.
   3. Drill into top scenario evidence if needed.
-  4. Explain tradeoffs, uncertainty, and why the preferred scenario is better than baseline.
+  4. Explain tradeoffs, uncertainty, and why the preferred scenario is better than the current analysis basis unless the user explicitly asked for baseline.
 - Use this playbook when there is no more specific composite review playbook for the request.
 - Only recommend scenarios or parameter settings that were actually run/tested in the current conversation, unless you explicitly label them as untested ideas.
 - Do not recommend drops or assumption changes without comparative evidence unless the evidence is already overwhelming.
-- If the user explicitly asks to derive drops from a rule over observed age-to-age factors, first rank the link ratios using the requested rule, then run a derived drop scenario from that rule.
+- If the user explicitly asks to derive drops from a rule over observed age-to-age factors, first rank the link ratios using the requested rule over the current analysis basis, then run a derived drop scenario from that rule.
 - The rule framework can combine multiple rules, for example: highest factor per development period plus all factors below 1.0.
+- After the assistant recommends a tested scenario and the conversation moves forward on that setup, treat that tested setup as the new `Analysis Basis` for later basis-aware turns unless the user explicitly switches basis.
 
 ## Drop Review
 - Use for questions asking whether any ratios should be dropped, which drop is best, or whether an existing drop recommendation is strong enough.
@@ -41,12 +42,12 @@
 - Comment explicitly on `rejected_before`, reserve impact, fragility, and governance penalties when they appear.
 
 ## Reserve Change Explanation
-- Use for questions about why the reserve changed, what is driving movement, or how a bespoke scenario compares to baseline.
+- Use for questions about why the reserve changed, what is driving movement, or how a bespoke scenario compares to the current analysis basis or an explicitly requested baseline.
 - Preferred workflow:
   1. If the prior turn created a bespoke derived-drop scenario, first fetch the exact cached scenario detail rather than reconstructing it from a summary.
-  2. Use reserve-change explanation against baseline.
-  2. Use data views only to clarify component drivers.
-  3. Keep the answer attribution-focused, not scenario-search focused.
+  2. Use reserve-change explanation against the current analysis basis unless the user explicitly asks for baseline.
+  3. Use data views only to clarify component drivers.
+  4. Keep the answer attribution-focused, not scenario-search focused.
 
 ## Late Emergence Review
 - Use for questions about how much more could still emerge or whether current IBNR looks light/heavy.
@@ -70,6 +71,7 @@
 - Prefer tested tail scenarios or explicit tail-fit evaluation over untested narrative recommendations.
 - Before recommending a tail method or answering a tail-fit comparison question, run a tested tail evaluation for the proposed setting if the composite review does not already answer the question.
 - If the question is a follow-up after a recommended scenario, reuse the tested scenario parameters first, then vary only the tail settings being compared.
+- If the tail review itself produces the new preferred setup, that tested setup becomes the new `Analysis Basis` for later basis-aware analysis unless the user explicitly switches basis.
 - When discussing fit periods or maximum observed development, speak in months/quarters for development age and in years for AY/UWY. Do not treat a development age like `45` as 45 years.
 
 ## Data Anomaly Triage
@@ -94,6 +96,7 @@
   1. Start with `tool_get_data_view_summary`.
   2. Use `tool_compare_data_views` for direct comparisons.
   3. Only request `tool_get_data_view` if the detailed rows are needed.
+- Treat these as primarily observational/data workflows. Do not force a scenario-recommendation pattern into them unless the user is clearly asking about modeled assumption changes.
 
 ## Terminology Guardrails
 - Before answering, distinguish whether the user is asking about:
@@ -111,3 +114,4 @@
 - Prefer composite review tools before low-level chains when a playbook-specific review tool exists.
 - Do not jump from an observational question to recommendations unless the user asks.
 - Keep recommendations evidence-led.
+- Preserve the distinction between raw data questions and basis-aware reserving questions. `Analysis Basis` should drive model-selection workflows, not automatically relabel every observational data request as a modeled scenario question.

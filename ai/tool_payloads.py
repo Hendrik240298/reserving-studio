@@ -185,6 +185,9 @@ def build_tool_specs() -> list[dict[str, Any]]:
                         "session_id": {"type": "string"},
                         "diagnostic_profile": {"type": ["string", "null"]},
                         "include_recommendations": {"type": "boolean"},
+                        "basis_type": {"type": ["string", "null"]},
+                        "scenario_id": {"type": ["string", "null"]},
+                        "parameters": {"type": ["object", "null"]},
                     },
                     "required": ["session_id"],
                 },
@@ -204,6 +207,9 @@ def build_tool_specs() -> list[dict[str, Any]]:
                             "minimum": 1,
                             "maximum": 20,
                         },
+                        "basis_type": {"type": ["string", "null"]},
+                        "scenario_id": {"type": ["string", "null"]},
+                        "parameters": {"type": ["object", "null"]},
                     },
                     "required": ["session_id"],
                 },
@@ -223,6 +229,9 @@ def build_tool_specs() -> list[dict[str, Any]]:
                             "minimum": 1,
                             "maximum": 30,
                         },
+                        "basis_type": {"type": ["string", "null"]},
+                        "scenario_id": {"type": ["string", "null"]},
+                        "parameters": {"type": ["object", "null"]},
                     },
                     "required": ["session_id"],
                 },
@@ -235,7 +244,12 @@ def build_tool_specs() -> list[dict[str, Any]]:
                 "description": "Run the composite BF suitability review and return UWY-level and overall CL versus BF suitability conclusions.",
                 "parameters": {
                     "type": "object",
-                    "properties": {"session_id": {"type": "string"}},
+                    "properties": {
+                        "session_id": {"type": "string"},
+                        "basis_type": {"type": ["string", "null"]},
+                        "scenario_id": {"type": ["string", "null"]},
+                        "parameters": {"type": ["object", "null"]},
+                    },
                     "required": ["session_id"],
                 },
             },
@@ -247,7 +261,12 @@ def build_tool_specs() -> list[dict[str, Any]]:
                 "description": "Run the composite anomaly triage review and return structured anomaly classes, reserve relevance, and pause guidance.",
                 "parameters": {
                     "type": "object",
-                    "properties": {"session_id": {"type": "string"}},
+                    "properties": {
+                        "session_id": {"type": "string"},
+                        "basis_type": {"type": ["string", "null"]},
+                        "scenario_id": {"type": ["string", "null"]},
+                        "parameters": {"type": ["object", "null"]},
+                    },
                     "required": ["session_id"],
                 },
             },
@@ -259,7 +278,12 @@ def build_tool_specs() -> list[dict[str, Any]]:
                 "description": "Run the composite quarter-close review and return the deterministic plan-test-conclude packet for the current session.",
                 "parameters": {
                     "type": "object",
-                    "properties": {"session_id": {"type": "string"}},
+                    "properties": {
+                        "session_id": {"type": "string"},
+                        "basis_type": {"type": ["string", "null"]},
+                        "scenario_id": {"type": ["string", "null"]},
+                        "parameters": {"type": ["object", "null"]},
+                    },
                     "required": ["session_id"],
                 },
             },
@@ -271,7 +295,12 @@ def build_tool_specs() -> list[dict[str, Any]]:
                 "description": "Build the structured quarter-close pack for export-style review after the quarter-close review is available.",
                 "parameters": {
                     "type": "object",
-                    "properties": {"session_id": {"type": "string"}},
+                    "properties": {
+                        "session_id": {"type": "string"},
+                        "basis_type": {"type": ["string", "null"]},
+                        "scenario_id": {"type": ["string", "null"]},
+                        "parameters": {"type": ["object", "null"]},
+                    },
                     "required": ["session_id"],
                 },
             },
@@ -291,6 +320,9 @@ def build_tool_specs() -> list[dict[str, Any]]:
                             "maximum": 100,
                         },
                         "include_baseline": {"type": "boolean"},
+                        "basis_type": {"type": ["string", "null"]},
+                        "scenario_id": {"type": ["string", "null"]},
+                        "parameters": {"type": ["object", "null"]},
                     },
                     "required": ["session_id"],
                 },
@@ -315,7 +347,12 @@ def build_tool_specs() -> list[dict[str, Any]]:
                 "description": "Check whether observed age-to-age factors are inconsistent with selected LDF assumptions and estimate local reserve impact.",
                 "parameters": {
                     "type": "object",
-                    "properties": {"session_id": {"type": "string"}},
+                    "properties": {
+                        "session_id": {"type": "string"},
+                        "basis_type": {"type": ["string", "null"]},
+                        "scenario_id": {"type": ["string", "null"]},
+                        "parameters": {"type": ["object", "null"]},
+                    },
                     "required": ["session_id"],
                 },
             },
@@ -330,6 +367,9 @@ def build_tool_specs() -> list[dict[str, Any]]:
                     "properties": {
                         "session_id": {"type": "string"},
                         "uwy": {"type": ["string", "null"]},
+                        "basis_type": {"type": ["string", "null"]},
+                        "scenario_id": {"type": ["string", "null"]},
+                        "parameters": {"type": ["object", "null"]},
                     },
                     "required": ["session_id"],
                 },
@@ -339,11 +379,14 @@ def build_tool_specs() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "tool_explain_reserve_change",
-                "description": "Compare a bespoke scenario to the current baseline session and attribute the IBNR change across development, tail, BF, and final selection steps.",
+                "description": "Compare a bespoke scenario to the current conversation basis and attribute the IBNR change across development, tail, BF, and final selection steps.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "session_id": {"type": "string"},
+                        "basis_type": {"type": ["string", "null"]},
+                        "scenario_id": {"type": ["string", "null"]},
+                        "basis_parameters": {"type": ["object", "null"]},
                         "average": {"type": "string"},
                         "drop": {
                             "type": "array",
@@ -413,11 +456,14 @@ def build_tool_specs() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "tool_rank_link_ratios",
-                "description": "Rank observed age-to-age factors from the current baseline triangle using a generic rule such as highest or lowest, either per development period or globally.",
+                "description": "Rank observed age-to-age factors from the current conversation basis using a generic rule such as highest or lowest, either per development period or globally.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "session_id": {"type": "string"},
+                        "basis_type": {"type": ["string", "null"]},
+                        "scenario_id": {"type": ["string", "null"]},
+                        "parameters": {"type": ["object", "null"]},
                         "selection_mode": {"type": "string", "enum": ["max", "min"]},
                         "scope": {
                             "type": "string",
@@ -438,11 +484,14 @@ def build_tool_specs() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "tool_run_derived_drop_scenario",
-                "description": "Build a drop list from a generic link-ratio rule over the current baseline triangle, then run that bespoke drop scenario against baseline.",
+                "description": "Build a drop list from a generic link-ratio rule over the current conversation basis, then run that bespoke drop scenario against that basis.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "session_id": {"type": "string"},
+                        "basis_type": {"type": ["string", "null"]},
+                        "scenario_id": {"type": ["string", "null"]},
+                        "parameters": {"type": ["object", "null"]},
                         "source": {"type": "string", "enum": ["link_ratios"]},
                         "selection_mode": {"type": "string", "enum": ["max", "min"]},
                         "scope": {
@@ -496,11 +545,14 @@ def build_tool_specs() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "tool_run_highest_a2a_drop_scenario",
-                "description": "Build a drop list by taking the highest observed age-to-age factor in each development period from the current baseline triangle, then run that bespoke drop scenario against baseline.",
+                "description": "Build a drop list by taking the highest observed age-to-age factor in each development period from the current conversation basis, then run that bespoke drop scenario against that basis.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "session_id": {"type": "string"},
+                        "basis_type": {"type": ["string", "null"]},
+                        "scenario_id": {"type": ["string", "null"]},
+                        "parameters": {"type": ["object", "null"]},
                     },
                     "required": ["session_id"],
                 },
@@ -524,10 +576,15 @@ def build_tool_specs() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "tool_get_results_summary",
-                "description": "Get a compact summary of latest reserving results and key underwriting year rows.",
+                "description": "Get a compact summary of reserving results and key underwriting year rows for the current conversation basis, the active baseline session, or an explicit scenario basis.",
                 "parameters": {
                     "type": "object",
-                    "properties": {"session_id": {"type": "string"}},
+                    "properties": {
+                        "session_id": {"type": "string"},
+                        "basis_type": {"type": ["string", "null"]},
+                        "scenario_id": {"type": ["string", "null"]},
+                        "parameters": {"type": ["object", "null"]},
+                    },
                     "required": ["session_id"],
                 },
             },
@@ -706,6 +763,7 @@ def summarize_diagnostics_payload(payload: dict[str, Any]) -> dict[str, Any]:
     uncertainty = payload.get("uncertainty")
     summary: dict[str, Any] = {
         "session_id": payload.get("session_id"),
+        "analysis_basis": payload.get("analysis_basis", {}),
         "finding_count": len(findings) if isinstance(findings, list) else 0,
         "recommendation_count": (
             len(recommendations) if isinstance(recommendations, list) else 0
@@ -735,6 +793,7 @@ def summarize_iteration_payload(payload: dict[str, Any]) -> dict[str, Any]:
     scenarios = payload.get("scenarios")
     summary: dict[str, Any] = {
         "session_id": payload.get("session_id"),
+        "analysis_basis": payload.get("analysis_basis", {}),
         "baseline": _compact_scenario(baseline),
         "scenario_count": len(scenarios) if isinstance(scenarios, list) else 0,
         "top_scenarios": [],
@@ -758,6 +817,7 @@ def summarize_results_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(results, dict):
         return {
             "session_id": payload.get("session_id"),
+            "analysis_basis": payload.get("analysis_basis", {}),
             "result_row_count": 0,
             "top_rows": [],
         }
@@ -776,6 +836,7 @@ def summarize_results_payload(payload: dict[str, Any]) -> dict[str, Any]:
         ]
     return {
         "session_id": payload.get("session_id"),
+        "analysis_basis": payload.get("analysis_basis", {}),
         "result_row_count": len(rows) if isinstance(rows, list) else 0,
         "top_rows": compact_rows,
         "last_updated": results.get("last_updated"),
@@ -786,6 +847,7 @@ def summarize_recalculate_payload(payload: dict[str, Any]) -> dict[str, Any]:
     rows = payload.get("results_table_rows")
     return {
         "session_id": payload.get("session_id"),
+        "analysis_basis": payload.get("analysis_basis", {}),
         "duration_ms": payload.get("duration_ms"),
         "result_row_count": len(rows) if isinstance(rows, list) else 0,
         "top_rows": [
@@ -963,6 +1025,7 @@ def summarize_drop_review_payload(payload: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "session_id": payload.get("session_id"),
+        "analysis_basis": payload.get("analysis_basis", {}),
         "review_type": payload.get("review_type"),
         "candidate_count": len(candidates),
         "top_candidates": [_compact_review_candidate(item) for item in candidates[:5]],
@@ -985,6 +1048,7 @@ def summarize_tail_review_payload(payload: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "session_id": payload.get("session_id"),
+        "analysis_basis": payload.get("analysis_basis", {}),
         "review_type": payload.get("review_type"),
         "candidate_count": len(candidates),
         "top_candidates": [_compact_review_candidate(item) for item in candidates[:5]],
@@ -1000,6 +1064,7 @@ def summarize_bf_suitability_payload(payload: dict[str, Any]) -> dict[str, Any]:
     rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
     return {
         "session_id": payload.get("session_id"),
+        "analysis_basis": payload.get("analysis_basis", {}),
         "review_type": payload.get("review_type"),
         "overall_class": payload.get("overall_class"),
         "row_count": len(rows),
@@ -1019,6 +1084,7 @@ def summarize_anomaly_triage_review_payload(payload: dict[str, Any]) -> dict[str
     )
     return {
         "session_id": payload.get("session_id"),
+        "analysis_basis": payload.get("analysis_basis", {}),
         "review_type": payload.get("review_type"),
         "finding_count": len(findings),
         "pause_recommendation": bool(payload.get("pause_recommendation", False)),
@@ -1047,6 +1113,7 @@ def summarize_quarter_close_review_payload(payload: dict[str, Any]) -> dict[str,
     )
     return {
         "session_id": payload.get("session_id"),
+        "analysis_basis": payload.get("analysis_basis", {}),
         "review_type": payload.get("review_type"),
         "comparison": {
             "delta_summary": comparison.get("delta_summary", {}),
@@ -1434,6 +1501,12 @@ def extract_result_row_detail(
     if not isinstance(results_payload, dict):
         return {"error": "No results payload available"}
     payload = results_payload.get("results")
+    if not isinstance(payload, dict):
+        payload = (
+            results_payload
+            if isinstance(results_payload.get("results_table_rows"), list)
+            else None
+        )
     if not isinstance(payload, dict):
         return {"error": "No results payload available"}
     rows = payload.get("results_table_rows")

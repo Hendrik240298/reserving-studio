@@ -109,6 +109,9 @@ class ReservingApiTools:
                     "include_recommendations": bool(
                         arguments.get("include_recommendations", True)
                     ),
+                    "basis_type": arguments.get("basis_type"),
+                    "scenario_id": arguments.get("scenario_id"),
+                    "parameters": arguments.get("parameters", {}),
                 },
             )
             session_id = str(payload.get("session_id", ""))
@@ -122,6 +125,9 @@ class ReservingApiTools:
                 {
                     "session_id": arguments["session_id"],
                     "candidate_limit": int(arguments.get("candidate_limit", 5)),
+                    "basis_type": arguments.get("basis_type"),
+                    "scenario_id": arguments.get("scenario_id"),
+                    "parameters": arguments.get("parameters", {}),
                 },
             )
             session_id = str(payload.get("session_id", ""))
@@ -135,6 +141,9 @@ class ReservingApiTools:
                 {
                     "session_id": arguments["session_id"],
                     "candidate_limit": int(arguments.get("candidate_limit", 12)),
+                    "basis_type": arguments.get("basis_type"),
+                    "scenario_id": arguments.get("scenario_id"),
+                    "parameters": arguments.get("parameters", {}),
                 },
             )
             session_id = str(payload.get("session_id", ""))
@@ -145,7 +154,12 @@ class ReservingApiTools:
             payload = self.request_json(
                 "POST",
                 "/v1/reviews/bf-suitability",
-                {"session_id": arguments["session_id"]},
+                {
+                    "session_id": arguments["session_id"],
+                    "basis_type": arguments.get("basis_type"),
+                    "scenario_id": arguments.get("scenario_id"),
+                    "parameters": arguments.get("parameters", {}),
+                },
             )
             session_id = str(payload.get("session_id", ""))
             if session_id:
@@ -155,7 +169,12 @@ class ReservingApiTools:
             payload = self.request_json(
                 "POST",
                 "/v1/reviews/anomaly-triage",
-                {"session_id": arguments["session_id"]},
+                {
+                    "session_id": arguments["session_id"],
+                    "basis_type": arguments.get("basis_type"),
+                    "scenario_id": arguments.get("scenario_id"),
+                    "parameters": arguments.get("parameters", {}),
+                },
             )
             session_id = str(payload.get("session_id", ""))
             if session_id:
@@ -165,7 +184,12 @@ class ReservingApiTools:
             payload = self.request_json(
                 "POST",
                 "/v1/reviews/quarter-close",
-                {"session_id": arguments["session_id"]},
+                {
+                    "session_id": arguments["session_id"],
+                    "basis_type": arguments.get("basis_type"),
+                    "scenario_id": arguments.get("scenario_id"),
+                    "parameters": arguments.get("parameters", {}),
+                },
             )
             session_id = str(payload.get("session_id", ""))
             if session_id:
@@ -189,6 +213,9 @@ class ReservingApiTools:
                     "session_id": arguments["session_id"],
                     "max_scenarios": int(arguments.get("max_scenarios", 24)),
                     "include_baseline": bool(arguments.get("include_baseline", True)),
+                    "basis_type": arguments.get("basis_type"),
+                    "scenario_id": arguments.get("scenario_id"),
+                    "parameters": arguments.get("parameters", {}),
                 },
             )
             session_id = str(payload.get("session_id", ""))
@@ -197,7 +224,16 @@ class ReservingApiTools:
             return summarize_iteration_payload(payload)
         if name == "tool_get_results_summary":
             session_id = str(arguments["session_id"])
-            payload = self.request_json("GET", f"/v1/results/{session_id}")
+            payload = self.request_json(
+                "POST",
+                "/v1/results/summary",
+                {
+                    "session_id": session_id,
+                    "basis_type": arguments.get("basis_type"),
+                    "scenario_id": arguments.get("scenario_id"),
+                    "parameters": arguments.get("parameters", {}),
+                },
+            )
             self._raw_cache["results"][session_id] = payload
             return summarize_results_payload(payload)
         if name in {"tool_get_data_view_summary", "tool_get_data_view"}:
@@ -214,6 +250,9 @@ class ReservingApiTools:
                         "denominator_view": arguments.get("denominator_view"),
                     },
                     "include_summary": True,
+                    "basis_type": arguments.get("basis_type"),
+                    "scenario_id": arguments.get("scenario_id"),
+                    "parameters": arguments.get("parameters", {}),
                 },
             )
             self._raw_cache["data_view"][session_id] = payload
@@ -275,7 +314,12 @@ class ReservingApiTools:
             payload = self.request_json(
                 "POST",
                 "/v1/diagnostics/ldf-consistency",
-                {"session_id": arguments["session_id"]},
+                {
+                    "session_id": arguments["session_id"],
+                    "basis_type": arguments.get("basis_type"),
+                    "scenario_id": arguments.get("scenario_id"),
+                    "parameters": arguments.get("parameters", {}),
+                },
             )
             session_id = str(payload.get("session_id", ""))
             if session_id:
@@ -288,6 +332,9 @@ class ReservingApiTools:
                 {
                     "session_id": arguments["session_id"],
                     "uwy": arguments.get("uwy"),
+                    "basis_type": arguments.get("basis_type"),
+                    "scenario_id": arguments.get("scenario_id"),
+                    "parameters": arguments.get("parameters", {}),
                 },
             )
             session_id = str(payload.get("session_id", ""))
@@ -313,7 +360,12 @@ class ReservingApiTools:
             payload = self.request_json(
                 "POST",
                 "/v1/reserving/highest-a2a-drop",
-                arguments,
+                {
+                    "session_id": arguments["session_id"],
+                    "basis_type": arguments.get("basis_type"),
+                    "scenario_id": arguments.get("scenario_id"),
+                    "parameters": arguments.get("parameters", {}),
+                },
             )
             session_id = str(payload.get("session_id", ""))
             if session_id:
@@ -325,6 +377,9 @@ class ReservingApiTools:
                 "/v1/link-ratios/rank",
                 {
                     "session_id": arguments["session_id"],
+                    "basis_type": arguments.get("basis_type"),
+                    "scenario_id": arguments.get("scenario_id"),
+                    "parameters": arguments.get("parameters", {}),
                     "selection_mode": arguments.get("selection_mode", "max"),
                     "scope": arguments.get("scope", "per_development_period"),
                     "limit": arguments.get("limit", 5),
@@ -342,6 +397,9 @@ class ReservingApiTools:
                 "/v1/reserving/derived-drop-scenario",
                 {
                     "session_id": arguments["session_id"],
+                    "basis_type": arguments.get("basis_type"),
+                    "scenario_id": arguments.get("scenario_id"),
+                    "parameters": arguments.get("parameters", {}),
                     "rule": {
                         "source": arguments.get("source", "link_ratios"),
                         "selection_mode": arguments.get("selection_mode", "max"),
@@ -401,6 +459,7 @@ class ReservingApiTools:
             session_id = str(payload.get("session_id", ""))
             if session_id:
                 self._raw_cache["recalculate"][session_id] = payload
+                self._raw_cache["results"][session_id] = payload
             return summarize_recalculate_payload(payload)
         raise ValueError(f"Unsupported tool: {name}")
 

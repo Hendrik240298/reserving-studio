@@ -11,6 +11,7 @@ def build_execution_plan(
     session_id: str | None,
     segment: str | None,
     segment_memory: dict[str, Any] | None = None,
+    analysis_basis: dict[str, Any] | None = None,
 ) -> ExecutionPlan | None:
     if not session_id:
         return None
@@ -25,7 +26,9 @@ def build_execution_plan(
             steps=[
                 PlanStep(
                     tool_name="tool_run_quarter_close_review",
-                    args={"session_id": session_id},
+                    args=_merge_analysis_basis_args(
+                        {"session_id": session_id}, analysis_basis
+                    ),
                     evidence_key="quarter_close_review",
                 ),
             ],
@@ -43,7 +46,10 @@ def build_execution_plan(
             steps=[
                 PlanStep(
                     tool_name="tool_run_drop_review",
-                    args={"session_id": session_id, "candidate_limit": 5},
+                    args=_merge_analysis_basis_args(
+                        {"session_id": session_id, "candidate_limit": 5},
+                        analysis_basis,
+                    ),
                     evidence_key="drop_review",
                 ),
             ],
@@ -61,17 +67,24 @@ def build_execution_plan(
             steps=[
                 PlanStep(
                     tool_name="tool_run_diagnostics_summary",
-                    args={"session_id": session_id},
+                    args=_merge_analysis_basis_args(
+                        {"session_id": session_id}, analysis_basis
+                    ),
                     evidence_key="diagnostics_summary",
                 ),
                 PlanStep(
                     tool_name="tool_iterate_diagnostics_summary",
-                    args={"session_id": session_id, "max_scenarios": 12},
+                    args=_merge_analysis_basis_args(
+                        {"session_id": session_id, "max_scenarios": 12},
+                        analysis_basis,
+                    ),
                     evidence_key="scenario_comparison",
                 ),
                 PlanStep(
                     tool_name="tool_get_results_summary",
-                    args={"session_id": session_id},
+                    args=_merge_analysis_basis_args(
+                        {"session_id": session_id}, analysis_basis
+                    ),
                     evidence_key="results_summary",
                 ),
             ],
@@ -112,7 +125,9 @@ def build_execution_plan(
                 ),
                 PlanStep(
                     tool_name="tool_run_ldf_consistency_diagnostics",
-                    args={"session_id": session_id},
+                    args=_merge_analysis_basis_args(
+                        {"session_id": session_id}, analysis_basis
+                    ),
                     evidence_key="ldf_consistency",
                 ),
                 PlanStep(
@@ -140,7 +155,9 @@ def build_execution_plan(
             steps=[
                 PlanStep(
                     tool_name="tool_run_bf_suitability_review",
-                    args={"session_id": session_id},
+                    args=_merge_analysis_basis_args(
+                        {"session_id": session_id}, analysis_basis
+                    ),
                     evidence_key="bf_suitability_review",
                 ),
             ],
@@ -158,12 +175,16 @@ def build_execution_plan(
             steps=[
                 PlanStep(
                     tool_name="tool_run_diagnostics_summary",
-                    args={"session_id": session_id},
+                    args=_merge_analysis_basis_args(
+                        {"session_id": session_id}, analysis_basis
+                    ),
                     evidence_key="diagnostics_summary",
                 ),
                 PlanStep(
                     tool_name="tool_get_results_summary",
-                    args={"session_id": session_id},
+                    args=_merge_analysis_basis_args(
+                        {"session_id": session_id}, analysis_basis
+                    ),
                     evidence_key="results_summary",
                 ),
             ],
@@ -181,17 +202,23 @@ def build_execution_plan(
             steps=[
                 PlanStep(
                     tool_name="tool_project_late_emergence_benchmark",
-                    args={"session_id": session_id},
+                    args=_merge_analysis_basis_args(
+                        {"session_id": session_id}, analysis_basis
+                    ),
                     evidence_key="late_emergence",
                 ),
                 PlanStep(
                     tool_name="tool_run_ldf_consistency_diagnostics",
-                    args={"session_id": session_id},
+                    args=_merge_analysis_basis_args(
+                        {"session_id": session_id}, analysis_basis
+                    ),
                     evidence_key="ldf_consistency",
                 ),
                 PlanStep(
                     tool_name="tool_get_results_summary",
-                    args={"session_id": session_id},
+                    args=_merge_analysis_basis_args(
+                        {"session_id": session_id}, analysis_basis
+                    ),
                     evidence_key="results_summary",
                 ),
             ],
@@ -213,7 +240,9 @@ def build_execution_plan(
             steps=[
                 PlanStep(
                     tool_name="tool_get_results_summary",
-                    args={"session_id": session_id},
+                    args=_merge_analysis_basis_args(
+                        {"session_id": session_id}, analysis_basis
+                    ),
                     evidence_key="results_summary",
                 ),
             ],
@@ -231,7 +260,9 @@ def build_execution_plan(
             steps=[
                 PlanStep(
                     tool_name="tool_run_anomaly_triage",
-                    args={"session_id": session_id},
+                    args=_merge_analysis_basis_args(
+                        {"session_id": session_id}, analysis_basis
+                    ),
                     evidence_key="anomaly_triage",
                 ),
             ],
@@ -254,7 +285,10 @@ def build_execution_plan(
             steps=[
                 PlanStep(
                     tool_name="tool_run_tail_review",
-                    args={"session_id": session_id, "candidate_limit": 12},
+                    args=_merge_analysis_basis_args(
+                        {"session_id": session_id, "candidate_limit": 12},
+                        analysis_basis,
+                    ),
                     evidence_key="tail_review",
                 ),
             ],
@@ -267,3 +301,22 @@ def build_execution_plan(
         )
 
     return None
+
+
+def _merge_analysis_basis_args(
+    args: dict[str, Any],
+    analysis_basis: dict[str, Any] | None,
+) -> dict[str, Any]:
+    merged = dict(args)
+    if not isinstance(analysis_basis, dict) or not analysis_basis:
+        return merged
+    basis_type = analysis_basis.get("basis_type")
+    scenario_id = analysis_basis.get("scenario_id")
+    parameters = analysis_basis.get("parameters")
+    if isinstance(basis_type, str) and basis_type.strip():
+        merged["basis_type"] = basis_type.strip()
+    if isinstance(scenario_id, str) and scenario_id.strip():
+        merged["scenario_id"] = scenario_id.strip()
+    if isinstance(parameters, dict) and parameters:
+        merged["parameters"] = dict(parameters)
+    return merged

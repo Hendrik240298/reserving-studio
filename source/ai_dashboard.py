@@ -1177,8 +1177,8 @@ class AIDashboard:
         if not isinstance(analysis_basis, dict) or not analysis_basis:
             return [
                 {
-                    "field": "Status",
-                    "value": "No chat basis locked yet. After a recommendation or exact numeric follow-up, the active analysis basis will appear here.",
+                    "field": "Meaning",
+                    "value": "No conversation model is locked yet. Once the assistant recommends or analyzes a model selection, that model becomes the Analysis Basis the AI will use for future analysis until you explicitly switch basis.",
                 }
             ]
         parameters = (
@@ -1189,17 +1189,39 @@ class AIDashboard:
         tail = (
             parameters.get("tail") if isinstance(parameters.get("tail"), dict) else {}
         )
+        basis_type = str(analysis_basis.get("basis_type") or "").strip().lower()
+        scenario_id = str(analysis_basis.get("scenario_id") or "").strip()
+        if scenario_id:
+            scenario_label = scenario_id
+        elif basis_type == "baseline":
+            scenario_label = "active baseline session"
+        elif basis_type == "bespoke":
+            scenario_label = "custom parameter basis"
+        else:
+            scenario_label = "unnamed scenario basis"
         rows = [
+            {
+                "field": "Meaning",
+                "value": "This is the current conversation model the user and AI are working from. Future analysis uses this basis until you explicitly switch to baseline, current session, or another scenario.",
+            },
+            {
+                "field": "Used For Future Analysis",
+                "value": "yes, the AI will use this shown basis for future analysis until you explicitly switch basis",
+            },
             {"field": "Basis Type", "value": str(analysis_basis.get("basis_type", ""))},
             {
                 "field": "Scenario",
-                "value": str(analysis_basis.get("scenario_id") or "baseline"),
+                "value": scenario_label,
             },
             {
                 "field": "Matches Active Session",
-                "value": "yes"
+                "value": "yes, this basis is the current active session"
                 if bool(analysis_basis.get("is_active_session"))
-                else "no",
+                else "no, this basis differs from the current active session",
+            },
+            {
+                "field": "Source Tool",
+                "value": str(analysis_basis.get("source_tool") or ""),
             },
             {"field": "Average", "value": str(parameters.get("average", ""))},
             {"field": "Drops", "value": str(parameters.get("drop", []))},

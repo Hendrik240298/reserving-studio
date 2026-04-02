@@ -151,6 +151,7 @@ class PlaybookPlanner:
         user_prompt: str,
         session_context: dict[str, Any] | None,
         segment_memory: dict[str, Any] | None = None,
+        analysis_basis: dict[str, Any] | None = None,
     ) -> ExecutionPlan | None:
         playbook = self.select_playbook(user_prompt)
         if not playbook:
@@ -169,4 +170,5 @@ class PlaybookPlanner:
             session_id=session_id,
             segment=segment,
             segment_memory=segment_memory,
+            analysis_basis=analysis_basis,
         )

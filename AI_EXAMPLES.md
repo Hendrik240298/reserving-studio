@@ -30,8 +30,9 @@ User: Which link ratios should we consider dropping?
 Preferred behavior:
 - Run diagnostics summary.
 - Run scenario iteration.
-- Explain the best scenario vs baseline.
+- Explain the best scenario vs the current analysis basis.
 - Mention tradeoffs and uncertainty.
+- If the assistant recommends a tested drop scenario and the conversation continues on that setup, that tested scenario becomes the new `Analysis Basis` for later basis-aware analysis.
 
 ## Example: Drop Highest A2A In Each Development Period
 User: How would the analysis perform when I drop the highest age-to-age factor in each development period?
@@ -39,9 +40,9 @@ User: How would the analysis perform when I drop the highest age-to-age factor i
 Preferred behavior:
 - Do not approximate this with generic diagnostics recommendations.
 - Use the generic link-ratio ranking and derived-drop framework.
-- Rank observed a2a factors by `selection_mode=max` and `scope=per_development_period`.
-- Build the drop list from the current baseline triangle by taking the largest observed a2a factor in each development period column.
-- Run that bespoke scenario against baseline and summarize the score change, major tradeoffs, and selected drop list.
+- Rank observed a2a factors by `selection_mode=max` and `scope=per_development_period` over the current analysis basis.
+- Build the drop list from the current analysis basis by taking the largest observed a2a factor in each development period column.
+- Run that bespoke scenario against the current analysis basis and summarize the score change, major tradeoffs, and selected drop list.
 
 ## Example: Combine Rule-Based Drops
 User: What if next to the highest I also remove all factors below 1?
@@ -52,7 +53,7 @@ Preferred behavior:
 - Example rule set:
   - `selection_mode=max`, `scope=per_development_period`
   - `selection_mode=min`, `scope=global`, `threshold_operator=lt`, `threshold_value=1.0`
-- Run a derived drop scenario using both rules together and compare against baseline.
+- Run a derived drop scenario using both rules together and compare against the current analysis basis.
 - In this context, "factors below 1" refers to observed triangle `a2a` factors below 1, not the selected `LDF` vector.
 
 ## Example: Reserve Impact After Derived Scenario
@@ -61,7 +62,7 @@ User: What is the impact on the reserves?
 Preferred behavior:
 - If the previous turn ran a derived-drop scenario, do not reconstruct the scenario from the summary.
 - First use `tool_get_last_derived_drop_detail` to recover the exact drop list and candidate parameters.
-- Then run reserve-change explanation against baseline using those exact parameters.
+- Then run reserve-change explanation against the current analysis basis using those exact parameters unless the user explicitly asks for baseline.
 
 ## Example: Monotone LDF Clarification
 User: Is the LDF development in this setting mostly monotone?
@@ -79,14 +80,14 @@ User: Compare the current setup with better alternatives.
 
 Preferred behavior:
 - Use scenario iteration.
-- Summarize baseline, best scenario, and one or two alternatives.
+- Summarize the current analysis basis, best scenario, and one or two alternatives.
 - Keep the answer comparative.
 
 ## Example: Why Did Reserve Change?
 User: Why does reserve increase when I drop this factor?
 
 Preferred behavior:
-- Use reserve-change explanation against baseline.
+- Use reserve-change explanation against the current analysis basis unless the user explicitly asks for baseline.
 - Attribute movement across development, tail, BF, and selection components.
 - Use data views only if they clarify the change.
 
@@ -111,9 +112,18 @@ User: How is the assessment if using weibull?
 
 Preferred behavior:
 - Do not answer from narrative memory.
-- Reuse the active/recommended tested scenario parameters.
+- Reuse the active/recommended tested scenario parameters from the current `Analysis Basis`.
 - Run `tool_evaluate_tail_fit` with `tail.curve=weibull` and the current fit period/attachment assumptions.
 - Answer using tested metrics such as `R^2`, `RMSE`, residual pattern, and any input adjustments.
+
+## Example: Recommendation Becomes New Basis
+User: Please also remove statistically large a2a outliers. Fit the tail again. Then check BF.
+
+Preferred behavior:
+- Run the appropriate review and scenario tools.
+- If the assistant recommends a tested refined setup, state the basis used clearly.
+- Treat that tested recommendation as the new `Analysis Basis` for later basis-aware questions.
+- If the user then asks a follow-up like "what is the final IBNR per UWY?", answer from that carried-forward basis rather than drifting back to the earlier session baseline.
 
 ## Example: Development Age Units
 User: Are you sure? In chainladder I can see data up to period 132-135.

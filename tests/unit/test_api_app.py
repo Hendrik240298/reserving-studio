@@ -70,7 +70,23 @@ class FakeBackend:
         )
 
     def recalculate(self, payload):
-        return RecalculateResponse(session_id=payload.session_id)
+        return RecalculateResponse(
+            session_id=payload.session_id,
+            analysis_basis={
+                "basis_type": "bespoke",
+                "scenario_id": None,
+                "is_active_session": True,
+                "parameters": {
+                    "average": payload.average,
+                    "drop": payload.drop,
+                    "drop_valuation": payload.drop_valuation,
+                    "tail": payload.tail.model_dump(mode="json"),
+                    "bf_apriori": dict(payload.bf_apriori),
+                    "final_ultimate": payload.final_ultimate,
+                    "selected_ultimate_by_uwy": dict(payload.selected_ultimate_by_uwy),
+                },
+            },
+        )
 
     def run_diagnostics(self, payload):
         return DiagnosticsResponse(
@@ -105,8 +121,15 @@ class FakeBackend:
             ),
         )
 
-    def get_results(self, session_id: str):
-        return ResultsResponse(session_id=session_id, results={"ok": True})
+    def get_results(self, payload):
+        return ResultsResponse(
+            session_id=payload.session_id,
+            analysis_basis={
+                "basis_type": payload.basis_type or "baseline",
+                "scenario_id": payload.scenario_id or "baseline",
+            },
+            results={"ok": True},
+        )
 
     def get_data_view(self, payload):
         return DataViewResponse(
@@ -377,6 +400,7 @@ def test_api_scaffold_endpoints() -> None:
     )
     assert recalc_response.status_code == 200
     assert recalc_response.json()["session_id"] == "s-1"
+    assert recalc_response.json()["analysis_basis"]["is_active_session"] is True
 
     diagnostics_response = client.post(
         "/v1/diagnostics/run",
@@ -554,6 +578,34 @@ def test_api_scaffold_endpoints() -> None:
         == "drop_combo_1"
     )
     assert backend.last_assumption_detail_payload.scenario_id == "drop_combo_1"
+
+    results_summary_response = client.post(
+        "/v1/results/summary",
+        json={
+            "session_id": "s-1",
+            "basis_type": "scenario",
+            "scenario_id": "drop_combo_1",
+            "parameters": {
+                "average": "volume",
+                "drop": [["2003", 9]],
+                "drop_valuation": [],
+                "tail": {
+                    "curve": "weibull",
+                    "attachment_age": 27,
+                    "projection_period": 0,
+                    "fit_period": [12, 108],
+                },
+                "bf_apriori": {},
+                "final_ultimate": "chainladder",
+                "selected_ultimate_by_uwy": {},
+            },
+        },
+    )
+    assert results_summary_response.status_code == 200
+    assert (
+        results_summary_response.json()["analysis_basis"]["scenario_id"]
+        == "drop_combo_1"
+    )
 
     drop_review_response = client.post(
         "/v1/reviews/drop",

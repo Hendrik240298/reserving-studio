@@ -21,6 +21,7 @@ from source.api.schemas import (
     QuarterCloseReviewRequest,
     RecalculateRequest,
     ReserveChangeRequest,
+    ResultsRequest,
     TailEvaluationRequest,
     TailReviewRequest,
     WorkflowFromDataframesRequest,
@@ -202,7 +203,14 @@ class BackendReservingTools:
             return summarize_iteration_payload(payload)
         if name == "tool_get_results_summary":
             session_id = str(arguments["session_id"])
-            response = self._backend.get_results(session_id)
+            response = self._backend.get_results(
+                ResultsRequest(
+                    session_id=session_id,
+                    basis_type=arguments.get("basis_type"),
+                    scenario_id=arguments.get("scenario_id"),
+                    parameters=arguments.get("parameters", {}),
+                )
+            )
             if response is None:
                 raise LookupError(f"Session results not found: {session_id}")
             payload = response.model_dump(mode="json")
@@ -220,6 +228,9 @@ class BackendReservingTools:
                         "denominator_view": arguments.get("denominator_view"),
                     },
                     include_summary=True,
+                    basis_type=arguments.get("basis_type"),
+                    scenario_id=arguments.get("scenario_id"),
+                    parameters=arguments.get("parameters", {}),
                 )
             )
             payload = response.model_dump(mode="json")
@@ -301,7 +312,12 @@ class BackendReservingTools:
             return summarize_reserve_change_payload(payload)
         if name == "tool_run_highest_a2a_drop_scenario":
             response = self._backend.run_highest_a2a_drop_scenario(
-                HighestA2ADropRequest(**arguments)
+                HighestA2ADropRequest(
+                    session_id=str(arguments["session_id"]),
+                    basis_type=arguments.get("basis_type"),
+                    scenario_id=arguments.get("scenario_id"),
+                    parameters=arguments.get("parameters", {}),
+                )
             )
             payload = response.model_dump(mode="json")
             session_id = str(payload.get("session_id", ""))
@@ -309,7 +325,19 @@ class BackendReservingTools:
                 self._raw_cache["highest_a2a_drop"][session_id] = payload
             return summarize_highest_a2a_drop_payload(payload)
         if name == "tool_rank_link_ratios":
-            response = self._backend.rank_link_ratios(LinkRatioRankRequest(**arguments))
+            response = self._backend.rank_link_ratios(
+                LinkRatioRankRequest(
+                    session_id=str(arguments["session_id"]),
+                    selection_mode=arguments.get("selection_mode", "max"),
+                    scope=arguments.get("scope", "per_development_period"),
+                    limit=arguments.get("limit", 5),
+                    threshold_operator=arguments.get("threshold_operator"),
+                    threshold_value=arguments.get("threshold_value"),
+                    basis_type=arguments.get("basis_type"),
+                    scenario_id=arguments.get("scenario_id"),
+                    parameters=arguments.get("parameters", {}),
+                )
+            )
             payload = response.model_dump(mode="json")
             session_id = str(payload.get("session_id", ""))
             if session_id:
@@ -319,6 +347,9 @@ class BackendReservingTools:
             response = self._backend.run_derived_drop_scenario(
                 DerivedDropScenarioRequest(
                     session_id=str(arguments["session_id"]),
+                    basis_type=arguments.get("basis_type"),
+                    scenario_id=arguments.get("scenario_id"),
+                    parameters=arguments.get("parameters", {}),
                     rule={
                         "source": arguments.get("source", "link_ratios"),
                         "selection_mode": arguments.get("selection_mode", "max"),
@@ -378,6 +409,7 @@ class BackendReservingTools:
             session_id = str(payload.get("session_id", ""))
             if session_id:
                 self._raw_cache["recalculate"][session_id] = payload
+                self._raw_cache["results"][session_id] = payload
             return summarize_recalculate_payload(payload)
         raise ValueError(f"Unsupported tool: {name}")
 

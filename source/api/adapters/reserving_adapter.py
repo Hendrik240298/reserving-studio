@@ -58,6 +58,7 @@ from source.api.schemas import (
     RecalculateResponse,
     ReserveChangeRequest,
     ReserveChangeResponse,
+    ResultsRequest,
     TailEvaluationRequest,
     TailEvaluationResponse,
     ResultsResponse,
@@ -338,6 +339,23 @@ class InMemoryReservingBackend:
 
             response = RecalculateResponse(
                 session_id=context.session_id,
+                analysis_basis=self._build_analysis_basis_payload(
+                    session_id=context.session_id,
+                    basis_type="bespoke",
+                    scenario_id=None,
+                    parameters={
+                        "average": payload.average,
+                        "drop": payload.drop,
+                        "drop_valuation": payload.drop_valuation,
+                        "tail": payload.tail.model_dump(mode="json"),
+                        "bf_apriori": dict(payload.bf_apriori),
+                        "final_ultimate": payload.final_ultimate,
+                        "selected_ultimate_by_uwy": dict(
+                            payload.selected_ultimate_by_uwy
+                        ),
+                    },
+                    is_active_session=True,
+                ),
                 results_table_rows=results_payload.get("results_table_rows", []),
                 triangle_figure=results_payload.get("triangle_figure", {}),
                 emergence_figure=results_payload.get("emergence_figure", {}),
@@ -363,74 +381,88 @@ class InMemoryReservingBackend:
             context = self._get_context_by_session_id(payload.session_id)
             if context is None:
                 raise LookupError(f"Session not found: {payload.session_id}")
-            results_df = context.reserving.get_results()
-            heatmap_data = context.reserving.get_triangle_heatmap_data()
-            diagnostics_service, calibration = self._calibrated_diagnostics_service(
-                segment=context.segment,
-                results_df=results_df,
-                heatmap_data=heatmap_data,
+            original_params = self._params_from_store(context)
+            basis_params, analysis_basis = self._resolve_request_basis_params(
+                context=context,
+                basis_type=payload.basis_type,
+                scenario_id=payload.scenario_id,
+                parameters=payload.parameters,
+                original_params=original_params,
+                default_basis_type="baseline",
             )
-            run_result = diagnostics_service.run(
-                results_df=results_df,
-                heatmap_data=heatmap_data,
-            )
-            run_metadata = self._build_run_metadata(
-                results_df=results_df,
-                heatmap_data=heatmap_data,
-            )
-
-            mapped_findings = [
-                self._map_finding(item, run_metadata=run_metadata)
-                for item in run_result.findings
-            ]
-            mapped_recommendations = [
-                self._map_recommendation(item, run_metadata=run_metadata)
-                for item in run_result.recommendations
-            ]
-            if not payload.include_recommendations:
-                mapped_recommendations = []
-
-            severity_components = self._severity_components(mapped_findings)
-            governance = self._governance_assessment(
-                findings=mapped_findings,
-                severity_components=severity_components,
-            )
-            metrics = cast(dict[str, Any], dict(run_result.metrics))
-            metrics["severity_components"] = severity_components
-            metrics["governance_tier"] = governance["tier"]
-            metrics["governance_escalation_triggers"] = governance[
-                "escalation_triggers"
-            ]
-            metrics["governance_requires_human_review"] = governance[
-                "requires_human_review"
-            ]
-            metrics["threshold_calibration"] = calibration
-            uncertainty = self._uncertainty_service.baseline_uncertainty(
-                results_df=results_df,
-                heatmap_data=heatmap_data,
-            )
-            metrics["uncertainty"] = uncertainty
-
-            response = DiagnosticsResponse(
-                session_id=context.session_id,
-                findings=mapped_findings,
-                recommendations=mapped_recommendations,
-                metrics=metrics,
-                governance=governance,
-                calibration=calibration,
-                uncertainty=uncertainty,
-                run_metadata=run_metadata,
-            )
-            if self._observability_enabled:
-                logger.info(
-                    "[OBS] diagnostics.run session_id=%s findings=%s recommendations=%s severity_score=%s duration_ms=%s",
-                    context.session_id,
-                    len(response.findings),
-                    len(response.recommendations),
-                    response.metrics.get("severity_score"),
-                    int((time.perf_counter() - started) * 1000),
+            self._apply_params_to_reserving(context, basis_params)
+            try:
+                results_df = context.reserving.get_results()
+                heatmap_data = context.reserving.get_triangle_heatmap_data()
+                diagnostics_service, calibration = self._calibrated_diagnostics_service(
+                    segment=context.segment,
+                    results_df=results_df,
+                    heatmap_data=heatmap_data,
                 )
-            return response
+                run_result = diagnostics_service.run(
+                    results_df=results_df,
+                    heatmap_data=heatmap_data,
+                )
+                run_metadata = self._build_run_metadata(
+                    results_df=results_df,
+                    heatmap_data=heatmap_data,
+                )
+
+                mapped_findings = [
+                    self._map_finding(item, run_metadata=run_metadata)
+                    for item in run_result.findings
+                ]
+                mapped_recommendations = [
+                    self._map_recommendation(item, run_metadata=run_metadata)
+                    for item in run_result.recommendations
+                ]
+                if not payload.include_recommendations:
+                    mapped_recommendations = []
+
+                severity_components = self._severity_components(mapped_findings)
+                governance = self._governance_assessment(
+                    findings=mapped_findings,
+                    severity_components=severity_components,
+                )
+                metrics = cast(dict[str, Any], dict(run_result.metrics))
+                metrics["severity_components"] = severity_components
+                metrics["governance_tier"] = governance["tier"]
+                metrics["governance_escalation_triggers"] = governance[
+                    "escalation_triggers"
+                ]
+                metrics["governance_requires_human_review"] = governance[
+                    "requires_human_review"
+                ]
+                metrics["threshold_calibration"] = calibration
+                uncertainty = self._uncertainty_service.baseline_uncertainty(
+                    results_df=results_df,
+                    heatmap_data=heatmap_data,
+                )
+                metrics["uncertainty"] = uncertainty
+
+                response = DiagnosticsResponse(
+                    session_id=context.session_id,
+                    analysis_basis=analysis_basis,
+                    findings=mapped_findings,
+                    recommendations=mapped_recommendations,
+                    metrics=metrics,
+                    governance=governance,
+                    calibration=calibration,
+                    uncertainty=uncertainty,
+                    run_metadata=run_metadata,
+                )
+                if self._observability_enabled:
+                    logger.info(
+                        "[OBS] diagnostics.run session_id=%s findings=%s recommendations=%s severity_score=%s duration_ms=%s",
+                        context.session_id,
+                        len(response.findings),
+                        len(response.recommendations),
+                        response.metrics.get("severity_score"),
+                        int((time.perf_counter() - started) * 1000),
+                    )
+                return response
+            finally:
+                self._apply_params_to_reserving(context, original_params)
 
     def iterate_diagnostics(
         self,
@@ -450,12 +482,20 @@ class InMemoryReservingBackend:
                     payload.max_scenarios,
                 )
 
-            baseline_params = self._params_from_store(context)
+            original_params = self._params_from_store(context)
+            baseline_params, analysis_basis = self._resolve_request_basis_params(
+                context=context,
+                basis_type=payload.basis_type,
+                scenario_id=payload.scenario_id,
+                parameters=payload.parameters,
+                original_params=original_params,
+                default_basis_type="baseline",
+            )
             baseline_eval = self._evaluate_scenario(
                 context=context,
                 scenario_id="baseline",
                 params=baseline_params,
-                summary="Current session configuration",
+                summary="Current analysis basis configuration",
                 parent_scenario_id=None,
                 transform="baseline",
                 rationale_evidence_ids=[],
@@ -494,7 +534,7 @@ class InMemoryReservingBackend:
                         int((time.perf_counter() - scenario_started) * 1000),
                     )
 
-            self._apply_params_to_reserving(context, baseline_params)
+            self._apply_params_to_reserving(context, original_params)
             context.last_results_payload = self._build_results_payload(
                 context.reserving
             )
@@ -549,6 +589,7 @@ class InMemoryReservingBackend:
                 )
             return DiagnosticsIterateResponse(
                 session_id=context.session_id,
+                analysis_basis=analysis_basis,
                 baseline=baseline_eval if payload.include_baseline else None,
                 scenarios=ordered,
                 iteration_metrics=metrics,
@@ -562,13 +603,34 @@ class InMemoryReservingBackend:
                 run_metadata=baseline_eval.run_metadata,
             )
 
-    def get_results(self, session_id: str) -> ResultsResponse | None:
+    def get_results(self, payload: ResultsRequest) -> ResultsResponse | None:
         with self._lock:
-            context = self._get_context_by_session_id(session_id)
+            context = self._get_context_by_session_id(payload.session_id)
             if context is None:
                 return None
+            original_params = self._params_from_store(context)
+            basis_params, analysis_basis = self._resolve_request_basis_params(
+                context=context,
+                basis_type=payload.basis_type,
+                scenario_id=payload.scenario_id,
+                parameters=payload.parameters,
+                original_params=original_params,
+                default_basis_type="baseline",
+            )
+            if bool(analysis_basis.get("is_active_session")):
+                return ResultsResponse(
+                    session_id=context.session_id,
+                    analysis_basis=analysis_basis,
+                    results=context.last_results_payload,
+                )
+            results_payload = self._build_results_payload_for_params(
+                context=context,
+                params=basis_params,
+            )
             return ResultsResponse(
-                session_id=context.session_id, results=context.last_results_payload
+                session_id=context.session_id,
+                analysis_basis=analysis_basis,
+                results=results_payload,
             )
 
     def get_data_view(self, payload: DataViewRequest) -> DataViewResponse:
@@ -581,6 +643,7 @@ class InMemoryReservingBackend:
             frame = service.get_data_view(query)
             return DataViewResponse(
                 session_id=context.session_id,
+                analysis_basis={},
                 query=payload.query.model_dump(mode="json"),
                 data=serialize_dataframe(frame),
                 summary=service.summarize_view(query)
@@ -629,11 +692,25 @@ class InMemoryReservingBackend:
             context = self._get_context_by_session_id(payload.session_id)
             if context is None:
                 raise LookupError(f"Session not found: {payload.session_id}")
-            response = MovementDiagnosticsService(
-                context.reserving
-            ).run_ldf_consistency()
+            original_params = self._params_from_store(context)
+            basis_params, analysis_basis = self._resolve_request_basis_params(
+                context=context,
+                basis_type=payload.basis_type,
+                scenario_id=payload.scenario_id,
+                parameters=payload.parameters,
+                original_params=original_params,
+                default_basis_type="baseline",
+            )
+            self._apply_params_to_reserving(context, basis_params)
+            try:
+                response = MovementDiagnosticsService(
+                    context.reserving
+                ).run_ldf_consistency()
+            finally:
+                self._apply_params_to_reserving(context, original_params)
             return LdfConsistencyResponse(
                 session_id=context.session_id,
+                analysis_basis=analysis_basis,
                 findings=response.get("findings", []),
                 summary=response.get("summary", {}),
             )
@@ -646,11 +723,25 @@ class InMemoryReservingBackend:
             context = self._get_context_by_session_id(payload.session_id)
             if context is None:
                 raise LookupError(f"Session not found: {payload.session_id}")
-            response = MovementDiagnosticsService(
-                context.reserving
-            ).run_late_emergence_benchmark(uwy=payload.uwy)
+            original_params = self._params_from_store(context)
+            basis_params, analysis_basis = self._resolve_request_basis_params(
+                context=context,
+                basis_type=payload.basis_type,
+                scenario_id=payload.scenario_id,
+                parameters=payload.parameters,
+                original_params=original_params,
+                default_basis_type="baseline",
+            )
+            self._apply_params_to_reserving(context, basis_params)
+            try:
+                response = MovementDiagnosticsService(
+                    context.reserving
+                ).run_late_emergence_benchmark(uwy=payload.uwy)
+            finally:
+                self._apply_params_to_reserving(context, original_params)
             return LateEmergenceResponse(
                 session_id=context.session_id,
+                analysis_basis=analysis_basis,
                 rows=response.get("rows", []),
                 summary=response.get("summary", {}),
             )
@@ -664,9 +755,20 @@ class InMemoryReservingBackend:
             if context is None:
                 raise LookupError(f"Session not found: {payload.session_id}")
 
-            baseline_params = self._params_from_store(context)
+            original_params = self._params_from_store(context)
+            baseline_params, _ = self._resolve_request_basis_params(
+                context=context,
+                basis_type=payload.basis_type,
+                scenario_id=payload.scenario_id,
+                parameters=payload.basis_parameters,
+                original_params=original_params,
+                default_basis_type="baseline",
+            )
             candidate_params = self._clone_params(payload.model_dump(mode="json"))
             candidate_params.pop("session_id", None)
+            candidate_params.pop("basis_type", None)
+            candidate_params.pop("scenario_id", None)
+            candidate_params.pop("basis_parameters", None)
 
             baseline_eval = self._scenario_totals_for_params(
                 context=context, params=baseline_params
@@ -728,7 +830,7 @@ class InMemoryReservingBackend:
                 )
             )
 
-            self._apply_params_to_reserving(context, baseline_params)
+            self._apply_params_to_reserving(context, original_params)
             context.last_results_payload = self._build_results_payload(
                 context.reserving
             )
@@ -755,6 +857,9 @@ class InMemoryReservingBackend:
         derived = self.run_derived_drop_scenario(
             DerivedDropScenarioRequest(
                 session_id=payload.session_id,
+                basis_type=payload.basis_type,
+                scenario_id=payload.scenario_id,
+                parameters=payload.parameters,
                 rule={
                     "source": "link_ratios",
                     "selection_mode": "max",
@@ -781,14 +886,27 @@ class InMemoryReservingBackend:
             context = self._get_context_by_session_id(payload.session_id)
             if context is None:
                 raise LookupError(f"Session not found: {payload.session_id}")
-            rows = self._rank_link_ratio_rows(
-                context,
-                selection_mode=payload.selection_mode,
-                scope=payload.scope,
-                limit=payload.limit,
-                threshold_operator=payload.threshold_operator,
-                threshold_value=payload.threshold_value,
+            original_params = self._params_from_store(context)
+            basis_params, _ = self._resolve_request_basis_params(
+                context=context,
+                basis_type=payload.basis_type,
+                scenario_id=payload.scenario_id,
+                parameters=payload.parameters,
+                original_params=original_params,
+                default_basis_type="baseline",
             )
+            self._apply_params_to_reserving(context, basis_params)
+            try:
+                rows = self._rank_link_ratio_rows(
+                    context,
+                    selection_mode=payload.selection_mode,
+                    scope=payload.scope,
+                    limit=payload.limit,
+                    threshold_operator=payload.threshold_operator,
+                    threshold_value=payload.threshold_value,
+                )
+            finally:
+                self._apply_params_to_reserving(context, original_params)
             return LinkRatioRankResponse(
                 session_id=context.session_id,
                 selection_mode=payload.selection_mode,
@@ -809,12 +927,20 @@ class InMemoryReservingBackend:
             if context is None:
                 raise LookupError(f"Session not found: {payload.session_id}")
 
-            baseline_params = self._params_from_store(context)
+            original_params = self._params_from_store(context)
+            baseline_params, _ = self._resolve_request_basis_params(
+                context=context,
+                basis_type=payload.basis_type,
+                scenario_id=payload.scenario_id,
+                parameters=payload.parameters,
+                original_params=original_params,
+                default_basis_type="baseline",
+            )
             baseline_eval = self._evaluate_scenario(
                 context=context,
                 scenario_id="baseline",
                 params=self._clone_params(baseline_params),
-                summary="Current configuration",
+                summary="Current conversation basis configuration",
                 parent_scenario_id=None,
                 transform="baseline",
                 rationale_evidence_ids=[],
@@ -826,22 +952,26 @@ class InMemoryReservingBackend:
             rows: list[dict[str, Any]] = []
             drop_pairs: list[tuple[str, int]] = []
             seen_pairs: set[tuple[str, int]] = set()
-            for rule in rules:
-                rule_rows = self._selected_link_ratio_rows(
-                    context,
-                    selection_mode=rule.selection_mode,
-                    scope=rule.scope,
-                    limit=rule.limit,
-                    threshold_operator=rule.threshold_operator,
-                    threshold_value=rule.threshold_value,
-                )
-                for item in rule_rows:
-                    pair = (str(item["origin"]), int(item["development_period"]))
-                    if pair in seen_pairs:
-                        continue
-                    seen_pairs.add(pair)
-                    rows.append(item)
-                    drop_pairs.append(pair)
+            self._apply_params_to_reserving(context, baseline_params)
+            try:
+                for rule in rules:
+                    rule_rows = self._selected_link_ratio_rows(
+                        context,
+                        selection_mode=rule.selection_mode,
+                        scope=rule.scope,
+                        limit=rule.limit,
+                        threshold_operator=rule.threshold_operator,
+                        threshold_value=rule.threshold_value,
+                    )
+                    for item in rule_rows:
+                        pair = (str(item["origin"]), int(item["development_period"]))
+                        if pair in seen_pairs:
+                            continue
+                        seen_pairs.add(pair)
+                        rows.append(item)
+                        drop_pairs.append(pair)
+            finally:
+                self._apply_params_to_reserving(context, original_params)
             existing_drop_pairs: set[tuple[str, int]] = set()
             include_existing_drops = any(rule.include_existing_drops for rule in rules)
             if include_existing_drops:
@@ -865,7 +995,7 @@ class InMemoryReservingBackend:
                 rationale_evidence_ids=[],
             )
 
-            self._apply_params_to_reserving(context, baseline_params)
+            self._apply_params_to_reserving(context, original_params)
             context.last_results_payload = self._build_results_payload(
                 context.reserving
             )
@@ -1144,25 +1274,44 @@ class InMemoryReservingBackend:
         payload: AssumptionDetailRequest,
         original_params: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        scenario_id = str(payload.scenario_id or "").strip() or None
-        if isinstance(payload.parameters, dict) and payload.parameters:
-            params = self._clone_params(payload.parameters)
+        return self._resolve_request_basis_params(
+            context=context,
+            basis_type=payload.basis_type,
+            scenario_id=payload.scenario_id,
+            parameters=payload.parameters,
+            original_params=original_params,
+            default_basis_type="baseline",
+        )
+
+    def _resolve_request_basis_params(
+        self,
+        *,
+        context: SessionContext,
+        basis_type: object,
+        scenario_id: object,
+        parameters: object,
+        original_params: dict[str, Any],
+        default_basis_type: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        resolved_scenario_id = str(scenario_id or "").strip() or None
+        if isinstance(parameters, dict) and parameters:
+            params = self._clone_params(parameters)
             return params, self._build_analysis_basis_payload(
                 session_id=context.session_id,
-                basis_type=str(payload.basis_type or "scenario"),
-                scenario_id=scenario_id,
+                basis_type=str(basis_type or default_basis_type),
+                scenario_id=resolved_scenario_id,
                 parameters=params,
                 is_active_session=params == self._clone_params(original_params),
             )
-        if scenario_id and scenario_id != "baseline":
+        if resolved_scenario_id and resolved_scenario_id != "baseline":
             raise ValueError(
-                "Scenario-bound assumption detail requires explicit parameters for this request"
+                "Scenario-bound analysis requires explicit parameters for this request"
             )
         params = self._clone_params(original_params)
         return params, self._build_analysis_basis_payload(
             session_id=context.session_id,
-            basis_type=str(payload.basis_type or "baseline"),
-            scenario_id=scenario_id or "baseline",
+            basis_type=str(basis_type or default_basis_type),
+            scenario_id=resolved_scenario_id or "baseline",
             parameters=params,
             is_active_session=True,
         )
@@ -1193,7 +1342,15 @@ class InMemoryReservingBackend:
             context = self._get_context_by_session_id(payload.session_id)
             if context is None:
                 raise LookupError(f"Session not found: {payload.session_id}")
-            baseline_params = self._params_from_store(context)
+            original_params = self._params_from_store(context)
+            baseline_params, analysis_basis = self._resolve_request_basis_params(
+                context=context,
+                basis_type=payload.basis_type,
+                scenario_id=payload.scenario_id,
+                parameters=payload.parameters,
+                original_params=original_params,
+                default_basis_type="baseline",
+            )
             review = self._get_assumption_review_service().review_drops(
                 segment=context.segment,
                 reserving=context.reserving,
@@ -1201,12 +1358,13 @@ class InMemoryReservingBackend:
                 segment_memory=self._load_segment_memory(context.segment),
                 candidate_limit=payload.candidate_limit,
             )
-            self._apply_params_to_reserving(context, baseline_params)
+            self._apply_params_to_reserving(context, original_params)
             context.last_results_payload = self._build_results_payload(
                 context.reserving
             )
             return DropReviewResponse(
                 session_id=context.session_id,
+                analysis_basis=analysis_basis,
                 baseline=review.get("baseline", {}),
                 candidates=review.get("candidates", []),
                 recommendation=review.get("recommendation", {}),
@@ -1221,7 +1379,15 @@ class InMemoryReservingBackend:
             context = self._get_context_by_session_id(payload.session_id)
             if context is None:
                 raise LookupError(f"Session not found: {payload.session_id}")
-            baseline_params = self._params_from_store(context)
+            original_params = self._params_from_store(context)
+            baseline_params, analysis_basis = self._resolve_request_basis_params(
+                context=context,
+                basis_type=payload.basis_type,
+                scenario_id=payload.scenario_id,
+                parameters=payload.parameters,
+                original_params=original_params,
+                default_basis_type="baseline",
+            )
             review = self._get_assumption_review_service().review_tail(
                 segment=context.segment,
                 reserving=context.reserving,
@@ -1229,12 +1395,13 @@ class InMemoryReservingBackend:
                 segment_memory=self._load_segment_memory(context.segment),
                 candidate_limit=payload.candidate_limit,
             )
-            self._apply_params_to_reserving(context, baseline_params)
+            self._apply_params_to_reserving(context, original_params)
             context.last_results_payload = self._build_results_payload(
                 context.reserving
             )
             return TailReviewResponse(
                 session_id=context.session_id,
+                analysis_basis=analysis_basis,
                 baseline=review.get("baseline", {}),
                 candidates=review.get("candidates", []),
                 recommendation=review.get("recommendation", {}),
@@ -1252,19 +1419,28 @@ class InMemoryReservingBackend:
             context = self._get_context_by_session_id(payload.session_id)
             if context is None:
                 raise LookupError(f"Session not found: {payload.session_id}")
-            baseline_params = self._params_from_store(context)
+            original_params = self._params_from_store(context)
+            baseline_params, analysis_basis = self._resolve_request_basis_params(
+                context=context,
+                basis_type=payload.basis_type,
+                scenario_id=payload.scenario_id,
+                parameters=payload.parameters,
+                original_params=original_params,
+                default_basis_type="baseline",
+            )
             review = self._get_assumption_review_service().review_bf_suitability(
                 segment=context.segment,
                 reserving=context.reserving,
                 baseline_params=baseline_params,
                 segment_memory=self._load_segment_memory(context.segment),
             )
-            self._apply_params_to_reserving(context, baseline_params)
+            self._apply_params_to_reserving(context, original_params)
             context.last_results_payload = self._build_results_payload(
                 context.reserving
             )
             return BfSuitabilityResponse(
                 session_id=context.session_id,
+                analysis_basis=analysis_basis,
                 rows=review.get("rows", []),
                 overall_class=review.get("overall_class", "inconclusive"),
                 summary=review.get("summary", {}),
@@ -1282,18 +1458,27 @@ class InMemoryReservingBackend:
             context = self._get_context_by_session_id(payload.session_id)
             if context is None:
                 raise LookupError(f"Session not found: {payload.session_id}")
-            baseline_params = self._params_from_store(context)
+            original_params = self._params_from_store(context)
+            baseline_params, analysis_basis = self._resolve_request_basis_params(
+                context=context,
+                basis_type=payload.basis_type,
+                scenario_id=payload.scenario_id,
+                parameters=payload.parameters,
+                original_params=original_params,
+                default_basis_type="baseline",
+            )
             review = self._get_assumption_review_service().triage_anomalies(
                 segment=context.segment,
                 reserving=context.reserving,
                 baseline_params=baseline_params,
             )
-            self._apply_params_to_reserving(context, baseline_params)
+            self._apply_params_to_reserving(context, original_params)
             context.last_results_payload = self._build_results_payload(
                 context.reserving
             )
             return AnomalyTriageResponse(
                 session_id=context.session_id,
+                analysis_basis=analysis_basis,
                 triaged_findings=review.get("triaged_findings", []),
                 summary=review.get("summary", {}),
                 pause_recommendation=bool(review.get("pause_recommendation", False)),
@@ -1308,12 +1493,27 @@ class InMemoryReservingBackend:
             context = self._get_context_by_session_id(payload.session_id)
             if context is None:
                 raise LookupError(f"Session not found: {payload.session_id}")
+            original_params = self._params_from_store(context)
+            basis_params, analysis_basis = self._resolve_request_basis_params(
+                context=context,
+                basis_type=payload.basis_type,
+                scenario_id=payload.scenario_id,
+                parameters=payload.parameters,
+                original_params=original_params,
+                default_basis_type="baseline",
+            )
+            applied_override = not bool(analysis_basis.get("is_active_session"))
+            if applied_override:
+                self._apply_params_to_reserving(context, basis_params)
             review = self._run_quarter_close_review_payload(context)
+            if applied_override:
+                self._apply_params_to_reserving(context, original_params)
             context.last_results_payload = self._build_results_payload(
                 context.reserving
             )
             return QuarterCloseReviewResponse(
                 session_id=context.session_id,
+                analysis_basis=analysis_basis,
                 comparison=review.get("comparison", {}),
                 diagnostics=review.get("diagnostics", {}),
                 assumption_reviews=review.get("assumption_reviews", {}),
@@ -1399,6 +1599,19 @@ class InMemoryReservingBackend:
             .isoformat()
             .replace("+00:00", "Z"),
         }
+
+    def _build_results_payload_for_params(
+        self,
+        *,
+        context: SessionContext,
+        params: dict[str, Any],
+    ) -> dict:
+        original_params = self._params_from_store(context)
+        self._apply_params_to_reserving(context, params)
+        try:
+            return self._build_results_payload(context.reserving)
+        finally:
+            self._apply_params_to_reserving(context, original_params)
 
     @staticmethod
     def _service_query(query) -> ServiceDataViewQuery:

@@ -438,6 +438,36 @@ def test_exact_factor_question_prefetches_assumption_detail() -> None:
     assert tool_names[0] == "tool_get_assumption_context_detail"
 
 
+def test_exact_vector_comparison_prefetches_assumption_detail() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ok",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", _FakeClient(responses))
+    fake_tools = _FakeTools()
+    setattr(service, "_tools", fake_tools)
+    service._observability_enabled = False
+
+    result = service.run_turn(
+        user_prompt="Put the fitted and original LDF vectors side by side for the recommended tail scenario.",
+        session_context={"segment": "seg", "session_id": "s-1"},
+    )
+
+    assert result["content"] == "ok"
+    tool_names = [name for name, _ in fake_tools.calls]
+    assert tool_names[0] == "tool_get_assumption_context_detail"
+
+
 def test_exact_follow_up_uses_bound_recommended_scenario_basis() -> None:
     responses = [
         {
@@ -492,6 +522,81 @@ def test_exact_follow_up_uses_bound_recommended_scenario_basis() -> None:
     tool_name, args = fake_tools.calls[0]
     assert tool_name == "tool_get_assumption_context_detail"
     assert args["scenario_id"] == "drop_combo_1"
+    assert args["basis_type"] == "review_candidate"
+    assert args["parameters"]["tail"]["attachment_age"] == 27
+
+
+def test_partial_scenario_basis_args_are_backfilled_from_cache() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "function": {
+                                    "name": "tool_get_assumption_context_detail",
+                                    "arguments": '{"session_id": "s-1", "scenario_id": "tail_weibull_27_12_108", "start_age": 27, "end_age": 45}',
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ok",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        },
+    ]
+
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", _FakeClient(responses))
+    fake_tools = _FakeTools()
+    setattr(service, "_tools", fake_tools)
+    service._observability_enabled = False
+
+    result = service.run_turn(
+        user_prompt="Show the fitted tail from 27 to 45 for tail_weibull_27_12_108.",
+        session_context={"segment": "seg", "session_id": "s-1"},
+        working_memory={
+            "scenario_basis_cache": {
+                "tail_weibull_27_12_108": {
+                    "basis_type": "review_candidate",
+                    "session_id": "s-1",
+                    "scenario_id": "tail_weibull_27_12_108",
+                    "is_active_session": False,
+                    "parameters": {
+                        "average": "volume",
+                        "drop": [["2003", 9], ["2002", 21], ["2002", 39]],
+                        "drop_valuation": [],
+                        "tail": {
+                            "curve": "weibull",
+                            "attachment_age": 27,
+                            "projection_period": 0,
+                            "fit_period": [12, 108],
+                        },
+                        "bf_apriori": {},
+                        "final_ultimate": "chainladder",
+                        "selected_ultimate_by_uwy": {},
+                    },
+                }
+            }
+        },
+    )
+
+    assert result["content"] == "ok"
+    tool_name, args = fake_tools.calls[-1]
+    assert tool_name == "tool_get_assumption_context_detail"
+    assert args["scenario_id"] == "tail_weibull_27_12_108"
     assert args["basis_type"] == "review_candidate"
     assert args["parameters"]["tail"]["attachment_age"] == 27
 
@@ -564,3 +669,76 @@ def test_exact_follow_up_can_switch_back_to_baseline() -> None:
     assert args["scenario_id"] == "baseline"
     assert args["basis_type"] == "baseline"
     assert args["parameters"]["tail"]["attachment_age"] == 30
+
+
+def test_basis_aware_tool_call_inherits_current_conversation_basis() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "function": {
+                                    "name": "tool_run_derived_drop_scenario",
+                                    "arguments": '{"session_id": "s-1", "selection_mode": "max", "scope": "per_development_period", "limit": 5}',
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ok",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        },
+    ]
+
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", _FakeClient(responses))
+    fake_tools = _FakeTools()
+    setattr(service, "_tools", fake_tools)
+    service._observability_enabled = False
+
+    result = service.run_turn(
+        user_prompt="remove more statistically large a2a outliers",
+        session_context={"segment": "seg", "session_id": "s-1"},
+        working_memory={
+            "analysis_basis": {
+                "basis_type": "review_candidate",
+                "session_id": "s-1",
+                "scenario_id": "drop_combo_1",
+                "is_active_session": False,
+                "parameters": {
+                    "average": "volume",
+                    "drop": [["2003", 9], ["2002", 21]],
+                    "drop_valuation": [],
+                    "tail": {
+                        "curve": "weibull",
+                        "attachment_age": 27,
+                        "projection_period": 0,
+                        "fit_period": [12, 108],
+                    },
+                    "bf_apriori": {},
+                    "final_ultimate": "chainladder",
+                    "selected_ultimate_by_uwy": {},
+                },
+            }
+        },
+    )
+
+    assert result["content"] == "ok"
+    tool_name, args = fake_tools.calls[0]
+    assert tool_name == "tool_run_derived_drop_scenario"
+    assert args["scenario_id"] == "drop_combo_1"
+    assert args["basis_type"] == "review_candidate"
+    assert args["parameters"]["drop"] == [["2003", 9], ["2002", 21]]

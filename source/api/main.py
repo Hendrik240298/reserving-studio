@@ -56,6 +56,7 @@ from source.api.schemas import (
     RecalculateResponse,
     ReserveChangeRequest,
     ReserveChangeResponse,
+    ResultsRequest,
     TailEvaluationRequest,
     TailEvaluationResponse,
     TailReviewRequest,
@@ -92,7 +93,7 @@ class ReservingApiBackend(Protocol):
         payload: DiagnosticsIterateRequest,
     ) -> DiagnosticsIterateResponse: ...
 
-    def get_results(self, session_id: str) -> ResultsResponse | None: ...
+    def get_results(self, payload: ResultsRequest) -> ResultsResponse | None: ...
 
     def get_data_view(self, payload: DataViewRequest) -> DataViewResponse: ...
 
@@ -199,7 +200,7 @@ class NotImplementedBackend:
     def run_diagnostics(self, payload: DiagnosticsRequest) -> DiagnosticsResponse:
         raise NotImplementedError("Diagnostics backend not wired yet")
 
-    def get_results(self, session_id: str) -> ResultsResponse | None:
+    def get_results(self, payload: ResultsRequest) -> ResultsResponse | None:
         raise NotImplementedError("Results backend not wired yet")
 
     def iterate_diagnostics(
@@ -494,11 +495,35 @@ def create_app(
     ) -> ResultsResponse:
         response: ResultsResponse | None = None
         try:
-            response = backend_service.get_results(session_id)
+            response = backend_service.get_results(
+                ResultsRequest(session_id=session_id)
+            )
         except NotImplementedError as error:
             _raise_not_implemented(error)
         except LookupError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+        if response is None:
+            raise HTTPException(status_code=404, detail="Session results not found")
+        return response
+
+    @app.post(
+        "/v1/results/summary",
+        response_model=ResultsResponse,
+        tags=["Results"],
+    )
+    def get_results_summary(
+        payload: ResultsRequest,
+        backend_service: ReservingApiBackend = Depends(get_backend),
+    ) -> ResultsResponse:
+        response: ResultsResponse | None = None
+        try:
+            response = backend_service.get_results(payload)
+        except NotImplementedError as error:
+            _raise_not_implemented(error)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
         if response is None:
             raise HTTPException(status_code=404, detail="Session results not found")
         return response

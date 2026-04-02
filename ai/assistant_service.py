@@ -59,6 +59,7 @@ SYSTEM_PROMPT = (
     "Prefer earlier attachment to smooth late around-1.0 fluctuation, but avoid recommendations where the first tail factor creates a material cut versus the previous selected LDF. "
     "When the user asks which drops were used or why a drop was used, load exact scenario or derived-drop detail first. "
     "When an earlier answer recommended a tested scenario, keep exact numeric follow-up answers bound to that same scenario unless the user explicitly switches back to baseline or current session. "
+    "When the conversation has a locked Analysis Basis and a tool supports basis fields, pass that basis into the tool call unless the user explicitly switches basis. "
     "Every exact numeric answer must start by stating the basis used. "
     "Only assign a drop reason if the tool output gives explicit support for that exact AY/development pair. Otherwise say the exact driver is not confirmed from current evidence. "
     "Do not relabel a drop as 'below 1.0', 'negative development', 'high outlier', or similar unless that label is directly supported by the tool output for that same drop. "
@@ -228,6 +229,7 @@ class AssistantService:
             "ran_iteration": False,
             "exact_data_required": False,
             "exact_data_loaded": False,
+            "current_user_prompt": user_prompt,
         }
         self._prime_context_for_prompt(
             user_prompt=user_prompt,
@@ -520,10 +522,17 @@ class AssistantService:
         if not getattr(self, "_deterministic_orchestration_enabled", True):
             return None
         planner = getattr(self, "_planner", None) or PlaybookPlanner()
+        prompt_text = str(user_prompt or "").strip().lower()
+        planning_basis = self._basis_for_recommendation_turn(
+            prompt=prompt_text,
+            memory_state=memory_state,
+            session_context=session_context,
+        )
         plan = planner.plan(
             user_prompt=user_prompt,
             session_context=session_context,
             segment_memory=segment_memory,
+            analysis_basis=planning_basis,
         )
         if plan is None:
             return None
@@ -669,6 +678,12 @@ class AssistantService:
         guardrail_state: dict[str, bool],
         event_callback: Any | None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
+        args = self._apply_default_analysis_basis_args(
+            function_name=function_name,
+            args=args,
+            memory_state=memory_state,
+            workflow_state=workflow_state,
+        )
         for event in tool_events:
             if not isinstance(event, dict):
                 continue
@@ -699,6 +714,116 @@ class AssistantService:
         )
         self._update_guardrail_state(guardrail_state, tool_result)
         return tool_result, next_memory
+
+    @staticmethod
+    def _apply_default_analysis_basis_args(
+        *,
+        function_name: str,
+        args: dict[str, Any],
+        memory_state: dict[str, Any],
+        workflow_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        supported = {
+            "tool_run_diagnostics_summary",
+            "tool_iterate_diagnostics_summary",
+            "tool_run_drop_review",
+            "tool_run_tail_review",
+            "tool_run_bf_suitability_review",
+            "tool_run_anomaly_triage",
+            "tool_run_quarter_close_review",
+            "tool_get_results_summary",
+            "tool_get_data_view_summary",
+            "tool_get_data_view",
+            "tool_get_assumption_context_detail",
+            "tool_run_ldf_consistency_diagnostics",
+            "tool_project_late_emergence_benchmark",
+            "tool_explain_reserve_change",
+            "tool_run_highest_a2a_drop_scenario",
+            "tool_rank_link_ratios",
+            "tool_run_derived_drop_scenario",
+        }
+        if function_name not in supported:
+            return args
+        parameter_field = (
+            "basis_parameters"
+            if function_name == "tool_explain_reserve_change"
+            else "parameters"
+        )
+        has_basis_type = args.get("basis_type") not in (None, "", {})
+        has_scenario_id = args.get("scenario_id") not in (None, "", {})
+        has_parameters = args.get(parameter_field) not in (None, "", {})
+        if has_basis_type and has_scenario_id and has_parameters:
+            return args
+        has_any_basis_arg = has_basis_type or has_scenario_id or has_parameters
+
+        basis = AssistantService._resolve_tool_call_basis(
+            args=args,
+            memory_state=memory_state,
+            workflow_state=workflow_state,
+            has_any_basis_arg=has_any_basis_arg,
+        )
+        if not basis:
+            return args
+
+        enriched = dict(args)
+        basis_type = basis.get("basis_type")
+        scenario_id = basis.get("scenario_id")
+        parameters = basis.get("parameters")
+        if not has_basis_type and isinstance(basis_type, str) and basis_type.strip():
+            enriched["basis_type"] = basis_type.strip()
+        if not has_scenario_id and isinstance(scenario_id, str) and scenario_id.strip():
+            enriched["scenario_id"] = scenario_id.strip()
+        if not has_parameters and isinstance(parameters, dict) and parameters:
+            if function_name == "tool_explain_reserve_change":
+                enriched["basis_parameters"] = parameters
+            else:
+                enriched["parameters"] = parameters
+        return enriched
+
+    @staticmethod
+    def _resolve_tool_call_basis(
+        *,
+        args: dict[str, Any],
+        memory_state: dict[str, Any],
+        workflow_state: dict[str, Any],
+        has_any_basis_arg: bool,
+    ) -> dict[str, Any]:
+        prompt = str(workflow_state.get("current_user_prompt") or "").strip().lower()
+        if AssistantService._prompt_requests_baseline_basis(prompt):
+            return AssistantService._baseline_basis_from_memory(
+                memory_state=memory_state,
+                session_context=None,
+            )
+
+        scenario_id = str(args.get("scenario_id") or "").strip()
+        if scenario_id:
+            if scenario_id == "baseline":
+                return AssistantService._baseline_basis_from_memory(
+                    memory_state=memory_state,
+                    session_context=None,
+                )
+            basis_cache = (
+                memory_state.get("scenario_basis_cache")
+                if isinstance(memory_state.get("scenario_basis_cache"), dict)
+                else {}
+            )
+            cached = basis_cache.get(scenario_id)
+            if isinstance(cached, dict) and cached:
+                return dict(cached)
+
+        analysis_basis = (
+            memory_state.get("analysis_basis")
+            if isinstance(memory_state.get("analysis_basis"), dict)
+            else {}
+        )
+        if analysis_basis:
+            return dict(analysis_basis)
+        if has_any_basis_arg:
+            return {}
+        return AssistantService._baseline_basis_from_memory(
+            memory_state=memory_state,
+            session_context=None,
+        )
 
     @staticmethod
     def _build_deterministic_packet_prompt(packet: dict[str, Any]) -> str:
@@ -1314,6 +1439,8 @@ class AssistantService:
     def _is_exact_numeric_question(prompt: str) -> bool:
         request_terms = {
             "show me",
+            "compare",
+            "side by side",
             "what is",
             "what are",
             "list",
@@ -1330,6 +1457,10 @@ class AssistantService:
             "age-to-age",
             "link ratio",
             "link ratios",
+            "non-fitted",
+            "non fitted",
+            "original",
+            "observed",
             "apriori",
             "selected method",
             "selected methods",
@@ -1376,9 +1507,12 @@ class AssistantService:
     def _analysis_basis_label(basis: dict[str, Any] | None) -> str:
         if not isinstance(basis, dict) or not basis:
             return "Basis used: current baseline session."
+        basis_type = str(basis.get("basis_type") or "").strip().lower()
         scenario_id = str(basis.get("scenario_id") or "").strip()
         if scenario_id and scenario_id != "baseline":
             return f"Basis used: scenario {scenario_id}."
+        if basis_type == "bespoke":
+            return "Basis used: custom conversation basis."
         return "Basis used: current baseline session."
 
     @staticmethod
@@ -1465,6 +1599,27 @@ class AssistantService:
             candidate = str(scenario_id).strip().lower()
             if candidate and candidate != "baseline" and candidate in prompt:
                 return str(scenario_id)
+        return None
+
+    @staticmethod
+    def _basis_for_recommendation_turn(
+        *,
+        prompt: str,
+        memory_state: dict[str, Any],
+        session_context: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if AssistantService._prompt_requests_baseline_basis(prompt):
+            return AssistantService._baseline_basis_from_memory(
+                memory_state=memory_state,
+                session_context=session_context,
+            )
+        analysis_basis = (
+            memory_state.get("analysis_basis")
+            if isinstance(memory_state.get("analysis_basis"), dict)
+            else {}
+        )
+        if analysis_basis:
+            return dict(analysis_basis)
         return None
 
     @staticmethod
@@ -1607,6 +1762,18 @@ class AssistantService:
             )
         elif function_name in {"tool_get_results_summary", "tool_recalculate"}:
             current["results_summary"] = dict(tool_result)
+            if function_name == "tool_recalculate":
+                basis = tool_result.get("analysis_basis")
+                if isinstance(basis, dict) and basis:
+                    current["session_summary"] = (
+                        AssistantService._session_summary_with_basis(
+                            current.get("session_summary"),
+                            basis,
+                        )
+                    )
+                    current = AssistantService._sync_baseline_basis_cache_from_session_summary(
+                        current
+                    )
         elif function_name == "tool_explain_reserve_change":
             current["reserve_change_summary"] = dict(tool_result)
         elif function_name in {
@@ -1637,6 +1804,86 @@ class AssistantService:
             current["reserve_change_summary"] = dict(tool_result)
         elif function_name == "tool_rank_link_ratios":
             current["data_view_summary"] = dict(tool_result)
+        basis = tool_result.get("analysis_basis")
+        if isinstance(basis, dict) and basis:
+            current["analysis_basis"] = dict(basis)
+        return current
+
+    @staticmethod
+    def _session_summary_with_basis(
+        session_summary: object,
+        analysis_basis: dict[str, Any],
+    ) -> dict[str, Any]:
+        summary = dict(session_summary) if isinstance(session_summary, dict) else {}
+        params = (
+            dict(summary.get("params"))
+            if isinstance(summary.get("params"), dict)
+            else {}
+        )
+        basis_params = (
+            analysis_basis.get("parameters")
+            if isinstance(analysis_basis.get("parameters"), dict)
+            else {}
+        )
+        tail = (
+            basis_params.get("tail")
+            if isinstance(basis_params.get("tail"), dict)
+            else {}
+        )
+        if basis_params:
+            params.update(
+                {
+                    "average": basis_params.get("average", params.get("average")),
+                    "drop_store": basis_params.get(
+                        "drop", params.get("drop_store", [])
+                    ),
+                    "tail_curve": tail.get("curve", params.get("tail_curve")),
+                    "tail_attachment_age": tail.get(
+                        "attachment_age", params.get("tail_attachment_age")
+                    ),
+                    "tail_projection_months": tail.get(
+                        "projection_period", params.get("tail_projection_months", 0)
+                    ),
+                    "tail_fit_period_selection": tail.get(
+                        "fit_period", params.get("tail_fit_period_selection", [])
+                    ),
+                    "bf_apriori_by_uwy": basis_params.get(
+                        "bf_apriori", params.get("bf_apriori_by_uwy", {})
+                    ),
+                    "selected_ultimate_by_uwy": basis_params.get(
+                        "selected_ultimate_by_uwy",
+                        params.get("selected_ultimate_by_uwy", {}),
+                    ),
+                    "drop_count": len(basis_params.get("drop", [])),
+                    "bf_apriori_year_count": len(basis_params.get("bf_apriori", {})),
+                    "selected_ultimate_overrides": len(
+                        basis_params.get("selected_ultimate_by_uwy", {})
+                    ),
+                }
+            )
+        summary["params"] = params
+        return summary
+
+    @staticmethod
+    def _sync_baseline_basis_cache_from_session_summary(
+        memory_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        current = dict(memory_state)
+        session_summary = (
+            current.get("session_summary")
+            if isinstance(current.get("session_summary"), dict)
+            else {}
+        )
+        baseline_basis = build_baseline_analysis_basis(session_summary)
+        if not baseline_basis:
+            return current
+        basis_cache = (
+            dict(current.get("scenario_basis_cache"))
+            if isinstance(current.get("scenario_basis_cache"), dict)
+            else {}
+        )
+        basis_cache["baseline"] = baseline_basis
+        current["scenario_basis_cache"] = basis_cache
         return current
 
     @staticmethod

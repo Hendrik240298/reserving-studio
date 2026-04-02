@@ -75,6 +75,7 @@ def test_analysis_basis_rows_show_bound_scenario_and_session_match() -> None:
         {
             "basis_type": "review_candidate",
             "scenario_id": "drop_combo_1",
+            "source_tool": "tool_run_tail_review",
             "is_active_session": False,
             "parameters": {
                 "average": "volume",
@@ -90,6 +91,30 @@ def test_analysis_basis_rows_show_bound_scenario_and_session_match() -> None:
         }
     )
 
-    assert rows[0] == {"field": "Basis Type", "value": "review_candidate"}
-    assert rows[1] == {"field": "Scenario", "value": "drop_combo_1"}
-    assert rows[2] == {"field": "Matches Active Session", "value": "no"}
+    assert rows[0]["field"] == "Meaning"
+    assert rows[1] == {
+        "field": "Used For Future Analysis",
+        "value": "yes, the AI will use this shown basis for future analysis until you explicitly switch basis",
+    }
+    assert rows[2] == {"field": "Basis Type", "value": "review_candidate"}
+    assert rows[3] == {"field": "Scenario", "value": "drop_combo_1"}
+    assert rows[4] == {
+        "field": "Matches Active Session",
+        "value": "no, this basis differs from the current active session",
+    }
+    assert rows[5] == {"field": "Source Tool", "value": "tool_run_tail_review"}
+
+
+def test_analysis_basis_rows_label_bespoke_basis_without_baseline_scenario_name() -> (
+    None
+):
+    rows = AIDashboard._analysis_basis_rows(
+        {
+            "basis_type": "bespoke",
+            "scenario_id": None,
+            "is_active_session": False,
+            "parameters": {"average": "volume", "drop": [["2001", 15]]},
+        }
+    )
+
+    assert rows[3] == {"field": "Scenario", "value": "custom parameter basis"}

@@ -71,10 +71,29 @@ class _DeterministicTools:
         if function_name == "tool_iterate_diagnostics_summary":
             return {
                 "session_id": "s-1",
+                "analysis_basis": {
+                    "basis_type": "baseline",
+                    "scenario_id": "baseline",
+                    "is_active_session": True,
+                },
                 "baseline": {
                     "scenario_id": "baseline",
                     "score": 2.0,
                     "governance_tier": "green",
+                    "parameters": {
+                        "average": "volume",
+                        "drop": [],
+                        "drop_valuation": [],
+                        "tail": {
+                            "curve": "weibull",
+                            "attachment_age": None,
+                            "projection_period": 0,
+                            "fit_period": [],
+                        },
+                        "bf_apriori": {},
+                        "final_ultimate": "chainladder",
+                        "selected_ultimate_by_uwy": {},
+                    },
                 },
                 "scenario_count": 2,
                 "top_scenarios": [
@@ -83,15 +102,81 @@ class _DeterministicTools:
                         "score": 1.0,
                         "summary": "Apply one tested drop.",
                         "governance_tier": "green",
+                        "parameters": {
+                            "average": "volume",
+                            "drop": [["2022", 24]],
+                            "drop_valuation": [],
+                            "tail": {
+                                "curve": "weibull",
+                                "attachment_age": None,
+                                "projection_period": 0,
+                                "fit_period": [],
+                            },
+                            "bf_apriori": {},
+                            "final_ultimate": "chainladder",
+                            "selected_ultimate_by_uwy": {},
+                        },
                     },
                     {
                         "scenario_id": "drop_2",
                         "score": 1.7,
                         "summary": "Alternative tested drop.",
                         "governance_tier": "amber",
+                        "parameters": {
+                            "average": "volume",
+                            "drop": [["2021", 24]],
+                            "drop_valuation": [],
+                            "tail": {
+                                "curve": "weibull",
+                                "attachment_age": None,
+                                "projection_period": 0,
+                                "fit_period": [],
+                            },
+                            "bf_apriori": {},
+                            "final_ultimate": "chainladder",
+                            "selected_ultimate_by_uwy": {},
+                        },
                     },
                 ],
                 "iteration_metrics": {"best_scenario_id": "drop_1"},
+            }
+        if function_name == "tool_run_tail_review":
+            return {
+                "session_id": "s-1",
+                "analysis_basis": {
+                    "basis_type": args.get("basis_type", "review_candidate"),
+                    "scenario_id": args.get("scenario_id"),
+                    "is_active_session": False,
+                    "parameters": args.get("parameters", {}),
+                },
+                "review_type": "tail_review",
+                "candidate_count": 1,
+                "top_candidates": [
+                    {
+                        "candidate_id": "tail_1",
+                        "score": 0.8,
+                        "summary": "Attach Weibull at 27.",
+                        "parameters": {
+                            "average": "volume",
+                            "drop": [["2022", 24]],
+                            "drop_valuation": [],
+                            "tail": {
+                                "curve": "weibull",
+                                "attachment_age": 27,
+                                "projection_period": 0,
+                                "fit_period": [12, 108],
+                            },
+                            "bf_apriori": {},
+                            "final_ultimate": "chainladder",
+                            "selected_ultimate_by_uwy": {},
+                        },
+                    }
+                ],
+                "recommendation": {
+                    "candidate_id": "tail_1",
+                    "recommendation_class": "recommend",
+                    "summary": "Adopt tested tail.",
+                },
             }
         if function_name == "tool_get_results_summary":
             return {
@@ -135,6 +220,45 @@ def test_playbook_planner_builds_movement_review_plan() -> None:
         "ldf_consistency",
         "movement_diagnostics",
     ]
+
+
+def test_playbook_planner_binds_analysis_basis_into_tail_review_plan() -> None:
+    planner = PlaybookPlanner()
+
+    plan = planner.plan(
+        user_prompt="Review the tail assumptions.",
+        session_context={"segment": "industrial", "session_id": "s-1"},
+        analysis_basis={
+            "basis_type": "review_candidate",
+            "scenario_id": "drop_1",
+            "parameters": {"drop": [["2022", 24]]},
+        },
+    )
+
+    assert plan is not None
+    assert plan.playbook == "tail_selection"
+    assert plan.steps[0].args["scenario_id"] == "drop_1"
+    assert plan.steps[0].args["parameters"]["drop"] == [["2022", 24]]
+
+
+def test_playbook_planner_binds_analysis_basis_into_results_summary_step() -> None:
+    planner = PlaybookPlanner()
+
+    plan = planner.plan(
+        user_prompt="What scenario do you recommend next?",
+        session_context={"segment": "industrial", "session_id": "s-1"},
+        analysis_basis={
+            "basis_type": "review_candidate",
+            "scenario_id": "drop_1",
+            "parameters": {"drop": [["2022", 24]]},
+        },
+    )
+
+    assert plan is not None
+    result_step = plan.steps[2]
+    assert result_step.tool_name == "tool_get_results_summary"
+    assert result_step.args["scenario_id"] == "drop_1"
+    assert result_step.args["parameters"]["drop"] == [["2022", 24]]
 
 
 def test_playbook_planner_builds_data_anomaly_triage_plan() -> None:
@@ -314,6 +438,121 @@ def test_assistant_runs_deterministic_playbook_before_model_answer() -> None:
     assert packet.get("plan", {}).get("playbook") == "scenario_recommendation"
     assert packet.get("recommendation", {}).get("status") == "recommended"
     assert result["deterministic_packet"]["presentation"]["conclusion"] == "recommended"
+
+
+def test_assistant_uses_last_recommendation_as_basis_for_next_tail_review() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Tail recommendation ready.",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+    service = AssistantService.__new__(AssistantService)
+    tools = _DeterministicTools()
+    setattr(service, "_client", _FakeClient(responses))
+    setattr(service, "_tools", tools)
+    service._observability_enabled = False
+    service._deterministic_orchestration_enabled = True
+
+    result = service.run_turn(
+        user_prompt="Review the tail assumptions.",
+        session_context={"segment": "industrial", "session_id": "s-1"},
+        working_memory={
+            "analysis_basis": {
+                "basis_type": "review_candidate",
+                "scenario_id": "drop_1",
+                "is_active_session": False,
+                "parameters": {
+                    "average": "volume",
+                    "drop": [["2022", 24]],
+                    "drop_valuation": [],
+                    "tail": {
+                        "curve": "weibull",
+                        "attachment_age": None,
+                        "projection_period": 0,
+                        "fit_period": [],
+                    },
+                    "bf_apriori": {},
+                    "final_ultimate": "chainladder",
+                    "selected_ultimate_by_uwy": {},
+                },
+            }
+        },
+    )
+
+    assert result["content"] == "Tail recommendation ready."
+    tool_name, args = tools.calls[0]
+    assert tool_name == "tool_run_tail_review"
+    assert args["scenario_id"] == "drop_1"
+    assert args["parameters"]["drop"] == [["2022", 24]]
+
+
+def test_recalculate_updates_analysis_basis_and_session_summary() -> None:
+    service = AssistantService.__new__(AssistantService)
+
+    updated = service._update_memory_state(
+        function_name="tool_recalculate",
+        tool_result={
+            "session_id": "s-1",
+            "analysis_basis": {
+                "basis_type": "bespoke",
+                "scenario_id": None,
+                "is_active_session": True,
+                "parameters": {
+                    "average": "volume",
+                    "drop": [["2003", 9], ["2002", 21]],
+                    "drop_valuation": [],
+                    "tail": {
+                        "curve": "weibull",
+                        "attachment_age": 27,
+                        "projection_period": 0,
+                        "fit_period": [12, 108],
+                    },
+                    "bf_apriori": {"2006": 0.563},
+                    "final_ultimate": "chainladder",
+                    "selected_ultimate_by_uwy": {"2006": "bornhuetter_ferguson"},
+                },
+            },
+            "results_table_rows": [],
+            "duration_ms": 12,
+        },
+        memory_state={
+            "session_summary": {
+                "session_id": "s-1",
+                "segment": "industrial",
+                "params": {
+                    "average": "volume",
+                    "tail_curve": "weibull",
+                    "tail_attachment_age": None,
+                    "tail_projection_months": 0,
+                    "tail_fit_period_selection": [],
+                    "drop_store": [],
+                    "drop_count": 0,
+                    "bf_apriori_by_uwy": {},
+                    "selected_ultimate_by_uwy": {},
+                },
+            },
+            "scenario_basis_cache": {},
+        },
+    )
+
+    assert updated["analysis_basis"]["parameters"]["bf_apriori"]["2006"] == 0.563
+    assert updated["session_summary"]["params"]["drop_store"] == [
+        ["2003", 9],
+        ["2002", 21],
+    ]
+    assert updated["session_summary"]["params"]["selected_ultimate_by_uwy"] == {
+        "2006": "bornhuetter_ferguson"
+    }
+    assert updated["scenario_basis_cache"]["baseline"]["parameters"]["bf_apriori"] == {
+        "2006": 0.563
+    }
 
 
 def test_assistant_logs_deterministic_orchestration(caplog) -> None:

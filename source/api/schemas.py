@@ -113,6 +113,7 @@ class RecalculateRequest(BaseModel):
 class RecalculateResponse(BaseModel):
     schema_version: str = SCHEMA_VERSION
     session_id: str
+    analysis_basis: dict = Field(default_factory=dict)
     results_table_rows: list[dict[str, str]] = Field(default_factory=list)
     triangle_figure: dict = Field(default_factory=dict)
     emergence_figure: dict = Field(default_factory=dict)
@@ -217,12 +218,16 @@ class ReviewRecommendation(BaseModel):
 class DropReviewRequest(BaseModel):
     session_id: str
     candidate_limit: int = Field(default=5, ge=1, le=20)
+    basis_type: str | None = None
+    scenario_id: str | None = None
+    parameters: dict = Field(default_factory=dict)
 
 
 class DropReviewResponse(BaseModel):
     schema_version: str = SCHEMA_VERSION
     session_id: str
     review_type: Literal["drop_review"] = "drop_review"
+    analysis_basis: dict = Field(default_factory=dict)
     baseline: dict = Field(default_factory=dict)
     candidates: list[ReviewCandidate] = Field(default_factory=list)
     recommendation: ReviewRecommendation = Field(default_factory=ReviewRecommendation)
@@ -235,12 +240,16 @@ class DropReviewResponse(BaseModel):
 class TailReviewRequest(BaseModel):
     session_id: str
     candidate_limit: int = Field(default=12, ge=1, le=30)
+    basis_type: str | None = None
+    scenario_id: str | None = None
+    parameters: dict = Field(default_factory=dict)
 
 
 class TailReviewResponse(BaseModel):
     schema_version: str = SCHEMA_VERSION
     session_id: str
     review_type: Literal["tail_review"] = "tail_review"
+    analysis_basis: dict = Field(default_factory=dict)
     baseline: dict = Field(default_factory=dict)
     candidates: list[ReviewCandidate] = Field(default_factory=list)
     recommendation: ReviewRecommendation = Field(default_factory=ReviewRecommendation)
@@ -252,12 +261,16 @@ class TailReviewResponse(BaseModel):
 
 class BfSuitabilityRequest(BaseModel):
     session_id: str
+    basis_type: str | None = None
+    scenario_id: str | None = None
+    parameters: dict = Field(default_factory=dict)
 
 
 class BfSuitabilityResponse(BaseModel):
     schema_version: str = SCHEMA_VERSION
     session_id: str
     review_type: Literal["bf_suitability"] = "bf_suitability"
+    analysis_basis: dict = Field(default_factory=dict)
     rows: list[dict] = Field(default_factory=list)
     overall_class: SuitabilityClass = "inconclusive"
     summary: dict = Field(default_factory=dict)
@@ -269,12 +282,16 @@ class BfSuitabilityResponse(BaseModel):
 
 class AnomalyTriageRequest(BaseModel):
     session_id: str
+    basis_type: str | None = None
+    scenario_id: str | None = None
+    parameters: dict = Field(default_factory=dict)
 
 
 class AnomalyTriageResponse(BaseModel):
     schema_version: str = SCHEMA_VERSION
     session_id: str
     review_type: Literal["anomaly_triage"] = "anomaly_triage"
+    analysis_basis: dict = Field(default_factory=dict)
     triaged_findings: list[dict] = Field(default_factory=list)
     summary: dict = Field(default_factory=dict)
     pause_recommendation: bool = False
@@ -283,12 +300,16 @@ class AnomalyTriageResponse(BaseModel):
 
 class QuarterCloseReviewRequest(BaseModel):
     session_id: str
+    basis_type: str | None = None
+    scenario_id: str | None = None
+    parameters: dict = Field(default_factory=dict)
 
 
 class QuarterCloseReviewResponse(BaseModel):
     schema_version: str = SCHEMA_VERSION
     session_id: str
     review_type: Literal["quarter_close"] = "quarter_close"
+    analysis_basis: dict = Field(default_factory=dict)
     comparison: dict = Field(default_factory=dict)
     diagnostics: dict = Field(default_factory=dict)
     assumption_reviews: dict = Field(default_factory=dict)
@@ -322,11 +343,15 @@ class DataViewRequest(BaseModel):
     session_id: str
     query: DataViewQuery = Field(default_factory=DataViewQuery)
     include_summary: bool = True
+    basis_type: str | None = None
+    scenario_id: str | None = None
+    parameters: dict = Field(default_factory=dict)
 
 
 class DataViewResponse(BaseModel):
     schema_version: str = SCHEMA_VERSION
     session_id: str
+    analysis_basis: dict = Field(default_factory=dict)
     query: dict = Field(default_factory=dict)
     data: dict = Field(default_factory=dict)
     summary: dict = Field(default_factory=dict)
@@ -360,11 +385,15 @@ class MovementDiagnosticsResponse(BaseModel):
 
 class LdfConsistencyRequest(BaseModel):
     session_id: str
+    basis_type: str | None = None
+    scenario_id: str | None = None
+    parameters: dict = Field(default_factory=dict)
 
 
 class LdfConsistencyResponse(BaseModel):
     schema_version: str = SCHEMA_VERSION
     session_id: str
+    analysis_basis: dict = Field(default_factory=dict)
     findings: list[dict] = Field(default_factory=list)
     summary: dict = Field(default_factory=dict)
 
@@ -372,17 +401,30 @@ class LdfConsistencyResponse(BaseModel):
 class LateEmergenceRequest(BaseModel):
     session_id: str
     uwy: str | None = None
+    basis_type: str | None = None
+    scenario_id: str | None = None
+    parameters: dict = Field(default_factory=dict)
 
 
 class LateEmergenceResponse(BaseModel):
     schema_version: str = SCHEMA_VERSION
     session_id: str
+    analysis_basis: dict = Field(default_factory=dict)
     rows: list[dict] = Field(default_factory=list)
     summary: dict = Field(default_factory=dict)
 
 
+class ResultsRequest(BaseModel):
+    session_id: str
+    basis_type: str | None = None
+    scenario_id: str | None = None
+    parameters: dict = Field(default_factory=dict)
+
+
 class ReserveChangeRequest(RecalculateRequest):
-    pass
+    basis_type: str | None = None
+    scenario_id: str | None = None
+    basis_parameters: dict = Field(default_factory=dict)
 
 
 class ReserveChangeResponse(BaseModel):
@@ -396,6 +438,9 @@ class ReserveChangeResponse(BaseModel):
 
 class HighestA2ADropRequest(BaseModel):
     session_id: str
+    basis_type: str | None = None
+    scenario_id: str | None = None
+    parameters: dict = Field(default_factory=dict)
 
 
 class HighestA2ADropResponse(BaseModel):
@@ -420,6 +465,9 @@ class LinkRatioRankRequest(BaseModel):
     limit: int = Field(default=5, ge=1, le=200)
     threshold_operator: ThresholdOperator | None = None
     threshold_value: float | None = None
+    basis_type: str | None = None
+    scenario_id: str | None = None
+    parameters: dict = Field(default_factory=dict)
 
 
 class LinkRatioRankResponse(BaseModel):
@@ -445,6 +493,9 @@ class DerivedDropScenarioRequest(BaseModel):
     session_id: str
     rule: DerivedDropRule = Field(default_factory=DerivedDropRule)
     rules: list[DerivedDropRule] = Field(default_factory=list)
+    basis_type: str | None = None
+    scenario_id: str | None = None
+    parameters: dict = Field(default_factory=dict)
 
 
 class DerivedDropScenarioResponse(BaseModel):
@@ -462,12 +513,18 @@ class DiagnosticsRequest(BaseModel):
     session_id: str
     diagnostic_profile: str | None = None
     include_recommendations: bool = True
+    basis_type: str | None = None
+    scenario_id: str | None = None
+    parameters: dict = Field(default_factory=dict)
 
 
 class DiagnosticsIterateRequest(BaseModel):
     session_id: str
     max_scenarios: int = Field(default=24, ge=1, le=100)
     include_baseline: bool = True
+    basis_type: str | None = None
+    scenario_id: str | None = None
+    parameters: dict = Field(default_factory=dict)
 
 
 class RunMetadata(BaseModel):
@@ -531,6 +588,7 @@ class ScenarioEvaluation(BaseModel):
 class DiagnosticsResponse(BaseModel):
     schema_version: str = SCHEMA_VERSION
     session_id: str
+    analysis_basis: dict = Field(default_factory=dict)
     findings: list[DiagnosticFinding] = Field(default_factory=list)
     recommendations: list[DiagnosticRecommendation] = Field(default_factory=list)
     metrics: dict = Field(default_factory=dict)
@@ -543,6 +601,7 @@ class DiagnosticsResponse(BaseModel):
 class DiagnosticsIterateResponse(BaseModel):
     schema_version: str = SCHEMA_VERSION
     session_id: str
+    analysis_basis: dict = Field(default_factory=dict)
     baseline: ScenarioEvaluation | None = None
     scenarios: list[ScenarioEvaluation] = Field(default_factory=list)
     iteration_metrics: dict = Field(default_factory=dict)
@@ -555,6 +614,7 @@ class DiagnosticsIterateResponse(BaseModel):
 class ResultsResponse(BaseModel):
     schema_version: str = SCHEMA_VERSION
     session_id: str
+    analysis_basis: dict = Field(default_factory=dict)
     results: dict = Field(default_factory=dict)
 
 
