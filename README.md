@@ -1,7 +1,5 @@
 # reserving-studio
 
-This is currently a personal project to build a reserving workflow, including a minimalistic GUI, to familiarize myself with and learn the amazing `chainladder-python` package for actuarial loss reserving.
-
 ## Preview
 
 The Data tab shows claims and premium triangles. You can toggle between incremental and cumulative triangles. Each triangle can also be viewed in relation to another one, for example incurred in relation to premium.
