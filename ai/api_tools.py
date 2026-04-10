@@ -449,6 +449,7 @@ class ReservingApiTools:
             sanitized_arguments, input_adjustments = (
                 _sanitize_recalculate_like_arguments(arguments)
             )
+            sanitized_arguments["persist_to_session"] = False
             payload = self.request_json(
                 "POST",
                 "/v1/reserving/recalculate",

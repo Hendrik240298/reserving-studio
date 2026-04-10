@@ -400,6 +400,7 @@ class BackendReservingTools:
             sanitized_arguments, input_adjustments = (
                 _sanitize_recalculate_like_arguments(arguments)
             )
+            sanitized_arguments["persist_to_session"] = False
             response = self._backend.recalculate(
                 RecalculateRequest(**sanitized_arguments)
             )

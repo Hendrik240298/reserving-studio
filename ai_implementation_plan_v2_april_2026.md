@@ -358,7 +358,7 @@ Then let the assistant say:
 
 Check out: ai_implementation_plan_v2_april_2026_phase2.md
 
-Once Phase 1 control-layer reliability is stable, deepen the actuarial engines and quarter-close workflow.
+Once Phase 1 control-layer reliability is stable, deepen the actuarial engines, memory, and scenario search quality.
 
 ### 8. Deepen segment-aware persistent memory
 
@@ -403,21 +403,7 @@ Phase 2 expands that into richer continuity logic: rejected-before checks, house
 
 This is where the assistant stops feeling forgetful over longer operating cycles.
 
-### 9. Build quarter-close workflow orchestration
-
-The assistant should be able to run:
-
-1. compare prior vs current valuation
-2. run data triage
-3. run movement diagnostics
-4. identify suspect assumptions
-5. test targeted scenarios
-6. rank scenarios
-7. draft summary pack
-
-This is the core "plan-test-conclude" transformation you want.
-
-### 10. Introduce scenario optimization, not just enumeration
+### 9. Introduce scenario optimization, not just enumeration
 
 Do not jump to fancy Bayesian optimization immediately.
 
@@ -446,7 +432,21 @@ This is not "optimization" in a research sense. It is structured actuarial triag
 
 ## Phase 3 - Professional polish and optional uncertainty layer
 
-### 9. Add uncertainty-aware overlays
+### 9. Add editable memory authoring UI
+
+This phase should expose the existing structured segment memory through a practical authoring surface rather than only through YAML and approve/reject writeback.
+
+Add editable sidebar fields for:
+
+* segment overview
+* known issues
+* house preferences
+* previous-quarter / recent-quarter notes
+* open items to carry forward
+
+The assistant should be able to read these fields directly as context, and it may propose updates, but human approval should still be required before changing stored memory.
+
+### 10. Add uncertainty-aware overlays
 
 Because you said you do not use stochastic reserving methods for actual reserving, I would position this as:
 
@@ -465,7 +465,7 @@ Use optional overlays for:
 * Is this tail choice much more uncertainty-sensitive?
 * Is CL for this immature UWY unusually volatile relative to BF? ([chainladder-python.readthedocs.io][1])
 
-### 10. Add industrial-reserving-specific hypothesis engine
+### 11. Add industrial-reserving-specific hypothesis engine
 
 This is where the copilot becomes actually valuable for your niche.
 
@@ -486,6 +486,34 @@ The output should be:
 * diagnostic test run
 * strength of support
 * impact on assumption selection
+
+## Phase 4 - Quarter-close workflow and prior-quarter continuity
+
+This phase turns the current quarter-close review and pack scaffolding into a true quarter-over-quarter workflow.
+
+### 11. Build real quarter-close workflow orchestration
+
+The assistant should be able to run:
+
+1. load a real prior valuation state
+2. compare prior vs current valuation
+3. run data triage
+4. run movement diagnostics
+5. identify suspect assumptions
+6. test targeted scenarios
+7. rank scenarios
+8. draft a summary pack grounded in the true quarter comparison
+
+This is the core "plan-test-conclude" transformation you want.
+
+### 12. Add prior-quarter continuity and review-ready quarter-close output
+
+This phase should add:
+
+* persisted quarter-to-quarter valuation history rather than proxy-only comparison
+* quarter memory for carried issues, prior decisions, and open questions
+* quarter-close packs built from true prior/current continuity
+* uncertainty summaries embedded in quarter-close review outputs where useful
 
 # Technical roadmap
 
@@ -555,7 +583,6 @@ Improve actuarial intelligence.
 * tail engine v2
 * BF suitability scoring
 * data anomaly triage v2
-* quarter-close pack generator
 * richer memory writeback from human decisions
 * rejected-before / house-preference memory checks in policy decisions
 
@@ -574,6 +601,7 @@ Selective sophistication.
 
 ### Deliverables
 
+* editable memory authoring UI over existing segment memory
 * optional volatility overlay
 * richer industrial hypothesis testing
 * markdown plus retrieval hybrid
@@ -582,10 +610,32 @@ Selective sophistication.
 
 ### Key engineering tasks
 
+* add sidebar editing surface for structured segment memory fields
+* allow AI-proposed memory updates with human approval before persistence
 * bootstrap/Mack secondary tools
 * retrieval over curated internal docs
 * benchmark datasets and scoring scripts
 * regression suite for assistant behavior
+
+## Phase 4 - 6+ months
+
+Quarter-close workflow and valuation continuity.
+
+### Deliverables
+
+* real prior-quarter comparison workflow
+* persisted quarter memory and valuation continuity
+* quarter-close orchestration over prior and current valuation state
+* review-ready quarter-close pack grounded in true quarter comparison
+* quarter-close uncertainty section where useful
+
+### Key engineering tasks
+
+* persist and reload prior valuation state for quarter-close analysis
+* build quarter-close orchestration over prior/current snapshots
+* connect continuity memory into quarter-close review flow
+* extend quarter-close pack structure for review-ready sign-off support
+* add tests for quarter-over-quarter reasoning and continuity behavior
 
 # What the assistant should look like in practice
 
@@ -735,7 +785,7 @@ Fix: only store compact, curated, structured memory with timestamps and disposit
 5. Upgrade drop logic from heuristics to evidence-weighted scoring.
 6. Build a serious tail recommendation engine around supported tail estimators.
 7. Add BF suitability scoring by UWY.
-8. Add quarter-close pack generation.
+8. Build real quarter-close workflow and prior-quarter continuity.
 9. Add optional uncertainty overlays as secondary evidence only.
 10. Add benchmark-based release gating before every production upgrade.
 
@@ -772,13 +822,11 @@ Ship:
 * tail engine v2
 * BF suitability v1
 * ~~data anomaly triage v1~~
-* quarter-close playbook v1
 * ~~memory writeback from human dispositions v1~~
 
 Definition of done:
 
 * assistant can run end-to-end drop review and tail review with no manual prompting of each step
-* quarter-close workflow uses segment memory and reviewer gates
 
 ## Days 61-90
 
@@ -786,7 +834,6 @@ Definition of done:
 
 Ship:
 
-* quarter-close pack generator
 * memory writeback from human dispositions
 * scenario optimization v1
 * benchmark harness
@@ -803,9 +850,9 @@ If I were building this for your exact situation, I would do it in this order:
 
 **First**: planner + reviewer + policy engine + segment memory
 **Second**: stronger drop/tail/BF workflows
-**Third**: quarter-close package automation
-**Fourth**: optional stochastic overlays for sensitivity only
-**Fifth**: retrieval, but only after markdown context and memory start to hit scale limits
+**Third**: optional stochastic overlays for sensitivity only
+**Fourth**: retrieval, but only after markdown context and memory start to hit scale limits
+**Fifth**: real quarter-close workflow and prior-quarter continuity
 
 That gets you to a professional and reliable state much faster than chasing generic agent sophistication.
 

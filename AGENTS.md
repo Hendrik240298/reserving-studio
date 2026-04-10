@@ -12,10 +12,14 @@
 - `chainladder-python/docs/` contains Jupyter Book docs and notebooks.
 - `source/` contains local reserving workflow modules.
 - `Plan.md` is the main project plan and should be consulted before making changes.
+- `ai_implementation_plan_v2_april_2026.md` is the current AI roadmap summary and should be consulted for active AI phase priorities.
+- `ai_implementation_plan_v2_april_2026_phase2.md` records the completed detailed Phase 2 implementation plan.
+- `ai_implementation_plan_v2_april_2026_phase3.md` is the detailed Phase 3 implementation plan and should guide new Phase 3 work.
 - `AI_README.md` documents current AI capabilities and limits for reserving, diagnostics, and scenario testing.
 - `AI_CONTEXT.md` documents AI-specific terminology, notation, and prompt rules such as how to interpret "current quarter" and supported metric aliases.
 - `AI_PLAYBOOKS.md` documents preferred AI workflows by task type such as movement review, scenario recommendation, reserve change explanation, and data exploration.
 - `AI_EXAMPLES.md` documents few-shot examples of preferred AI tool usage and answer patterns.
+- `whitepaper/revision.md` tracks whitepaper claims that should be revised later to match current implementation and roadmap status.
 
 ## Project plan (must-read)
 - `Plan.md` is the heart of this repository; keep work aligned to its phases and scope.
@@ -25,16 +29,16 @@
 - `source/premium_repository.py` loads premium data.
 - `source/triangle.py` builds the reserving triangle.
 - `source/reserving.py` runs reserving (chainladder + Bornhuetter-Ferguson).
-- `source/dashboard.py` visualizes results (to be replaced by Dash GUI).
-- The orchestrator is usually a `main.py` entrypoint (currently not in the repo).
+- `source/dashboard.py` is the active browser workspace for reserving controls, results review, and AI-connected workflow surfaces.
 
 ### Plan priorities
-- Phase 1: make `source/` runnable, remove legacy ThresholdOptimizer, add Dash UI for drops.
-- Phase 2: persist UI selections to YAML in `sessions/` and add a load-session dropdown.
-- Phase 3: expand parameters (average method, tail curve, BF apriori, thresholds) with caching.
+- Phase 1 and Phase 2 of the AI roadmap are complete and should be treated as implemented baseline rather than open work.
+- Phase 3 is the current implementation focus: editable memory authoring UI, uncertainty overlays, industrial hypothesis workflows, retrieval hybrid, and release gating.
+- Phase 4 is reserved for real quarter-close workflow and prior-quarter valuation continuity.
+- When AI roadmap detail is needed, consult `ai_implementation_plan_v2_april_2026.md` first, then the dedicated phase plan file.
 
 ## Build, lint, and test
-- Run commands from `chainladder-python/` unless explicitly working in `source/`.
+- Run commands from the relevant project area. Use `chainladder-python/` for upstream library work, and run from the repo root when working on `source/`, `ai/`, or `tests/` unless a task explicitly requires a narrower working directory.
 - Use `uv` for environment management; `uv.lock` is present.
 
 ### Root environment setup (reserving)
@@ -149,7 +153,7 @@
 - Keep tests fast and isolated; avoid network or large data dependencies.
 
 ## Local `source/` conventions
-- Code here is WIP; some imports may be broken.
+- Code here is still evolving, but the current AI/backend/dashboard workflow is active and test-covered; do not assume modules are placeholders.
 - Keep changes minimal and focused; avoid large refactors unless requested.
 - Favor small, testable functions with explicit inputs.
 - Keep domain-specific logic in `source/` and avoid changing upstream unless needed.
@@ -189,4 +193,9 @@
 - Consult `AI_EXAMPLES.md` for few-shot examples that should shape assistant tool usage and answer structure.
 - The current AI should use the existing `source.reserving.Reserving` class and its supported configuration inputs.
 - The current AI can create distinct reserving scenarios by changing supported parameters such as Chainladder drops, tail settings, BF apriori, and final method selection, then run diagnostics on each scenario.
+- `Analysis Basis` is the current chat-carried reserving basis the user and AI are working from; basis-aware reserving tools should follow it unless the user explicitly asks for `baseline` or `current session`.
+- The live studio GUI/session state is not automatically the same as the AI chat `Analysis Basis`.
+- `chat_id` is the AI conversation identifier, `session_id` is the live reserving workspace/session identifier, and `scenario_id` is a chat-analysis scenario identifier for tested scenarios inside the AI flow.
+- `scenario_id` should not be treated as a general cross-system persistent reserving-state ID unless that behavior is explicitly implemented.
+- Some tools are intentionally basis-aware and others are intentionally session-scoped or evidence-scoped; follow `AI_README.md` rather than assuming all AI tools should carry scenario state forward.
 - The current AI should not claim to generate brand-new reserving algorithms unless that capability is explicitly implemented in code.

@@ -60,6 +60,8 @@
 - When a recommendation or recalculation changes the selected reserving setup, that tested setup becomes the new `Analysis Basis` unless the user explicitly switches back to `baseline` or `current session`.
 - For basis-aware tools, reuse the current `Analysis Basis` by default. Do not silently fall back to the raw session baseline.
 - If the user explicitly asks for `baseline` or `current session`, use the active session setup instead of the carried conversation basis.
+- The active Reserving Studio GUI state is the live session configuration. The AI `Analysis Basis` may differ from it when the conversation is working from a tested scenario or bespoke preview.
+- AI scenario preview should not silently persist changes back into the active GUI session.
 - If the user asks for exact numeric values, vectors, or tables about selected `LDF`, fitted tail factors, observed `a2a`, BF apriori, or method selection by UWY, load an exact-detail tool result first and answer from that payload only.
 - Do not answer exact numeric factor questions from narrative memory or from a recommendation summary.
 - If a user asks for a tail recommendation, prefer tested tail scenarios or explicitly label an idea as untested.

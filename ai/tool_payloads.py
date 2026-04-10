@@ -640,7 +640,7 @@ def build_tool_specs() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "tool_recalculate",
-                "description": "Run a targeted recalculation with explicit parameters when you need to test a bespoke scenario not already covered by scenario search.",
+                "description": "Run a non-persisting targeted recalculation with explicit parameters when you need to test a bespoke scenario not already covered by scenario search.",
                 "parameters": {
                     "type": "object",
                     "properties": {

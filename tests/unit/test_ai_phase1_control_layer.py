@@ -547,12 +547,59 @@ def test_recalculate_updates_analysis_basis_and_session_summary() -> None:
         ["2003", 9],
         ["2002", 21],
     ]
-    assert updated["session_summary"]["params"]["selected_ultimate_by_uwy"] == {
-        "2006": "bornhuetter_ferguson"
-    }
-    assert updated["scenario_basis_cache"]["baseline"]["parameters"]["bf_apriori"] == {
-        "2006": 0.563
-    }
+
+
+def test_preview_recalculate_keeps_session_summary_unchanged() -> None:
+    service = AssistantService.__new__(AssistantService)
+
+    updated = service._update_memory_state(
+        function_name="tool_recalculate",
+        tool_result={
+            "session_id": "s-1",
+            "analysis_basis": {
+                "basis_type": "bespoke",
+                "scenario_id": None,
+                "is_active_session": False,
+                "parameters": {
+                    "average": "volume",
+                    "drop": [["2003", 9]],
+                    "drop_valuation": [],
+                    "tail": {
+                        "curve": "weibull",
+                        "attachment_age": 27,
+                        "projection_period": 0,
+                        "fit_period": [12, 108],
+                    },
+                    "bf_apriori": {},
+                    "final_ultimate": "chainladder",
+                    "selected_ultimate_by_uwy": {},
+                },
+            },
+            "results_table_rows": [],
+            "duration_ms": 12,
+        },
+        memory_state={
+            "session_summary": {
+                "session_id": "s-1",
+                "segment": "industrial",
+                "params": {
+                    "average": "volume",
+                    "tail_curve": "weibull",
+                    "tail_attachment_age": None,
+                    "tail_projection_months": 0,
+                    "tail_fit_period_selection": [],
+                    "drop_store": [],
+                    "drop_count": 0,
+                    "bf_apriori_by_uwy": {},
+                    "selected_ultimate_by_uwy": {},
+                },
+            },
+            "scenario_basis_cache": {},
+        },
+    )
+
+    assert updated["analysis_basis"]["parameters"]["drop"] == [["2003", 9]]
+    assert updated["session_summary"]["params"]["drop_store"] == []
 
 
 def test_assistant_logs_deterministic_orchestration(caplog) -> None:

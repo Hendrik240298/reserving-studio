@@ -283,6 +283,7 @@ class InMemoryReservingBackend:
             if context is None:
                 raise LookupError(f"Session not found: {payload.session_id}")
 
+            original_params = self._params_from_store(context)
             drops = self._normalize_drop_pairs(payload.drop)
             drop_valuation = self._normalize_drop_valuation(payload.drop_valuation)
             fit_period = self._normalize_fit_period(payload.tail.fit_period)
@@ -291,6 +292,55 @@ class InMemoryReservingBackend:
             extrap_periods = tail_projection_months // months_per_dev
             projection_period = extrap_periods * months_per_dev
             normalized_average = Reserving._normalize_average(payload.average)
+
+            recalculate_params = {
+                "average": normalized_average,
+                "drop": payload.drop,
+                "drop_valuation": payload.drop_valuation,
+                "tail": {
+                    "curve": payload.tail.curve,
+                    "attachment_age": payload.tail.attachment_age,
+                    "projection_period": projection_period,
+                    "fit_period": payload.tail.fit_period,
+                },
+                "bf_apriori": dict(payload.bf_apriori),
+                "final_ultimate": payload.final_ultimate,
+                "selected_ultimate_by_uwy": dict(payload.selected_ultimate_by_uwy),
+            }
+
+            if not payload.persist_to_session:
+                results_payload = self._build_results_payload_for_params(
+                    context=context,
+                    params=recalculate_params,
+                )
+                response = RecalculateResponse(
+                    session_id=context.session_id,
+                    analysis_basis=self._build_analysis_basis_payload(
+                        session_id=context.session_id,
+                        basis_type="bespoke",
+                        scenario_id=None,
+                        parameters=recalculate_params,
+                        is_active_session=recalculate_params
+                        == self._clone_params(original_params),
+                    ),
+                    results_table_rows=results_payload.get("results_table_rows", []),
+                    triangle_figure=results_payload.get("triangle_figure", {}),
+                    emergence_figure=results_payload.get("emergence_figure", {}),
+                    heatmap_payload=results_payload.get("heatmap_payload", {}),
+                    cache_key=results_payload.get("cache_key", ""),
+                    model_cache_key=results_payload.get("model_cache_key", ""),
+                    figure_version=results_payload.get("figure_version"),
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                )
+                if self._observability_enabled:
+                    logger.info(
+                        "[OBS] recalculate.preview session_id=%s drop_count=%s tail_curve=%s duration_ms=%s",
+                        context.session_id,
+                        len(payload.drop),
+                        payload.tail.curve,
+                        response.duration_ms,
+                    )
+                return response
 
             context.reserving.set_development(
                 average=normalized_average,
@@ -343,17 +393,7 @@ class InMemoryReservingBackend:
                     session_id=context.session_id,
                     basis_type="bespoke",
                     scenario_id=None,
-                    parameters={
-                        "average": payload.average,
-                        "drop": payload.drop,
-                        "drop_valuation": payload.drop_valuation,
-                        "tail": payload.tail.model_dump(mode="json"),
-                        "bf_apriori": dict(payload.bf_apriori),
-                        "final_ultimate": payload.final_ultimate,
-                        "selected_ultimate_by_uwy": dict(
-                            payload.selected_ultimate_by_uwy
-                        ),
-                    },
+                    parameters=recalculate_params,
                     is_active_session=True,
                 ),
                 results_table_rows=results_payload.get("results_table_rows", []),

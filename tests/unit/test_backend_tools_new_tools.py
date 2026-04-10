@@ -33,6 +33,7 @@ from source.api.schemas import (
 class _BackendStub:
     def __init__(self) -> None:
         self.last_reserve_change_payload = None
+        self.last_recalculate_payload = None
 
     def get_data_view(self, payload):
         return DataViewResponse(
@@ -186,12 +187,13 @@ class _BackendStub:
         )
 
     def recalculate(self, payload):
+        self.last_recalculate_payload = payload
         return RecalculateResponse(
             session_id=payload.session_id,
             analysis_basis={
                 "basis_type": "bespoke",
                 "scenario_id": None,
-                "is_active_session": True,
+                "is_active_session": False,
             },
             results_table_rows=[
                 {
@@ -586,6 +588,7 @@ def test_backend_tools_support_new_ai_tools() -> None:
         },
     )
     assert recalc["analysis_basis"]["basis_type"] == "bespoke"
+    assert backend.last_recalculate_payload.persist_to_session is False
 
     result_row = tools.call_tool(
         "tool_get_result_for_uwy",

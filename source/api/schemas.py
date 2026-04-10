@@ -108,6 +108,7 @@ class RecalculateRequest(BaseModel):
     bf_apriori: dict[str, float] = Field(default_factory=dict)
     final_ultimate: SelectionMethod = "chainladder"
     selected_ultimate_by_uwy: dict[str, SelectionMethod] = Field(default_factory=dict)
+    persist_to_session: bool = True
 
 
 class RecalculateResponse(BaseModel):

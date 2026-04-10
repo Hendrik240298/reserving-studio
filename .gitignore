@@ -8,3 +8,4 @@ sessions/
 .env
 .env.local
 chats/**
+whitepaper/

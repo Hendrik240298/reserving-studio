@@ -30,6 +30,20 @@
 - `Analysis Basis` is not the same thing as the raw Dash GUI state unless the active session and the carried conversation model happen to match.
 - Not every tool is basis-aware. Raw data exploration, movement inspection, and cached evidence-drilldown tools can remain session-scoped or evidence-scoped when that is the correct behavior.
 
+## ID Definitions
+- `chat_id` is the AI conversation identifier. It tracks one chat interaction thread and its working memory.
+- `session_id` is the live reserving workspace/session identifier. It points to the active deterministic reserving state loaded in the studio/backend.
+- `scenario_id` is a chat-analysis scenario identifier. It refers to a tested reserving scenario discussed inside the AI flow, such as a baseline comparison, an iterated candidate, or a derived-drop scenario.
+- `scenario_id` is not the same thing as `chat_id`.
+- `scenario_id` is also not a general cross-system persistent reserving-state identifier unless a future implementation explicitly promotes it to that role.
+
+## Current Runtime State
+- The AI chat is currently session-aware: its baseline comes from the real active reserving session, not from a dummy or placeholder state.
+- The Reserving Studio GUI state is the live active session configuration shown in the application controls.
+- The AI chat `Analysis Basis` is the model setup the conversation is currently reasoning from. It can match the active GUI session, or it can differ when the conversation has moved onto a tested scenario or bespoke preview.
+- Current AI bespoke recalculation is preview-only for chat use: it can update the carried `Analysis Basis` and return scenario outputs, but it must not silently persist changes back into the active Reserving Studio GUI session.
+- In short: GUI state is the live studio session; AI basis state is the current conversation model.
+
 ## What the AI can do
 - Recalculate a reserving session with bespoke parameters using the existing `Reserving` class.
 - Create distinct reserving results by changing drops, tail assumptions, BF apriori, or final method selection.
@@ -69,7 +83,7 @@
 - `tool_get_finding_detail`: drill into one diagnostic finding or recommendation.
 - `tool_get_scenario_detail`: drill into one scenario from the latest iteration run.
 - `tool_get_result_for_uwy`: get one underwriting year result row for targeted comparison.
-- `tool_recalculate`: run a bespoke recalculation with explicit parameters.
+- `tool_recalculate`: run a bespoke non-persisting recalculation with explicit parameters for AI scenario preview.
 
 ## Basis-aware vs session-scoped tools
 - Basis-aware tools are the ones that materially depend on reserving assumptions, scenario state, or modeled results. These should follow `Analysis Basis` by default.

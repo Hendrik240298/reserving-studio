@@ -1764,7 +1764,11 @@ class AssistantService:
             current["results_summary"] = dict(tool_result)
             if function_name == "tool_recalculate":
                 basis = tool_result.get("analysis_basis")
-                if isinstance(basis, dict) and basis:
+                if (
+                    isinstance(basis, dict)
+                    and basis
+                    and bool(basis.get("is_active_session"))
+                ):
                     current["session_summary"] = (
                         AssistantService._session_summary_with_basis(
                             current.get("session_summary"),
