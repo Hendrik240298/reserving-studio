@@ -1,7 +1,5 @@
 # reserving-studio
 
-This is currently a personal project to build a reserving workflow, including a minimalistic GUI, to familiarize myself with and learn the amazing `chainladder-python` package for actuarial loss reserving.
-
 ## Preview
 
 ### AI Chat Interface 
