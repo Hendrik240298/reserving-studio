@@ -9,6 +9,7 @@ def build_deterministic_packet(
     review: dict[str, Any],
     recommendation: dict[str, Any],
     evidence_packets: list[dict[str, Any]],
+    memory_update_proposals: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     evidence_ids = _collect_evidence_ids(evidence_packets)
     caveats = review.get("caveats") if isinstance(review.get("caveats"), list) else []
@@ -34,6 +35,11 @@ def build_deterministic_packet(
         "score_breakdown": score_breakdown,
         "policy_trace": policy_trace,
         "recommended_changes": recommended_changes,
+        "memory_update_proposals": [
+            dict(item)
+            for item in (memory_update_proposals or [])
+            if isinstance(item, dict)
+        ],
         "presentation": {
             "conclusion": recommendation.get("status"),
             "evidence_used": evidence_ids,

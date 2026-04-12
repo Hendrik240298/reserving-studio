@@ -118,3 +118,37 @@ def test_analysis_basis_rows_label_bespoke_basis_without_baseline_scenario_name(
     )
 
     assert rows[3] == {"field": "Scenario", "value": "custom parameter basis"}
+
+
+def test_memory_proposal_options_render_expected_labels() -> None:
+    options = AIDashboard._memory_proposal_options(
+        [
+            {
+                "proposal_id": "mem-1",
+                "field": "open_items",
+            }
+        ]
+    )
+
+    assert options == [{"label": "open_items: mem-1", "value": "mem-1"}]
+
+
+def test_memory_payload_outputs_render_structured_preference_summary() -> None:
+    outputs = AIDashboard._memory_payload_outputs(
+        {
+            "segment_overview": "Industrial liability book.",
+            "known_issues_text": "Issue A",
+            "house_preferences_text": "Prefer stable tail",
+            "recent_quarter_notes_text": "2026Q1 | Case strengthening",
+            "open_items_text": "Review reporting lag",
+            "structured_house_preferences": [{"type": "max_drop_count", "value": 1}],
+            "memory_change_log": [
+                {"field": "open_items", "action": "save_manual_update"}
+            ],
+        },
+        status="saved",
+    )
+
+    assert outputs[1] == "Industrial liability book."
+    assert "max_drop_count=1" in outputs[6]
+    assert outputs[8] == "saved"

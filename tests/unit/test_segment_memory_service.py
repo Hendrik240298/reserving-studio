@@ -26,7 +26,7 @@ def test_segment_memory_service_migrates_v1_rejections() -> None:
         segment="industrial",
     )
 
-    assert loaded["schema_version"] == 2
+    assert loaded["schema_version"] == 3
     assert loaded["segment_id"] == "industrial"
     assert loaded["scenario_dispositions"][0]["scenario_signature"] == "abc123"
     assert loaded["scenario_dispositions"][0]["decision"] == "rejected"
@@ -111,3 +111,33 @@ def test_segment_memory_append_scenario_disposition_replaces_same_signature() ->
 
     assert len(updated["scenario_dispositions"]) == 1
     assert updated["scenario_dispositions"][0]["decision"] == "accepted"
+
+
+def test_segment_memory_loads_phase3_authoring_fields() -> None:
+    loaded = SegmentMemoryService().load(
+        {
+            "segment_id": "industrial",
+            "segment_overview": "US industrial liability book.",
+            "open_items": ["Review TPA reporting lag shift"],
+            "recent_quarter_notes": [
+                {
+                    "period": "2026Q1",
+                    "note": "Case strengthening followed claims review",
+                }
+            ],
+            "memory_change_log": [
+                {
+                    "field": "open_items",
+                    "action": "approve_proposal",
+                    "summary": "Carry forward reporting lag review",
+                }
+            ],
+        },
+        segment="industrial",
+    )
+
+    assert loaded["schema_version"] == 3
+    assert loaded["segment_overview"] == "US industrial liability book."
+    assert loaded["open_items"] == ["Review TPA reporting lag shift"]
+    assert loaded["recent_quarter_notes"][0]["period"] == "2026Q1"
+    assert loaded["memory_change_log"][0]["field"] == "open_items"

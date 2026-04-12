@@ -154,6 +154,25 @@ class AIChatService:
             raise LookupError(f"Chat session not found: {chat_id}")
         return self._build_response(session)
 
+    def update_working_memory_fields(
+        self,
+        chat_id: str,
+        *,
+        fields: dict[str, Any],
+    ) -> dict[str, Any]:
+        session = self._store.get_chat(chat_id)
+        if session is None:
+            raise LookupError(f"Chat session not found: {chat_id}")
+        next_memory = dict(session.working_memory)
+        next_memory.update(dict(fields or {}))
+        updated = self._store.update_memory(
+            chat_id,
+            working_memory=next_memory,
+            scenario_ledger=session.scenario_ledger,
+            deterministic_packet=session.deterministic_packet,
+        )
+        return self._build_response(updated)
+
     def _build_response(self, refreshed: ChatSession) -> dict[str, Any]:
         analysis_basis = (
             refreshed.working_memory.get("analysis_basis")
@@ -172,6 +191,13 @@ class AIChatService:
             "analysis_basis": dict(analysis_basis),
             "scenario_ledger": [dict(item) for item in refreshed.scenario_ledger],
             "deterministic_packet": dict(refreshed.deterministic_packet),
+            "memory_update_proposals": [
+                dict(item)
+                for item in refreshed.working_memory.get("memory_update_proposals", [])
+                if isinstance(item, dict)
+            ]
+            if isinstance(refreshed.working_memory.get("memory_update_proposals"), list)
+            else [],
             "streaming": bool(refreshed.metadata.get("streaming")),
             "stream_status": str(refreshed.metadata.get("stream_status", "")),
             "updated_at": refreshed.updated_at,

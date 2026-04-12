@@ -66,6 +66,46 @@ class ReviewerGate:
         )
 
     @staticmethod
+    def validate_memory_update_proposals(
+        proposals: list[dict[str, Any]] | None,
+        *,
+        evidence_packets: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not isinstance(proposals, list):
+            return []
+        available_evidence = ReviewerGate._collect_available_evidence_ids(
+            evidence_packets
+        )
+        allowed_fields = {
+            "segment_overview",
+            "known_issues",
+            "recent_quarter_notes",
+            "open_items",
+        }
+        validated: list[dict[str, Any]] = []
+        for item in proposals:
+            if not isinstance(item, dict):
+                continue
+            field = str(item.get("field", "")).strip()
+            operation = str(item.get("operation", "")).strip().lower()
+            rationale = str(item.get("rationale", "")).strip()
+            if field not in allowed_fields or operation not in {"append", "replace"}:
+                continue
+            if not rationale:
+                continue
+            evidence_ids = item.get("evidence_ids")
+            if isinstance(evidence_ids, list):
+                normalized_ids = [
+                    str(entry).strip() for entry in evidence_ids if str(entry).strip()
+                ]
+                if normalized_ids and not set(normalized_ids).issubset(
+                    available_evidence
+                ):
+                    continue
+            validated.append(dict(item))
+        return validated
+
+    @staticmethod
     def _has_unsupported_method(evidence_packets: list[dict[str, Any]]) -> bool:
         supported = {"chainladder", "bornhuetter_ferguson"}
         supported_tail_curves = {"weibull", "exponential", "inverse_power"}
@@ -293,3 +333,21 @@ class ReviewerGate:
             if bool(candidate_trace.get(flag_name)):
                 return True
         return False
+
+    @staticmethod
+    def _collect_available_evidence_ids(
+        evidence_packets: list[dict[str, Any]],
+    ) -> set[str]:
+        available: set[str] = set()
+        for packet in evidence_packets:
+            provenance = packet.get("provenance") if isinstance(packet, dict) else None
+            if not isinstance(provenance, dict):
+                continue
+            evidence_ids = provenance.get("evidence_ids")
+            if not isinstance(evidence_ids, list):
+                continue
+            for item in evidence_ids:
+                value = str(item).strip()
+                if value:
+                    available.add(value)
+        return available

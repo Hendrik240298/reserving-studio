@@ -9,6 +9,7 @@ from dash import Dash, Input, Output, State, ctx, dcc, html, dash_table, no_upda
 from ai.chat_service import AIChatService
 from source.config_manager import ConfigManager
 from source.reserving import Reserving
+from source.services.memory_authoring_service import MemoryAuthoringService
 
 
 FONT_FAMILY = '"Manrope", "Segoe UI", "Helvetica Neue", Arial, sans-serif'
@@ -75,6 +76,7 @@ class AIDashboard:
         self._config = config
         self._chat_service = chat_service
         self._chat_id = chat_id
+        self._memory_authoring_service = MemoryAuthoringService()
         assets_folder = Path(__file__).resolve().parent.parent / "assets"
         self.app = Dash(
             __name__,
@@ -110,6 +112,7 @@ class AIDashboard:
             Output("ai-chat-tool-events-store", "data"),
             Output("ai-chat-scenario-ledger-store", "data"),
             Output("ai-chat-analysis-basis-store", "data"),
+            Output("ai-memory-proposals-store", "data"),
             Output("ai-chat-transcript", "children"),
             Output("ai-analysis-trace", "data"),
             Output("ai-chat-evidence-trace", "data"),
@@ -122,11 +125,13 @@ class AIDashboard:
             tool_events = self._initial_tool_events()
             scenario_ledger = self._initial_scenario_ledger()
             analysis_basis = self._initial_analysis_basis()
+            proposals = self._initial_memory_proposals()
             return (
                 history,
                 tool_events,
                 scenario_ledger,
                 analysis_basis,
+                proposals,
                 self._render_chat_messages(history),
                 self._tool_event_rows(tool_events),
                 self._chat_evidence_rows(tool_events),
@@ -139,6 +144,7 @@ class AIDashboard:
             Output("ai-chat-tool-events-store", "data", allow_duplicate=True),
             Output("ai-chat-scenario-ledger-store", "data", allow_duplicate=True),
             Output("ai-chat-analysis-basis-store", "data", allow_duplicate=True),
+            Output("ai-memory-proposals-store", "data", allow_duplicate=True),
             Output("ai-chat-transcript", "children", allow_duplicate=True),
             Output("ai-chat-input", "value"),
             Output("ai-chat-status", "children"),
@@ -175,6 +181,7 @@ class AIDashboard:
                     no_update,
                     no_update,
                     no_update,
+                    no_update,
                 )
             if self._chat_service is None or not self._chat_id:
                 return (
@@ -183,7 +190,9 @@ class AIDashboard:
                     no_update,
                     no_update,
                     no_update,
+                    no_update,
                     "AI chat backend is not configured.",
+                    no_update,
                     no_update,
                     no_update,
                     no_update,
@@ -207,6 +216,7 @@ class AIDashboard:
                     self._initial_tool_events(),
                     self._initial_scenario_ledger(),
                     self._initial_analysis_basis(),
+                    self._initial_memory_proposals(),
                     self._render_chat_messages(normalized),
                     "",
                     "AI response failed.",
@@ -219,6 +229,7 @@ class AIDashboard:
             messages = response.get("messages")
             if not isinstance(messages, list):
                 return (
+                    no_update,
                     no_update,
                     no_update,
                     no_update,
@@ -248,6 +259,12 @@ class AIDashboard:
             normalized_analysis_basis = (
                 dict(analysis_basis) if isinstance(analysis_basis, dict) else {}
             )
+            proposals = response.get("memory_update_proposals")
+            normalized_proposals = (
+                [dict(item) for item in proposals if isinstance(item, dict)]
+                if isinstance(proposals, list)
+                else []
+            )
             status = (
                 "AI fallback summary used." if response.get("fallback_used") else ""
             )
@@ -256,6 +273,7 @@ class AIDashboard:
                 normalized_tool_events,
                 normalized_scenario_ledger,
                 normalized_analysis_basis,
+                normalized_proposals,
                 self._render_chat_messages(messages),
                 "",
                 status,
@@ -271,6 +289,7 @@ class AIDashboard:
             Output("ai-chat-tool-events-store", "data", allow_duplicate=True),
             Output("ai-chat-scenario-ledger-store", "data", allow_duplicate=True),
             Output("ai-chat-analysis-basis-store", "data", allow_duplicate=True),
+            Output("ai-memory-proposals-store", "data", allow_duplicate=True),
             Output("ai-chat-transcript", "children", allow_duplicate=True),
             Output("ai-chat-status", "children", allow_duplicate=True),
             Output("ai-analysis-trace", "data", allow_duplicate=True),
@@ -284,6 +303,7 @@ class AIDashboard:
         def _poll_chat(_n_intervals):
             if self._chat_service is None or not self._chat_id:
                 return (
+                    no_update,
                     no_update,
                     no_update,
                     no_update,
@@ -313,6 +333,7 @@ class AIDashboard:
                     no_update,
                     no_update,
                     no_update,
+                    no_update,
                     True,
                 )
             normalized_tool_events = (
@@ -328,6 +349,12 @@ class AIDashboard:
             normalized_analysis_basis = (
                 dict(analysis_basis) if isinstance(analysis_basis, dict) else {}
             )
+            proposals = response.get("memory_update_proposals")
+            normalized_proposals = (
+                [dict(item) for item in proposals if isinstance(item, dict)]
+                if isinstance(proposals, list)
+                else []
+            )
             status = (
                 "AI fallback summary used." if response.get("fallback_used") else ""
             )
@@ -336,6 +363,7 @@ class AIDashboard:
                 normalized_tool_events,
                 normalized_scenario_ledger,
                 normalized_analysis_basis,
+                normalized_proposals,
                 self._render_chat_messages(messages),
                 status,
                 self._tool_event_rows(normalized_tool_events),
@@ -345,8 +373,217 @@ class AIDashboard:
                 not bool(response.get("streaming")),
             )
 
+        @self.app.callback(
+            Output("ai-segment-memory-store", "data"),
+            Output("ai-memory-segment-overview", "value"),
+            Output("ai-memory-known-issues", "value"),
+            Output("ai-memory-house-preferences", "value"),
+            Output("ai-memory-recent-quarter-notes", "value"),
+            Output("ai-memory-open-items", "value"),
+            Output("ai-memory-structured-preferences", "children"),
+            Output("ai-memory-change-log", "data"),
+            Output("ai-memory-status", "children"),
+            Input("ai-refresh-review", "n_clicks"),
+        )
+        def _refresh_memory(_n_clicks):
+            return self._memory_payload_outputs(
+                self._initial_segment_memory_payload(),
+                status="",
+            )
+
+        @self.app.callback(
+            Output("ai-segment-memory-store", "data", allow_duplicate=True),
+            Output("ai-memory-segment-overview", "value", allow_duplicate=True),
+            Output("ai-memory-known-issues", "value", allow_duplicate=True),
+            Output("ai-memory-house-preferences", "value", allow_duplicate=True),
+            Output("ai-memory-recent-quarter-notes", "value", allow_duplicate=True),
+            Output("ai-memory-open-items", "value", allow_duplicate=True),
+            Output(
+                "ai-memory-structured-preferences", "children", allow_duplicate=True
+            ),
+            Output("ai-memory-change-log", "data", allow_duplicate=True),
+            Output("ai-memory-status", "children", allow_duplicate=True),
+            Input("ai-memory-save-button", "n_clicks"),
+            State("ai-memory-segment-overview", "value"),
+            State("ai-memory-known-issues", "value"),
+            State("ai-memory-house-preferences", "value"),
+            State("ai-memory-recent-quarter-notes", "value"),
+            State("ai-memory-open-items", "value"),
+            prevent_initial_call=True,
+        )
+        def _save_memory(
+            n_clicks,
+            segment_overview,
+            known_issues,
+            house_preferences,
+            recent_quarter_notes,
+            open_items,
+        ):
+            if not n_clicks:
+                return self._memory_payload_outputs(no_update, status=no_update)
+            if self._config is None:
+                return self._memory_payload_outputs(
+                    self._initial_segment_memory_payload(),
+                    status="Memory persistence is not configured.",
+                )
+            memory = self._memory_authoring_service.save_manual_update(
+                config=self._config,
+                segment=self._current_segment(),
+                fields={
+                    "segment_overview": segment_overview,
+                    "known_issues_text": known_issues,
+                    "house_preferences_text": house_preferences,
+                    "recent_quarter_notes_text": recent_quarter_notes,
+                    "open_items_text": open_items,
+                },
+                editor="ai_dashboard",
+            )
+            return self._memory_payload_outputs(
+                self._memory_authoring_service.build_ui_payload(memory),
+                status="Segment memory saved.",
+            )
+
+        @self.app.callback(
+            Output("ai-memory-proposal-selector", "options"),
+            Output("ai-memory-proposal-selector", "value"),
+            Output("ai-memory-proposal-field", "children"),
+            Output("ai-memory-proposal-rationale", "children"),
+            Output("ai-memory-proposal-evidence", "children"),
+            Output("ai-memory-proposal-editor", "value"),
+            Input("ai-memory-proposals-store", "data"),
+            State("ai-memory-proposal-selector", "value"),
+        )
+        def _sync_memory_proposals(proposals, selected_proposal_id):
+            normalized = (
+                [dict(item) for item in proposals if isinstance(item, dict)]
+                if isinstance(proposals, list)
+                else []
+            )
+            options = self._memory_proposal_options(normalized)
+            selected = (
+                selected_proposal_id
+                if any(
+                    str(item.get("value")) == str(selected_proposal_id)
+                    for item in options
+                )
+                else (options[0]["value"] if options else None)
+            )
+            proposal = self._proposal_by_id(normalized, selected)
+            return (
+                options,
+                selected,
+                self._proposal_field_label(proposal),
+                self._proposal_rationale_label(proposal),
+                self._proposal_evidence_label(proposal),
+                self._proposal_editable_value(proposal),
+            )
+
+        @self.app.callback(
+            Output("ai-memory-proposals-store", "data", allow_duplicate=True),
+            Output("ai-segment-memory-store", "data", allow_duplicate=True),
+            Output("ai-memory-segment-overview", "value", allow_duplicate=True),
+            Output("ai-memory-known-issues", "value", allow_duplicate=True),
+            Output("ai-memory-house-preferences", "value", allow_duplicate=True),
+            Output("ai-memory-recent-quarter-notes", "value", allow_duplicate=True),
+            Output("ai-memory-open-items", "value", allow_duplicate=True),
+            Output(
+                "ai-memory-structured-preferences", "children", allow_duplicate=True
+            ),
+            Output("ai-memory-change-log", "data", allow_duplicate=True),
+            Output("ai-memory-status", "children", allow_duplicate=True),
+            Input("ai-memory-apply-proposal", "n_clicks"),
+            Input("ai-memory-reject-proposal", "n_clicks"),
+            State("ai-memory-proposals-store", "data"),
+            State("ai-memory-proposal-selector", "value"),
+            State("ai-memory-proposal-editor", "value"),
+            prevent_initial_call=True,
+        )
+        def _handle_memory_proposal(
+            apply_clicks,
+            reject_clicks,
+            proposals,
+            proposal_id,
+            edited_value,
+        ):
+            del apply_clicks, reject_clicks
+            normalized = (
+                [dict(item) for item in proposals if isinstance(item, dict)]
+                if isinstance(proposals, list)
+                else []
+            )
+            proposal = self._proposal_by_id(normalized, proposal_id)
+            if not proposal:
+                return (
+                    normalized,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    "Select a memory proposal first.",
+                )
+            if self._config is None:
+                return (
+                    normalized,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    "Memory persistence is not configured.",
+                )
+            triggered = str(ctx.triggered_id or "")
+            if triggered == "ai-memory-reject-proposal":
+                updated_proposals = [
+                    item
+                    for item in normalized
+                    if item.get("proposal_id") != proposal_id
+                ]
+                self._persist_memory_proposals(updated_proposals)
+                return (
+                    updated_proposals,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    "Memory proposal rejected.",
+                )
+            applied_memory, _approved = (
+                self._memory_authoring_service.apply_memory_proposal(
+                    config=self._config,
+                    segment=self._current_segment(),
+                    proposal=proposal,
+                    approver="ai_dashboard",
+                    edited_value=self._coerce_edited_proposal_value(
+                        proposal, edited_value
+                    ),
+                )
+            )
+            updated_proposals = [
+                item for item in normalized if item.get("proposal_id") != proposal_id
+            ]
+            self._persist_memory_proposals(updated_proposals)
+            return (
+                updated_proposals,
+                *self._memory_payload_outputs(
+                    self._memory_authoring_service.build_ui_payload(applied_memory),
+                    status="Memory proposal applied.",
+                ),
+            )
+
     def _create_layout(self):
         history = self._initial_chat_history()
+        initial_memory_payload = self._initial_segment_memory_payload()
         return html.Div(
             [
                 dcc.Store(id="ai-sidebar-open", data=False),
@@ -361,6 +598,14 @@ class AIDashboard:
                 dcc.Store(
                     id="ai-chat-analysis-basis-store",
                     data=self._initial_analysis_basis(),
+                ),
+                dcc.Store(
+                    id="ai-segment-memory-store",
+                    data=initial_memory_payload,
+                ),
+                dcc.Store(
+                    id="ai-memory-proposals-store",
+                    data=self._initial_memory_proposals(),
                 ),
                 dcc.Interval(
                     id="ai-chat-poll", interval=1000, n_intervals=0, disabled=True
@@ -528,14 +773,14 @@ class AIDashboard:
                                 html.Div(
                                     [
                                         html.Div(
-                                            "Evidence And Traceability",
+                                            "Memory, Evidence And Traceability",
                                             style={
                                                 "fontSize": "18px",
                                                 "fontWeight": 700,
                                             },
                                         ),
                                         html.Div(
-                                            "Open the sections below when you want the evidence cited in chat or the tool and scenario history behind the conversation.",
+                                            "Use the sections below to maintain segment memory, review pending AI memory proposals, and inspect the evidence behind the conversation.",
                                             style={
                                                 "color": COLOR_MUTED,
                                                 "fontSize": "13px",
@@ -544,6 +789,307 @@ class AIDashboard:
                                         ),
                                     ],
                                     style={"marginBottom": "14px"},
+                                ),
+                                html.Details(
+                                    [
+                                        html.Summary(
+                                            "Segment Memory",
+                                            style={
+                                                "cursor": "pointer",
+                                                "fontWeight": 600,
+                                            },
+                                        ),
+                                        html.Div(
+                                            [
+                                                html.Div(
+                                                    "This is the persisted segment memory the AI can use for future continuity and review context.",
+                                                    style={
+                                                        "color": COLOR_MUTED,
+                                                        "fontSize": "13px",
+                                                        "margin": "12px 0",
+                                                    },
+                                                ),
+                                                html.Label(
+                                                    "Segment Overview",
+                                                    style={
+                                                        "fontWeight": 600,
+                                                        "fontSize": "13px",
+                                                    },
+                                                ),
+                                                dcc.Textarea(
+                                                    id="ai-memory-segment-overview",
+                                                    value=initial_memory_payload.get(
+                                                        "segment_overview", ""
+                                                    ),
+                                                    style=self._memory_textarea_style(
+                                                        height="88px"
+                                                    ),
+                                                ),
+                                                html.Label(
+                                                    "Known Issues",
+                                                    style={
+                                                        "fontWeight": 600,
+                                                        "fontSize": "13px",
+                                                        "marginTop": "12px",
+                                                        "display": "block",
+                                                    },
+                                                ),
+                                                dcc.Textarea(
+                                                    id="ai-memory-known-issues",
+                                                    value=initial_memory_payload.get(
+                                                        "known_issues_text", ""
+                                                    ),
+                                                    style=self._memory_textarea_style(
+                                                        height="110px"
+                                                    ),
+                                                ),
+                                                html.Label(
+                                                    "House Preferences",
+                                                    style={
+                                                        "fontWeight": 600,
+                                                        "fontSize": "13px",
+                                                        "marginTop": "12px",
+                                                        "display": "block",
+                                                    },
+                                                ),
+                                                dcc.Textarea(
+                                                    id="ai-memory-house-preferences",
+                                                    value=initial_memory_payload.get(
+                                                        "house_preferences_text", ""
+                                                    ),
+                                                    style=self._memory_textarea_style(
+                                                        height="90px"
+                                                    ),
+                                                ),
+                                                html.Div(
+                                                    self._structured_preference_summary(
+                                                        initial_memory_payload.get(
+                                                            "structured_house_preferences",
+                                                            [],
+                                                        )
+                                                    ),
+                                                    id="ai-memory-structured-preferences",
+                                                    style={
+                                                        "marginTop": "8px",
+                                                        "fontSize": "12px",
+                                                        "color": COLOR_MUTED,
+                                                        "whiteSpace": "pre-wrap",
+                                                    },
+                                                ),
+                                                html.Label(
+                                                    "Recent Quarter Notes",
+                                                    style={
+                                                        "fontWeight": 600,
+                                                        "fontSize": "13px",
+                                                        "marginTop": "12px",
+                                                        "display": "block",
+                                                    },
+                                                ),
+                                                dcc.Textarea(
+                                                    id="ai-memory-recent-quarter-notes",
+                                                    value=initial_memory_payload.get(
+                                                        "recent_quarter_notes_text", ""
+                                                    ),
+                                                    style=self._memory_textarea_style(
+                                                        height="110px"
+                                                    ),
+                                                ),
+                                                html.Div(
+                                                    "Use one line per note, formatted as '2026Q1 | note'.",
+                                                    style={
+                                                        "fontSize": "12px",
+                                                        "color": COLOR_MUTED,
+                                                        "marginTop": "6px",
+                                                    },
+                                                ),
+                                                html.Label(
+                                                    "Open Items",
+                                                    style={
+                                                        "fontWeight": 600,
+                                                        "fontSize": "13px",
+                                                        "marginTop": "12px",
+                                                        "display": "block",
+                                                    },
+                                                ),
+                                                dcc.Textarea(
+                                                    id="ai-memory-open-items",
+                                                    value=initial_memory_payload.get(
+                                                        "open_items_text", ""
+                                                    ),
+                                                    style=self._memory_textarea_style(
+                                                        height="96px"
+                                                    ),
+                                                ),
+                                                html.Div(
+                                                    [
+                                                        html.Button(
+                                                            "Save Memory",
+                                                            id="ai-memory-save-button",
+                                                            n_clicks=0,
+                                                            style=self._primary_button_style(),
+                                                        ),
+                                                    ],
+                                                    style={
+                                                        "display": "flex",
+                                                        "gap": "10px",
+                                                        "marginTop": "14px",
+                                                    },
+                                                ),
+                                                html.Div(
+                                                    "",
+                                                    id="ai-memory-status",
+                                                    style={
+                                                        "fontSize": "12px",
+                                                        "color": COLOR_MUTED,
+                                                        "marginTop": "10px",
+                                                    },
+                                                ),
+                                                dash_table.DataTable(
+                                                    id="ai-memory-change-log",
+                                                    columns=[
+                                                        {
+                                                            "name": "Field",
+                                                            "id": "field",
+                                                        },
+                                                        {
+                                                            "name": "Action",
+                                                            "id": "action",
+                                                        },
+                                                        {
+                                                            "name": "Summary",
+                                                            "id": "summary",
+                                                        },
+                                                        {
+                                                            "name": "When",
+                                                            "id": "updated_at",
+                                                        },
+                                                    ],
+                                                    data=initial_memory_payload.get(
+                                                        "memory_change_log", []
+                                                    ),
+                                                    style_table={
+                                                        "overflowX": "auto",
+                                                        "marginTop": "14px",
+                                                    },
+                                                    style_cell=self._table_cell_style(),
+                                                    style_header=self._table_header_style(),
+                                                ),
+                                            ]
+                                        ),
+                                    ],
+                                    style={
+                                        "background": COLOR_SURFACE,
+                                        "border": f"1px solid {COLOR_BORDER}",
+                                        "borderRadius": RADIUS_LG,
+                                        "padding": "14px",
+                                        "boxShadow": SHADOW_SOFT,
+                                        "overflowX": "auto",
+                                    },
+                                ),
+                                html.Details(
+                                    [
+                                        html.Summary(
+                                            "Pending Memory Proposals",
+                                            style={
+                                                "cursor": "pointer",
+                                                "fontWeight": 600,
+                                            },
+                                        ),
+                                        html.Div(
+                                            [
+                                                html.Div(
+                                                    "The assistant can suggest memory updates, but nothing persists until you explicitly apply it.",
+                                                    style={
+                                                        "color": COLOR_MUTED,
+                                                        "fontSize": "13px",
+                                                        "margin": "12px 0",
+                                                    },
+                                                ),
+                                                dcc.Dropdown(
+                                                    id="ai-memory-proposal-selector",
+                                                    options=self._memory_proposal_options(
+                                                        self._initial_memory_proposals()
+                                                    ),
+                                                    value=(
+                                                        self._memory_proposal_options(
+                                                            self._initial_memory_proposals()
+                                                        )[0]["value"]
+                                                        if self._memory_proposal_options(
+                                                            self._initial_memory_proposals()
+                                                        )
+                                                        else None
+                                                    ),
+                                                    placeholder="No pending memory proposals",
+                                                    clearable=False,
+                                                ),
+                                                html.Div(
+                                                    "Field: none",
+                                                    id="ai-memory-proposal-field",
+                                                    style={
+                                                        "fontSize": "13px",
+                                                        "fontWeight": 600,
+                                                        "marginTop": "12px",
+                                                    },
+                                                ),
+                                                html.Div(
+                                                    "Rationale: none",
+                                                    id="ai-memory-proposal-rationale",
+                                                    style={
+                                                        "fontSize": "12px",
+                                                        "color": COLOR_MUTED,
+                                                        "marginTop": "8px",
+                                                        "whiteSpace": "pre-wrap",
+                                                    },
+                                                ),
+                                                html.Div(
+                                                    "Evidence: none",
+                                                    id="ai-memory-proposal-evidence",
+                                                    style={
+                                                        "fontSize": "12px",
+                                                        "color": COLOR_MUTED,
+                                                        "marginTop": "6px",
+                                                    },
+                                                ),
+                                                dcc.Textarea(
+                                                    id="ai-memory-proposal-editor",
+                                                    value="",
+                                                    style=self._memory_textarea_style(
+                                                        height="96px"
+                                                    ),
+                                                ),
+                                                html.Div(
+                                                    [
+                                                        html.Button(
+                                                            "Apply Proposal",
+                                                            id="ai-memory-apply-proposal",
+                                                            n_clicks=0,
+                                                            style=self._primary_button_style(),
+                                                        ),
+                                                        html.Button(
+                                                            "Reject Proposal",
+                                                            id="ai-memory-reject-proposal",
+                                                            n_clicks=0,
+                                                            style=self._secondary_button_style(),
+                                                        ),
+                                                    ],
+                                                    style={
+                                                        "display": "flex",
+                                                        "gap": "10px",
+                                                        "marginTop": "14px",
+                                                        "flexWrap": "wrap",
+                                                    },
+                                                ),
+                                            ]
+                                        ),
+                                    ],
+                                    style={
+                                        "background": COLOR_SURFACE,
+                                        "border": f"1px solid {COLOR_BORDER}",
+                                        "borderRadius": RADIUS_LG,
+                                        "padding": "14px",
+                                        "boxShadow": SHADOW_SOFT,
+                                        "overflowX": "auto",
+                                    },
                                 ),
                                 html.Details(
                                     [
@@ -797,6 +1343,188 @@ class AIDashboard:
                 )
                 return dict(basis)
         return {}
+
+    def _current_segment(self) -> str | None:
+        if self._chat_service is not None and self._chat_id:
+            session = self._chat_service.get_chat(self._chat_id)
+            if (
+                session is not None
+                and isinstance(session.segment, str)
+                and session.segment.strip()
+            ):
+                return session.segment.strip()
+        if self._config is not None:
+            segment = self._config.get_segment()
+            if isinstance(segment, str) and segment.strip():
+                return segment.strip()
+        return None
+
+    def _initial_segment_memory_payload(self) -> dict[str, Any]:
+        memory = self._memory_authoring_service.load_for_segment(
+            config=self._config,
+            segment=self._current_segment(),
+        )
+        return self._memory_authoring_service.build_ui_payload(memory)
+
+    def _initial_memory_proposals(self) -> list[dict[str, Any]]:
+        if self._chat_service is not None and self._chat_id:
+            session = self._chat_service.get_chat(self._chat_id)
+            if session is not None and isinstance(
+                session.working_memory.get("memory_update_proposals"), list
+            ):
+                return [
+                    dict(item)
+                    for item in session.working_memory.get(
+                        "memory_update_proposals", []
+                    )
+                    if isinstance(item, dict)
+                ]
+        return []
+
+    def _persist_memory_proposals(self, proposals: list[dict[str, Any]]) -> None:
+        if self._chat_service is None or not self._chat_id:
+            return
+        self._chat_service.update_working_memory_fields(
+            self._chat_id,
+            fields={
+                "memory_update_proposals": [
+                    dict(item) for item in proposals if isinstance(item, dict)
+                ]
+            },
+        )
+
+    @staticmethod
+    def _memory_payload_outputs(payload: Any, *, status: Any) -> tuple[Any, ...]:
+        if payload is no_update:
+            return (
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                status,
+            )
+        if not isinstance(payload, dict):
+            payload = {}
+        return (
+            payload,
+            payload.get("segment_overview", ""),
+            payload.get("known_issues_text", ""),
+            payload.get("house_preferences_text", ""),
+            payload.get("recent_quarter_notes_text", ""),
+            payload.get("open_items_text", ""),
+            AIDashboard._structured_preference_summary(
+                payload.get("structured_house_preferences", [])
+            ),
+            payload.get("memory_change_log", []),
+            status,
+        )
+
+    @staticmethod
+    def _structured_preference_summary(preferences: list[dict[str, Any]]) -> str:
+        if not isinstance(preferences, list) or not preferences:
+            return "No structured house preferences stored."
+        rows = []
+        for item in preferences:
+            if not isinstance(item, dict):
+                continue
+            pref_type = str(item.get("type", "")).strip()
+            value = item.get("value")
+            if pref_type:
+                rows.append(
+                    f"Structured preferences preserved on save: {pref_type}={value}"
+                )
+        return "\n".join(rows) if rows else "No structured house preferences stored."
+
+    @staticmethod
+    def _memory_proposal_options(
+        proposals: list[dict[str, Any]],
+    ) -> list[dict[str, str]]:
+        options: list[dict[str, str]] = []
+        for item in proposals:
+            if not isinstance(item, dict):
+                continue
+            proposal_id = str(item.get("proposal_id", "")).strip()
+            field = str(item.get("field", "")).strip() or "memory"
+            if not proposal_id:
+                continue
+            options.append({"label": f"{field}: {proposal_id}", "value": proposal_id})
+        return options
+
+    @staticmethod
+    def _proposal_by_id(
+        proposals: list[dict[str, Any]],
+        proposal_id: object,
+    ) -> dict[str, Any]:
+        target = str(proposal_id or "").strip()
+        for item in proposals:
+            if str(item.get("proposal_id", "")).strip() == target:
+                return dict(item)
+        return {}
+
+    @staticmethod
+    def _proposal_field_label(proposal: dict[str, Any]) -> str:
+        if not proposal:
+            return "Field: none"
+        return f"Field: {proposal.get('field')} ({proposal.get('operation')})"
+
+    @staticmethod
+    def _proposal_rationale_label(proposal: dict[str, Any]) -> str:
+        if not proposal:
+            return "Rationale: none"
+        rationale = (
+            str(proposal.get("rationale", "")).strip() or "No rationale provided."
+        )
+        return f"Rationale: {rationale}"
+
+    @staticmethod
+    def _proposal_evidence_label(proposal: dict[str, Any]) -> str:
+        if not proposal:
+            return "Evidence: none"
+        evidence_ids = (
+            proposal.get("evidence_ids")
+            if isinstance(proposal.get("evidence_ids"), list)
+            else []
+        )
+        return (
+            "Evidence: "
+            + ", ".join(str(item) for item in evidence_ids if str(item).strip())
+            if evidence_ids
+            else "Evidence: none"
+        )
+
+    @staticmethod
+    def _proposal_editable_value(proposal: dict[str, Any]) -> str:
+        if not proposal:
+            return ""
+        value = proposal.get("value")
+        if isinstance(value, list):
+            if value and isinstance(value[0], dict):
+                return "\n".join(
+                    f"{item.get('period', '')} | {item.get('note', '')}".strip()
+                    for item in value
+                    if isinstance(item, dict)
+                )
+            return "\n".join(str(item) for item in value if str(item).strip())
+        return str(value or "")
+
+    @staticmethod
+    def _coerce_edited_proposal_value(
+        proposal: dict[str, Any], edited_value: Any
+    ) -> Any:
+        field = str(proposal.get("field", "")).strip()
+        if field in {"known_issues", "open_items"}:
+            return [
+                line.strip()
+                for line in str(edited_value or "").splitlines()
+                if line.strip()
+            ]
+        if field == "recent_quarter_notes":
+            return MemoryAuthoringService._parse_recent_quarter_notes(edited_value)
+        return str(edited_value or "").strip()
 
     @staticmethod
     def _preset_prompt_specs() -> list[dict[str, str]]:
@@ -1302,6 +2030,21 @@ class AIDashboard:
             "borderRadius": RADIUS_MD,
             "fontWeight": 600,
             "cursor": "pointer",
+        }
+
+    @staticmethod
+    def _memory_textarea_style(*, height: str) -> dict[str, str]:
+        return {
+            "width": "100%",
+            "minHeight": height,
+            "border": f"1px solid {COLOR_BORDER}",
+            "borderRadius": RADIUS_MD,
+            "padding": "10px 12px",
+            "fontFamily": FONT_FAMILY,
+            "fontSize": "13px",
+            "resize": "vertical",
+            "boxSizing": "border-box",
+            "marginTop": "6px",
         }
 
     @staticmethod

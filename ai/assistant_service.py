@@ -24,6 +24,7 @@ from ai.tool_payloads import (
     render_memory_hint,
 )
 from ai.tool_contract import normalize_tool_result
+from source.services.memory_authoring_service import MemoryAuthoringService
 from source.services.segment_memory_service import SegmentMemoryService
 
 
@@ -90,6 +91,7 @@ class AssistantService:
         self._reviewer = ReviewerGate()
         self._recommendation_policy = RecommendationPolicy()
         self._segment_memory_store = SegmentMemoryStore()
+        self._memory_authoring = MemoryAuthoringService()
         self._deterministic_orchestration_enabled = os.environ.get(
             "AI_DETERMINISTIC_ORCHESTRATION", "1"
         ).strip().lower() not in {"0", "false", "off"}
@@ -162,8 +164,11 @@ class AssistantService:
         if memory_hint:
             messages.append({"role": "system", "content": memory_hint})
         recent_history = (conversation_history or [])[-RECENT_HISTORY_LIMIT:]
+        memory_authoring = (
+            getattr(self, "_memory_authoring", None) or MemoryAuthoringService()
+        )
         segment_memory = self._load_segment_memory(session_context)
-        segment_memory_hint = self._build_segment_memory_hint(segment_memory)
+        segment_memory_hint = memory_authoring.render_context_text(segment_memory)
         if segment_memory_hint:
             messages.append({"role": "system", "content": segment_memory_hint})
         segment_note = self._load_segment_note(session_context)
@@ -231,6 +236,14 @@ class AssistantService:
             "exact_data_loaded": False,
             "current_user_prompt": user_prompt,
         }
+        if isinstance(working_memory, dict) and isinstance(
+            working_memory.get("memory_update_proposals"), list
+        ):
+            memory_state["memory_update_proposals"] = [
+                dict(item)
+                for item in working_memory.get("memory_update_proposals", [])
+                if isinstance(item, dict)
+            ]
         self._prime_context_for_prompt(
             user_prompt=user_prompt,
             session_context=session_context,
@@ -254,6 +267,16 @@ class AssistantService:
             segment_memory=segment_memory,
         )
         if deterministic_packet:
+            reviewer = getattr(self, "_reviewer", None) or ReviewerGate()
+            validated_proposals = reviewer.validate_memory_update_proposals(
+                memory_authoring.propose_updates_for_turn(
+                    user_prompt=user_prompt,
+                    deterministic_packet=deterministic_packet,
+                ),
+                evidence_packets=deterministic_packet.get("evidence_packets", []),
+            )
+            deterministic_packet["memory_update_proposals"] = validated_proposals
+            memory_state["memory_update_proposals"] = validated_proposals
             analysis_basis = self._bind_analysis_basis_to_packet(
                 memory_state=memory_state,
                 deterministic_packet=deterministic_packet,
@@ -317,6 +340,9 @@ class AssistantService:
                             "deterministic_packet": memory_state.get(
                                 "deterministic_packet", {}
                             ),
+                            "memory_update_proposals": memory_state.get(
+                                "memory_update_proposals", []
+                            ),
                         }
                     suffix = (
                         f" session_id={session_id}"
@@ -335,6 +361,9 @@ class AssistantService:
                         "memory_snapshot": memory_state,
                         "deterministic_packet": memory_state.get(
                             "deterministic_packet", {}
+                        ),
+                        "memory_update_proposals": memory_state.get(
+                            "memory_update_proposals", []
                         ),
                     }
                 provider_error = str(error).strip()
@@ -359,6 +388,9 @@ class AssistantService:
                     "deterministic_packet": memory_state.get(
                         "deterministic_packet", {}
                     ),
+                    "memory_update_proposals": memory_state.get(
+                        "memory_update_proposals", []
+                    ),
                 }
                 raise error
             choice = response["choices"][0]["message"]
@@ -381,6 +413,9 @@ class AssistantService:
                             "deterministic_packet": memory_state.get(
                                 "deterministic_packet", {}
                             ),
+                            "memory_update_proposals": memory_state.get(
+                                "memory_update_proposals", []
+                            ),
                         }
                     return {
                         "content": self._apply_narrative_guardrails(
@@ -393,6 +428,9 @@ class AssistantService:
                         "memory_snapshot": memory_state,
                         "deterministic_packet": memory_state.get(
                             "deterministic_packet", {}
+                        ),
+                        "memory_update_proposals": memory_state.get(
+                            "memory_update_proposals", []
                         ),
                     }
                 if isinstance(content, list):
@@ -414,6 +452,9 @@ class AssistantService:
                             "deterministic_packet": memory_state.get(
                                 "deterministic_packet", {}
                             ),
+                            "memory_update_proposals": memory_state.get(
+                                "memory_update_proposals", []
+                            ),
                         }
                     return {
                         "content": self._apply_narrative_guardrails(
@@ -427,6 +468,9 @@ class AssistantService:
                         "deterministic_packet": memory_state.get(
                             "deterministic_packet", {}
                         ),
+                        "memory_update_proposals": memory_state.get(
+                            "memory_update_proposals", []
+                        ),
                     }
                 return {
                     "content": "No response content was produced by the model.",
@@ -436,6 +480,9 @@ class AssistantService:
                     "memory_snapshot": memory_state,
                     "deterministic_packet": memory_state.get(
                         "deterministic_packet", {}
+                    ),
+                    "memory_update_proposals": memory_state.get(
+                        "memory_update_proposals", []
                     ),
                 }
 
@@ -504,6 +551,7 @@ class AssistantService:
             "tool_events": tool_events,
             "memory_snapshot": memory_state,
             "deterministic_packet": memory_state.get("deterministic_packet", {}),
+            "memory_update_proposals": memory_state.get("memory_update_proposals", []),
         }
 
     def _run_deterministic_orchestration(
@@ -607,11 +655,22 @@ class AssistantService:
                 recommendation.recommended_scenario_id,
                 len(recommendation.alternative_scenario_ids),
             )
+        memory_authoring = (
+            getattr(self, "_memory_authoring", None) or MemoryAuthoringService()
+        )
+        memory_update_proposals = reviewer.validate_memory_update_proposals(
+            memory_authoring.propose_updates_for_turn(
+                user_prompt=user_prompt,
+                deterministic_packet={},
+            ),
+            evidence_packets=envelopes,
+        )
         return build_deterministic_packet(
             plan=plan.to_dict(),
             review=review_outcome.to_dict(),
             recommendation=recommendation.to_dict(),
             evidence_packets=envelopes,
+            memory_update_proposals=memory_update_proposals,
         )
 
     def _filter_tool_specs_for_turn(

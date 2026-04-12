@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Any
 
 
 class SegmentMemoryService:
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
     _VALUATION_HISTORY_LIMIT = 12
     _SCENARIO_DISPOSITION_LIMIT = 40
+    _RECENT_QUARTER_NOTES_LIMIT = 12
+    _MEMORY_CHANGE_LOG_LIMIT = 80
 
     def load(
         self, raw_memory: dict[str, Any] | None, *, segment: str | None
@@ -23,10 +26,14 @@ class SegmentMemoryService:
 
         normalized["schema_version"] = self.SCHEMA_VERSION
         normalized["segment_id"] = str(segment or normalized.get("segment_id") or "")
+        normalized["segment_overview"] = str(
+            normalized.get("segment_overview") or ""
+        ).strip()
         normalized["house_preferences"] = self._house_preferences_list(
             normalized.get("house_preferences")
         )
         normalized["known_issues"] = self._string_list(normalized.get("known_issues"))
+        normalized["open_items"] = self._string_list(normalized.get("open_items"))
         normalized["last_selection"] = self._dict(normalized.get("last_selection"))
         normalized["last_human_decision"] = self._dict(
             normalized.get("last_human_decision")
@@ -43,6 +50,14 @@ class SegmentMemoryService:
         )
         normalized["scenario_dispositions"] = self._migrate_scenario_dispositions(
             raw_memory
+        )
+        normalized["recent_quarter_notes"] = self._trim_dict_list(
+            self._recent_quarter_notes_list(normalized.get("recent_quarter_notes")),
+            limit=self._RECENT_QUARTER_NOTES_LIMIT,
+        )
+        normalized["memory_change_log"] = self._trim_dict_list(
+            self._memory_change_log_list(normalized.get("memory_change_log")),
+            limit=self._MEMORY_CHANGE_LOG_LIMIT,
         )
         normalized["valuation_history"] = self._trim_dict_list(
             normalized.get("valuation_history"),
@@ -75,6 +90,14 @@ class SegmentMemoryService:
         merged["valuation_history"] = self._trim_dict_list(
             merged.get("valuation_history"),
             limit=self._VALUATION_HISTORY_LIMIT,
+        )
+        merged["recent_quarter_notes"] = self._trim_dict_list(
+            merged.get("recent_quarter_notes"),
+            limit=self._RECENT_QUARTER_NOTES_LIMIT,
+        )
+        merged["memory_change_log"] = self._trim_dict_list(
+            merged.get("memory_change_log"),
+            limit=self._MEMORY_CHANGE_LOG_LIMIT,
         )
         return merged
 
@@ -112,8 +135,13 @@ class SegmentMemoryService:
         return {
             "segment_id": normalized.get("segment_id", ""),
             "memory_schema_version": normalized.get("schema_version"),
+            "segment_overview": str(normalized.get("segment_overview", "")),
             "known_issues": list(normalized.get("known_issues", [])),
             "house_preferences": list(normalized.get("house_preferences", [])),
+            "open_items": list(normalized.get("open_items", [])),
+            "recent_quarter_notes": [
+                dict(item) for item in normalized.get("recent_quarter_notes", [])
+            ],
             "last_selection": dict(normalized.get("last_selection", {})),
             "last_human_decision": dict(normalized.get("last_human_decision", {})),
             "last_recommendation": dict(normalized.get("last_recommendation", {})),
@@ -171,8 +199,11 @@ class SegmentMemoryService:
         return {
             "schema_version": SegmentMemoryService.SCHEMA_VERSION,
             "segment_id": str(segment or ""),
+            "segment_overview": "",
             "house_preferences": [],
             "known_issues": [],
+            "recent_quarter_notes": [],
+            "open_items": [],
             "last_selection": {},
             "last_human_decision": {},
             "last_recommendation": {},
@@ -181,7 +212,26 @@ class SegmentMemoryService:
             "scenario_ledger": [],
             "scenario_dispositions": [],
             "valuation_history": [],
+            "memory_change_log": [],
         }
+
+    def append_memory_change(
+        self,
+        *,
+        memory: dict[str, Any],
+        entry: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        normalized = self.load(memory, segment=memory.get("segment_id"))
+        if not isinstance(entry, dict) or not entry:
+            return normalized
+        candidate = self._normalize_memory_change_log_entry(entry)
+        if not candidate:
+            return normalized
+        existing = self._dict_list(normalized.get("memory_change_log"))
+        normalized["memory_change_log"] = [candidate] + existing[
+            : self._MEMORY_CHANGE_LOG_LIMIT - 1
+        ]
+        return normalized
 
     def _migrate_scenario_dispositions(
         self,
@@ -218,6 +268,51 @@ class SegmentMemoryService:
                 normalized.append(text)
         return normalized
 
+    def _recent_quarter_notes_list(self, value: object) -> list[dict[str, Any]]:
+        items = self._dict_list(value)
+        normalized: list[dict[str, Any]] = []
+        for item in items:
+            period = str(item.get("period", "")).strip()
+            note = str(item.get("note", "")).strip()
+            if not period and not note:
+                continue
+            normalized.append(
+                {
+                    "period": period,
+                    "note": note,
+                    "source": str(item.get("source", "")).strip() or None,
+                    "updated_at": self._normalize_timestamp(item.get("updated_at")),
+                }
+            )
+        return normalized
+
+    def _memory_change_log_list(self, value: object) -> list[dict[str, Any]]:
+        items = self._dict_list(value)
+        normalized: list[dict[str, Any]] = []
+        for item in items:
+            candidate = self._normalize_memory_change_log_entry(item)
+            if candidate:
+                normalized.append(candidate)
+        return normalized
+
+    def _normalize_memory_change_log_entry(
+        self,
+        entry: dict[str, Any],
+    ) -> dict[str, Any]:
+        field = str(entry.get("field", "")).strip()
+        action = str(entry.get("action", "")).strip()
+        if not field or not action:
+            return {}
+        return {
+            "field": field,
+            "action": action,
+            "source": str(entry.get("source", "")).strip() or None,
+            "updated_by": str(entry.get("updated_by", "")).strip() or None,
+            "approved_by": str(entry.get("approved_by", "")).strip() or None,
+            "summary": str(entry.get("summary", "")).strip() or None,
+            "updated_at": self._normalize_timestamp(entry.get("updated_at")),
+        }
+
     @staticmethod
     def _string_list(value: object) -> list[str]:
         if not isinstance(value, list):
@@ -238,3 +333,10 @@ class SegmentMemoryService:
     def _trim_dict_list(cls, value: object, *, limit: int) -> list[dict[str, Any]]:
         items = cls._dict_list(value)
         return items[:limit]
+
+    @staticmethod
+    def _normalize_timestamp(value: object) -> str:
+        text = str(value or "").strip()
+        if text:
+            return text
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

@@ -4,6 +4,7 @@ Assumptions
 - Phase 2 remains the completed foundation; Phase 3 builds on top of the existing memory schema, composite reviews, quarter-close scaffolding, uncertainty primitives, and benchmark/test base.
 - Phase 3 is not the place for true prior-quarter replay. Real prior/current valuation continuity remains Phase 4 work.
 - The sidebar memory authoring UI should write into the existing segment-memory YAML shape rather than inventing a second persistence model.
+- For Milestone 1, the user-facing memory authoring and proposal-approval UI should live in `source/ai_dashboard.py` only, not the main reserving workspace in `source/dashboard.py`.
 - AI-proposed memory updates must always require explicit human approval before persistence.
 - Uncertainty outputs remain secondary decision support rather than the booking basis.
 - Retrieval should begin as a curated hybrid over markdown and selected internal docs, not as a broad ungoverned search layer.
@@ -23,23 +24,22 @@ Remark: the structured memory schema already exists; this milestone turns it int
 1. Epic: Structured segment memory authoring surface
 Goal: expose the existing segment memory as editable workspace fields instead of YAML-only infrastructure.
 Tasks:
-- Add editable sidebar fields for `segment_overview`, `known_issues`, `house_preferences`, `recent_quarter_notes`, and `open_items`.
+- Add editable sidebar fields in `source/ai_dashboard.py` for `segment_overview`, `known_issues`, `house_preferences`, `recent_quarter_notes`, and `open_items`.
 - Define how each field maps into the existing segment memory payload without breaking backward compatibility.
-- Keep the UI compact and segment-scoped rather than introducing a separate document editor.
+- Keep the UI compact, segment-scoped, and confined to the AI dashboard rather than introducing a separate document editor or modifying the main reserving workspace.
 - Load saved values on workspace startup and refresh them when the segment changes.
 Files to add:
 - optionally `source/services/memory_authoring_service.py`
 Files to change:
-- `source/dashboard.py`
 - `source/config_manager.py`
 - `source/services/segment_memory_service.py`
 - `source/ai_dashboard.py`
 Tests:
 - `tests/unit/test_segment_memory_service.py`
 - new `tests/unit/test_memory_authoring_service.py` if a new service is added
-- new `tests/unit/test_dashboard_memory_sidebar.py`
+- new `tests/unit/test_ai_dashboard_memory_sidebar.py`
 Exit criteria:
-- A user can view and edit structured segment memory from the workspace without touching YAML directly.
+- A user can view and edit structured segment memory from the AI dashboard without touching YAML directly.
 - Saved memory remains schema-valid and segment-scoped.
 
 2. Epic: AI-proposed memory updates with human approval
@@ -47,7 +47,7 @@ Goal: let the assistant suggest memory updates without silently rewriting instit
 Tasks:
 - Define a structured proposal format for AI-suggested memory updates.
 - Add assistant output support for memory-update suggestions tied to specific fields.
-- Add UI controls to review, accept, reject, or edit the proposed update before save.
+- Add UI controls in `source/ai_dashboard.py` to review, accept, reject, or edit the proposed update before save.
 - Record approved changes in a simple audit-friendly way such as updated timestamp and source.
 Files to add:
 - optionally `ai/memory_update_policy.py`
@@ -55,13 +55,13 @@ Files to change:
 - `ai/assistant_service.py`
 - `ai/deterministic_packet.py`
 - `ai/reviewer.py`
-- `source/dashboard.py`
 - `source/ai_review.py`
+- `source/ai_dashboard.py`
 - `source/services/segment_memory_service.py`
 Tests:
 - new `tests/unit/test_ai_memory_update_proposals.py`
 - `tests/unit/test_ai_dashboard.py`
-- `tests/unit/test_dashboard_ai_review.py`
+- new `tests/unit/test_ai_dashboard_memory_proposals.py`
 Exit criteria:
 - The assistant can propose a memory update.
 - No proposed memory update is persisted without an explicit human action.
@@ -70,11 +70,13 @@ Exit criteria:
 Goal: make the richer memory fields reliably available to the assistant and deterministic summaries.
 Tasks:
 - Extend memory normalization to include the new authoring fields.
-- Surface those fields in compact assistant-readable context packets.
-- Avoid prompt bloat by summarizing long note fields into bounded structured snippets.
+- Surface those fields in compact assistant-readable context packets built from the canonical stored memory.
+- Keep the full stored values for `segment_overview`, `known_issues`, `house_preferences`, and `open_items` in assistant context unless they become genuinely too large in practice.
+- Bound `recent_quarter_notes` to the latest four entries in assistant context to keep the prompt efficient while preserving roughly one year of continuity.
 - Keep continuity checks and recommendation logic stable when richer memory is present.
 Files to change:
 - `source/services/segment_memory_service.py`
+- `source/services/memory_authoring_service.py`
 - `ai/memory_store.py`
 - `ai/assistant_service.py`
 - `ai/context_loader.py`
@@ -336,3 +338,8 @@ For the editable memory authoring surface, keep the stored structure compact and
 ```
 
 That remains readable in YAML, easy to summarize for AI context, and compatible with later Phase 4 quarter-close continuity.
+
+Implementation note:
+- Store the full canonical values in segment memory.
+- Render a compact assistant context packet from that stored memory rather than appending raw YAML or long note blobs directly into prompts.
+- For v1 context rendering, keep full `segment_overview`, `known_issues`, `house_preferences`, and `open_items`, while limiting `recent_quarter_notes` to the latest four entries.
