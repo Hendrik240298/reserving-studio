@@ -69,3 +69,25 @@ def test_build_ui_payload_preserves_structured_house_preferences() -> None:
     assert payload["structured_house_preferences"] == [
         {"type": "max_drop_count", "value": 1}
     ]
+
+
+def test_render_context_text_includes_field_meanings() -> None:
+    rendered = MemoryAuthoringService().render_context_text(
+        {
+            "segment_id": "industrial",
+            "segment_overview": "Industrial liability.",
+            "known_issues": ["Refinery loss distorts 2021."],
+            "house_preferences": ["Prefer stable tail"],
+            "open_items": ["Review reporting lag"],
+            "recent_quarter_notes": [
+                {"period": "2026Q1", "note": "Case strengthening"}
+            ],
+        }
+    )
+
+    assert rendered.startswith("Segment memory for this segment:")
+    assert "Segment overview\nWhat this is:" in rendered
+    assert "Known issues\nWhat this is:" in rendered
+    assert "House preferences\nWhat this is:" in rendered
+    assert "Open items\nWhat this is:" in rendered
+    assert "Recent quarter notes\nWhat this is:" in rendered

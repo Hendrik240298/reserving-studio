@@ -210,13 +210,19 @@ class MemoryAuthoringService:
 
     def render_context_text(self, memory: dict[str, Any] | None) -> str:
         packet = self.build_context_packet(memory)
-        parts: list[str] = []
+        sections: list[str] = []
         if packet.get("segment_overview"):
-            parts.append(f"Segment overview: {packet['segment_overview']}")
+            sections.append(
+                "Segment overview\n"
+                "What this is: the persistent high-level description of the segment and its reserving context.\n"
+                f"Content: {packet['segment_overview']}"
+            )
         if packet.get("known_issues"):
-            parts.append(
-                "Known issues: "
-                + "; ".join(str(item) for item in packet["known_issues"])
+            sections.append(
+                "Known issues\n"
+                "What this is: persistent caveats, distortions, or background problems that can affect interpretation.\n"
+                "Content:\n- "
+                + "\n- ".join(str(item) for item in packet["known_issues"])
             )
         if packet.get("house_preferences"):
             rendered_preferences = []
@@ -227,21 +233,37 @@ class MemoryAuthoringService:
                     rendered_preferences.append(f"{pref_type}={pref_value}")
                 else:
                     rendered_preferences.append(str(item))
-            parts.append("House preferences: " + "; ".join(rendered_preferences))
+            sections.append(
+                "House preferences\n"
+                "What this is: stable reserving preferences and governance tendencies the AI should generally follow as guidance.\n"
+                "Content:\n- " + "\n- ".join(rendered_preferences)
+            )
         if packet.get("open_items"):
-            parts.append(
-                "Open items: " + "; ".join(str(item) for item in packet["open_items"])
+            sections.append(
+                "Open items\n"
+                "What this is: unresolved questions or follow-ups that should be carried into future review.\n"
+                "Content:\n- " + "\n- ".join(str(item) for item in packet["open_items"])
             )
         if packet.get("recent_quarter_notes"):
-            parts.append(
-                "Recent quarter notes: "
-                + "; ".join(
+            sections.append(
+                "Recent quarter notes\n"
+                "What this is: recent quarter-specific observations or decisions used for short-term continuity.\n"
+                "Content:\n- "
+                + "\n- ".join(
                     f"{item.get('period')}: {item.get('note')}"
+                    if str(item.get("period", "")).strip()
+                    else str(item.get("note", "")).strip()
                     for item in packet["recent_quarter_notes"]
                     if isinstance(item, dict)
+                    and (
+                        str(item.get("period", "")).strip()
+                        or str(item.get("note", "")).strip()
+                    )
                 )
             )
-        return "\n".join(part for part in parts if part)
+        if not sections:
+            return ""
+        return "\n\n".join(["Segment memory for this segment:"] + sections)
 
     def _normalize_ui_fields(
         self,

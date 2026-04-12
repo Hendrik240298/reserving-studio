@@ -809,12 +809,12 @@ class AIDashboard:
                                                         "margin": "12px 0",
                                                     },
                                                 ),
-                                                html.Label(
+                                                self._memory_field_label(
                                                     "Segment Overview",
-                                                    style={
-                                                        "fontWeight": 600,
-                                                        "fontSize": "13px",
-                                                    },
+                                                    (
+                                                        "What it means: a short persistent description of the segment, its reserving context, and any enduring framing the AI should keep in mind.\n\n"
+                                                        "Impact: gives the assistant high-level background for future conversations and helps it interpret results in the right segment context."
+                                                    ),
                                                 ),
                                                 dcc.Textarea(
                                                     id="ai-memory-segment-overview",
@@ -825,14 +825,13 @@ class AIDashboard:
                                                         height="88px"
                                                     ),
                                                 ),
-                                                html.Label(
+                                                self._memory_field_label(
                                                     "Known Issues",
-                                                    style={
-                                                        "fontWeight": 600,
-                                                        "fontSize": "13px",
-                                                        "marginTop": "12px",
-                                                        "display": "block",
-                                                    },
+                                                    (
+                                                        "What it means: persistent segment-specific problems, caveats, or distortions that can affect interpretation of the reserving analysis.\n\n"
+                                                        "Impact: the assistant reads these as important background constraints and should factor them into diagnostics, caveats, and recommendations."
+                                                    ),
+                                                    margin_top="12px",
                                                 ),
                                                 dcc.Textarea(
                                                     id="ai-memory-known-issues",
@@ -843,14 +842,13 @@ class AIDashboard:
                                                         height="110px"
                                                     ),
                                                 ),
-                                                html.Label(
+                                                self._memory_field_label(
                                                     "House Preferences",
-                                                    style={
-                                                        "fontWeight": 600,
-                                                        "fontSize": "13px",
-                                                        "marginTop": "12px",
-                                                        "display": "block",
-                                                    },
+                                                    (
+                                                        "What it means: stable reserving preferences, judgment style, and governance tendencies the team usually wants followed.\n\n"
+                                                        "Impact: these currently influence AI context and recommendation framing as guidance, but they are not all enforced as hard deterministic rules unless explicitly implemented in code."
+                                                    ),
+                                                    margin_top="12px",
                                                 ),
                                                 dcc.Textarea(
                                                     id="ai-memory-house-preferences",
@@ -876,14 +874,13 @@ class AIDashboard:
                                                         "whiteSpace": "pre-wrap",
                                                     },
                                                 ),
-                                                html.Label(
+                                                self._memory_field_label(
                                                     "Recent Quarter Notes",
-                                                    style={
-                                                        "fontWeight": 600,
-                                                        "fontSize": "13px",
-                                                        "marginTop": "12px",
-                                                        "display": "block",
-                                                    },
+                                                    (
+                                                        "What it means: recent quarter-specific observations or decisions that matter for short-term continuity.\n\n"
+                                                        "Impact: the assistant uses these for continuity context, but only the latest four notes are loaded into AI context by default to stay token efficient."
+                                                    ),
+                                                    margin_top="12px",
                                                 ),
                                                 dcc.Textarea(
                                                     id="ai-memory-recent-quarter-notes",
@@ -902,14 +899,13 @@ class AIDashboard:
                                                         "marginTop": "6px",
                                                     },
                                                 ),
-                                                html.Label(
+                                                self._memory_field_label(
                                                     "Open Items",
-                                                    style={
-                                                        "fontWeight": 600,
-                                                        "fontSize": "13px",
-                                                        "marginTop": "12px",
-                                                        "display": "block",
-                                                    },
+                                                    (
+                                                        "What it means: unresolved questions, follow-ups, or issues that should be carried into future review cycles.\n\n"
+                                                        "Impact: the assistant can use these to preserve continuity, highlight pending work, and suggest what still needs investigation."
+                                                    ),
+                                                    margin_top="12px",
                                                 ),
                                                 dcc.Textarea(
                                                     id="ai-memory-open-items",
@@ -2046,6 +2042,47 @@ class AIDashboard:
             "boxSizing": "border-box",
             "marginTop": "6px",
         }
+
+    @staticmethod
+    def _memory_field_label(
+        text: str,
+        tooltip: str,
+        *,
+        margin_top: str | None = None,
+    ):
+        style = {
+            "fontWeight": 600,
+            "fontSize": "13px",
+            "display": "flex",
+            "alignItems": "center",
+            "gap": "6px",
+        }
+        if margin_top:
+            style["marginTop"] = margin_top
+        return html.Div(
+            [
+                html.Span(text),
+                html.Span(
+                    "?",
+                    title=tooltip,
+                    style={
+                        "display": "inline-flex",
+                        "alignItems": "center",
+                        "justifyContent": "center",
+                        "width": "16px",
+                        "height": "16px",
+                        "borderRadius": "999px",
+                        "border": f"1px solid {COLOR_BORDER}",
+                        "background": COLOR_ACCENT_SOFT,
+                        "color": COLOR_MUTED,
+                        "fontSize": "11px",
+                        "cursor": "help",
+                        "lineHeight": "1",
+                    },
+                ),
+            ],
+            style=style,
+        )
 
     @staticmethod
     def _table_cell_style() -> dict[str, str]:

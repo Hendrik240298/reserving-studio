@@ -152,3 +152,16 @@ def test_memory_payload_outputs_render_structured_preference_summary() -> None:
     assert outputs[1] == "Industrial liability book."
     assert "max_drop_count=1" in outputs[6]
     assert outputs[8] == "saved"
+
+
+def test_memory_field_label_adds_question_mark_tooltip() -> None:
+    label = AIDashboard._memory_field_label(
+        "House Preferences",
+        "Tooltip text",
+        margin_top="12px",
+    )
+
+    assert label.children[0].children == "House Preferences"
+    assert label.children[1].children == "?"
+    assert label.children[1].title == "Tooltip text"
+    assert label.style["marginTop"] == "12px"
