@@ -184,6 +184,9 @@ class _BackendStub:
             ],
             observed_ldf=[{"age": 12, "ldf": 1.2}],
             fitted_tail_ldf=[{"age": 12, "ldf": 1.18}],
+            tail_active=False,
+            tail_mode="reference_fit_only",
+            tail_applies_from_age=None,
         )
 
     def recalculate(self, payload):
@@ -220,6 +223,9 @@ class _BackendStub:
             },
             selected_ldf=[{"age": 21, "development_label": "21-24", "ldf": 1.058}],
             fitted_tail_ldf=[{"age": 30, "development_label": "30-33", "ldf": 1.048}],
+            tail_active=True,
+            tail_mode="attached",
+            tail_applies_from_age=30,
             observed_a2a=[
                 {
                     "origin": "2005",
@@ -238,6 +244,7 @@ class _BackendStub:
             candidates=[
                 {
                     "candidate_id": "drop_1",
+                    "scenario_id": "review_drop_stub",
                     "summary": "Drop AY 2022 age 24",
                     "parameters": {"drop": [["2022", 24]]},
                     "score": 0.8,
@@ -249,6 +256,7 @@ class _BackendStub:
             recommendation={
                 "recommendation_class": "recommend",
                 "candidate_id": "drop_1",
+                "scenario_id": "review_drop_stub",
                 "summary": "Adopt tested drop",
             },
             continuity_notes=[],
@@ -329,7 +337,11 @@ class _BackendStub:
                 "status": "recommended",
                 "summary": "Quarter-close changes ready.",
                 "recommended_changes": [
-                    {"candidate_id": "drop_1", "parameters": {"drop": [["2022", 24]]}}
+                    {
+                        "candidate_id": "drop_1",
+                        "scenario_id": "review_drop_stub",
+                        "parameters": {"drop": [["2022", 24]]},
+                    }
                 ],
                 "policy_trace": {"selected_candidate_ids": ["drop_1"]},
             },
@@ -499,12 +511,15 @@ def test_backend_tools_support_new_ai_tools() -> None:
         },
     )
     assert tail_eval["r2"] == 0.98
+    assert tail_eval["tail_active"] is False
+    assert tail_eval["tail_mode"] == "reference_fit_only"
 
     drop_review = tools.call_tool(
         "tool_run_drop_review",
         {"session_id": "s-1", "candidate_limit": 5},
     )
     assert drop_review["recommendation"]["candidate_id"] == "drop_1"
+    assert drop_review["top_candidates"][0]["scenario_id"] == "review_drop_stub"
 
     tail_review = tools.call_tool(
         "tool_run_tail_review",
@@ -544,6 +559,8 @@ def test_backend_tools_support_new_ai_tools() -> None:
     )
     assert assumption_detail["selected_ldf"][0]["ldf"] == 1.058
     assert assumption_detail["fitted_tail_ldf"][0]["ldf"] == 1.048
+    assert assumption_detail["tail_active"] is True
+    assert assumption_detail["tail_mode"] == "attached"
     assert assumption_detail["bf_apriori_by_uwy"]["2005"] == 0.5988
     assert assumption_detail["analysis_basis"]["scenario_id"] == "drop_combo_1"
 

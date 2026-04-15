@@ -1913,10 +1913,13 @@ class AIDashboard:
         tail = (
             parameters.get("tail") if isinstance(parameters.get("tail"), dict) else {}
         )
+        tail_active = tail.get("attachment_age") is not None
+        tail_mode = "attached" if tail_active else "reference_fit_only"
         basis_type = str(analysis_basis.get("basis_type") or "").strip().lower()
         scenario_id = str(analysis_basis.get("scenario_id") or "").strip()
+        candidate_id = str(analysis_basis.get("candidate_id") or "").strip()
         if scenario_id:
-            scenario_label = scenario_id
+            scenario_label = candidate_id or scenario_id
         elif basis_type == "baseline":
             scenario_label = "active baseline session"
         elif basis_type == "bespoke":
@@ -1938,6 +1941,10 @@ class AIDashboard:
                 "value": scenario_label,
             },
             {
+                "field": "Stable Scenario Key",
+                "value": scenario_id,
+            },
+            {
                 "field": "Matches Active Session",
                 "value": "yes, this basis is the current active session"
                 if bool(analysis_basis.get("is_active_session"))
@@ -1950,6 +1957,11 @@ class AIDashboard:
             {"field": "Average", "value": str(parameters.get("average", ""))},
             {"field": "Drops", "value": str(parameters.get("drop", []))},
             {"field": "Tail Curve", "value": str(tail.get("curve", ""))},
+            {
+                "field": "Tail Active",
+                "value": "yes" if tail_active else "no",
+            },
+            {"field": "Tail Mode", "value": tail_mode},
             {
                 "field": "Tail Attachment",
                 "value": str(tail.get("attachment_age", "")),

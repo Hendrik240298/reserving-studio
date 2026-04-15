@@ -58,7 +58,7 @@ This section supersedes earlier "immediate next actions" ordering and is the cur
 Implemented:
 
 - API scaffolding and contracts in `source/api/` with deterministic backend adapter.
-- AI tool-calling assistant in `ai/` using OpenRouter by default (`google/gemini-3-flash-preview`).
+- AI tool-calling assistant in `ai/` using OpenRouter by default (`google/gemini-3-flash-preview`; previously `deepseek/deepseek-v3.2`).
 - Deterministic diagnostics engine with maturity-aware, link-ratio, loss-ratio, latest-diagonal, portfolio-shift, tail, backtest, calendar-drift, paid/incurred, and data-quality checks.
 - Iterative diagnostics endpoint (`/v1/diagnostics/iterate`) for scenario search over drops, tail settings, and BF apriori.
 - Observability-by-default for AI tool calls and API scenario execution traces.

@@ -20,6 +20,7 @@ class OpenRouterClient:
         ).rstrip("/")
         self._model = os.environ.get(
             "AI_MODEL",
+            # "deepseek/deepseek-v3.2",
             "google/gemini-3-flash-preview",
         )
         self._fallback_model = os.environ.get("AI_FALLBACK_MODEL")

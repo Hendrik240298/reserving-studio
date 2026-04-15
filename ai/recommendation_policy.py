@@ -183,12 +183,19 @@ def _decision_from_quarter_close(packet: dict[str, Any]) -> RecommendationDecisi
         else []
     )
     recommended_id = None
+    recommended_basis_id = None
     if changes and isinstance(changes[0], dict):
         recommended_id = _to_optional_str(changes[0].get("candidate_id"))
+        recommended_basis_id = _to_optional_str(changes[0].get("scenario_id"))
     alternatives = [
         str(item.get("candidate_id"))
         for item in changes[1:3]
         if isinstance(item, dict) and str(item.get("candidate_id", "")).strip()
+    ]
+    alternative_basis_ids = [
+        str(item.get("scenario_id"))
+        for item in changes[1:3]
+        if isinstance(item, dict) and str(item.get("scenario_id", "")).strip()
     ]
     rationale = [
         *(
@@ -208,7 +215,9 @@ def _decision_from_quarter_close(packet: dict[str, Any]) -> RecommendationDecisi
         or "Quarter-close review completed.",
         rationale=[str(item) for item in rationale if str(item).strip()],
         recommended_scenario_id=recommended_id,
+        recommended_basis_id=recommended_basis_id,
         alternative_scenario_ids=alternatives,
+        alternative_basis_ids=alternative_basis_ids,
     )
 
 
@@ -234,9 +243,15 @@ def _decision_from_composite_candidate_review(
     }
     status = status_map.get(recommendation_class, "watch")
     candidate_id = _to_optional_str(recommendation.get("candidate_id"))
+    scenario_id = _to_optional_str(recommendation.get("scenario_id"))
     alternatives = [
         str(item)
         for item in recommendation.get("alternatives", [])
+        if str(item).strip()
+    ]
+    alternative_basis_ids = [
+        str(item)
+        for item in recommendation.get("alternative_scenario_ids", [])
         if str(item).strip()
     ]
     rationale = [
@@ -253,7 +268,9 @@ def _decision_from_composite_candidate_review(
         or f"Composite {review_type} completed.",
         rationale=[str(item) for item in rationale if str(item).strip()],
         recommended_scenario_id=candidate_id,
+        recommended_basis_id=scenario_id,
         alternative_scenario_ids=alternatives,
+        alternative_basis_ids=alternative_basis_ids,
     )
 
 

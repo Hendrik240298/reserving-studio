@@ -35,6 +35,8 @@ Implemented today:
 * scenario ledger and scenario-detail drilldown
 * bespoke recalculation, reserve-change explanation, and rule-based derived-drop workflows
 * `Analysis Basis` / current conversation model behavior for basis-aware reserving workflows
+* stable review-candidate identity for AI memory and follow-up analysis, with display labels kept separate from parameter-bound scenario keys
+* explicit tail-state semantics so payloads and UI distinguish attached tail selections from reference-only fitted tail curves
 
 `Analysis Basis` means the current reserving setup the user and AI are actively working from in the conversation. For basis-aware reserving tools, future analysis should reuse that basis unless the user explicitly switches to `baseline` or `current session`.
 
@@ -42,6 +44,8 @@ Historical wording note:
 
 * older references below to comparing a scenario "against baseline" should now be read as "against the current analysis basis unless baseline/current session is explicitly requested" for basis-aware workflows
 * raw data exploration and movement-inspection workflows are still intentionally more session/data scoped and should not be forced into scenario-carry-forward behavior when that would blur observed data with modeled assumption state
+* older wording that treated review candidate labels such as `drop_1` or `drop_3` as stable scenario identifiers should now be read as presentation-only labels; AI memory and exact follow-ups should bind to the stable parameter-based scenario key instead
+* older wording that implied `tail.curve="weibull"` meant an active tail selection should now be read in light of the explicit tail-state contract: configured curve, attached tail, and reference-only fitted tail are intentionally distinct states
 
 # Recommended target architecture
 

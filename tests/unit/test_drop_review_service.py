@@ -191,8 +191,19 @@ def test_drop_review_ranks_candidates_and_applies_house_preferences(
         candidate_limit=3,
     )
 
+    first_candidate_signature = SegmentMemoryService.scenario_signature(
+        result["candidates"][0]["parameters"]
+    )
     assert result["recommendation"]["candidate_id"] == "drop_1"
+    assert (
+        result["recommendation"]["scenario_id"]
+        == f"review_drop_{first_candidate_signature}"
+    )
     assert result["candidates"][0]["candidate_id"] == "drop_1"
+    assert (
+        result["candidates"][0]["scenario_id"]
+        == f"review_drop_{first_candidate_signature}"
+    )
     assert result["candidates"][0]["recommendation_class"] == "recommend"
     combo = next(
         item for item in result["candidates"] if item["candidate_id"] == "drop_combo_1"
@@ -275,3 +286,4 @@ def test_drop_review_marks_rejected_before_candidate_as_avoid(monkeypatch) -> No
 
     assert result["candidates"][0]["policy_trace"]["rejected_before"] is True
     assert result["candidates"][0]["recommendation_class"] == "avoid"
+    assert result["candidates"][0]["scenario_id"] == f"review_drop_{signature}"

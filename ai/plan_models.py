@@ -53,7 +53,9 @@ class RecommendationDecision:
     summary: str
     rationale: list[str] = field(default_factory=list)
     recommended_scenario_id: str | None = None
+    recommended_basis_id: str | None = None
     alternative_scenario_ids: list[str] = field(default_factory=list)
+    alternative_basis_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

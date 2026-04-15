@@ -144,6 +144,39 @@ def test_answer_returns_graceful_message_when_provider_fails_after_diagnostics()
     assert "temporarily unavailable" in result.lower()
 
 
+def test_run_turn_marks_step_limit_response_as_fallback() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "function": {
+                                    "name": "tool_run_diagnostics",
+                                    "arguments": '{"session_id": "s-1"}',
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+    ]
+
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", _FakeClient(responses))
+    setattr(service, "_tools", _FakeTools())
+    service._observability_enabled = False
+
+    result = service.run_turn(user_prompt="Run diagnostics", max_steps=1)
+
+    assert result["fallback_used"] is True
+    assert "Tool-call step limit reached" in result["content"]
+
+
 def test_answer_includes_ai_context_prompt() -> None:
     responses = [
         {
@@ -742,3 +775,174 @@ def test_basis_aware_tool_call_inherits_current_conversation_basis() -> None:
     assert args["scenario_id"] == "drop_combo_1"
     assert args["basis_type"] == "review_candidate"
     assert args["parameters"]["drop"] == [["2003", 9], ["2002", 21]]
+
+
+def test_exact_follow_up_prefers_current_basis_over_recycled_display_label() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ok",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", _FakeClient(responses))
+    fake_tools = _FakeTools()
+    setattr(service, "_tools", fake_tools)
+    service._observability_enabled = False
+
+    current_basis = {
+        "basis_type": "review_candidate",
+        "session_id": "s-1",
+        "scenario_id": "review_drop_sig_current",
+        "candidate_id": "drop_3",
+        "is_active_session": False,
+        "parameters": {
+            "average": "volume",
+            "drop": [["2001", 60], ["2002", 39]],
+            "drop_valuation": [],
+            "tail": {
+                "curve": "weibull",
+                "attachment_age": None,
+                "projection_period": 0,
+                "fit_period": [],
+            },
+            "bf_apriori": {},
+            "final_ultimate": "chainladder",
+            "selected_ultimate_by_uwy": {},
+        },
+    }
+
+    result = service.run_turn(
+        user_prompt="What are the fitted tail LDFs for drop_3 from 39 to 60?",
+        session_context={"segment": "seg", "session_id": "s-1"},
+        working_memory={
+            "analysis_basis": current_basis,
+            "scenario_basis_cache": {
+                "review_drop_sig_current": current_basis,
+                "review_drop_sig_new": {
+                    "basis_type": "review_candidate",
+                    "session_id": "s-1",
+                    "scenario_id": "review_drop_sig_new",
+                    "candidate_id": "drop_3",
+                    "is_active_session": False,
+                    "parameters": {
+                        "average": "volume",
+                        "drop": [["2002", 39]],
+                        "drop_valuation": [],
+                        "tail": {
+                            "curve": "weibull",
+                            "attachment_age": None,
+                            "projection_period": 0,
+                            "fit_period": [],
+                        },
+                        "bf_apriori": {},
+                        "final_ultimate": "chainladder",
+                        "selected_ultimate_by_uwy": {},
+                    },
+                },
+            },
+        },
+    )
+
+    assert result["content"] == "ok"
+    tool_name, args = fake_tools.calls[0]
+    assert tool_name == "tool_get_assumption_context_detail"
+    assert args["scenario_id"] == "review_drop_sig_current"
+    assert args["parameters"]["drop"] == [["2001", 60], ["2002", 39]]
+
+
+def test_exact_follow_up_marks_inactive_tail_as_reference_only_in_prompt() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ok",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+
+    class _InactiveTailTools(_FakeTools):
+        def call_tool(self, function_name, args):
+            self.calls.append((function_name, args))
+            if function_name == "tool_get_assumption_context_detail":
+                return {
+                    "session_id": "s-1",
+                    "analysis_basis": {
+                        "basis_type": "review_candidate",
+                        "session_id": "s-1",
+                        "scenario_id": "review_drop_sig_current",
+                        "candidate_id": "drop_3",
+                    },
+                    "parameters": {
+                        "average": "volume",
+                        "tail": {"curve": "weibull", "attachment_age": None},
+                    },
+                    "selected_ldf": [
+                        {"age": 39, "development_label": "39-42", "ldf": 1.032489}
+                    ],
+                    "fitted_tail_ldf": [
+                        {"age": 39, "development_label": "39-42", "ldf": 1.009691}
+                    ],
+                    "tail_active": False,
+                    "tail_mode": "reference_fit_only",
+                    "tail_applies_from_age": None,
+                    "observed_a2a": [],
+                    "bf_apriori_by_uwy": {},
+                    "selected_ultimate_by_uwy": {},
+                }
+            return super().call_tool(function_name, args)
+
+    client = _FakeClient(responses)
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", client)
+    setattr(service, "_tools", _InactiveTailTools())
+    service._observability_enabled = False
+
+    result = service.run_turn(
+        user_prompt="What are the fitted tail LDFs for drop_3 from 39 to 60?",
+        session_context={"segment": "seg", "session_id": "s-1"},
+        working_memory={
+            "analysis_basis": {
+                "basis_type": "review_candidate",
+                "session_id": "s-1",
+                "scenario_id": "review_drop_sig_current",
+                "candidate_id": "drop_3",
+                "is_active_session": False,
+                "parameters": {
+                    "average": "volume",
+                    "drop": [["2001", 60], ["2002", 39]],
+                    "drop_valuation": [],
+                    "tail": {
+                        "curve": "weibull",
+                        "attachment_age": None,
+                        "projection_period": 0,
+                        "fit_period": [],
+                    },
+                    "bf_apriori": {},
+                    "final_ultimate": "chainladder",
+                    "selected_ultimate_by_uwy": {},
+                },
+            }
+        },
+    )
+
+    assert result["content"] == "ok"
+    system_messages = [
+        item.get("content", "")
+        for item in (client.last_messages or [])
+        if item.get("role") == "system"
+    ]
+    assert any(
+        "inactive/reference-only" in content.lower() for content in system_messages
+    )

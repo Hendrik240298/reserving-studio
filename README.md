@@ -87,11 +87,18 @@ Open http://127.0.0.1:8050
 
 ```bash
 uv run python examples/run_quarterly_interactive.py
+uv run python examples/run_quarterly_ai_assistant.py
 uv run python examples/run_clrd_interactive.py
 uv run python examples/run_sql_interactive.py
 ```
 
-The script blocks until you click **Finalize & Continue** in the Results tab, then resumes with a finalized payload (`params_store`, `results_store`, and numeric `results_df`) for downstream ETL/reporting.
+To start the quarterly AI assistant example:
+
+1. Set `OPENROUTER_API_KEY` in `.env` or `.env.local`.
+2. Run `uv run python examples/run_quarterly_ai_assistant.py` from the repo root.
+3. Open `http://127.0.0.1:8052` in your browser.
+
+The AI assistant example loads `examples/config_quarterly.yml`, creates a quarterly workflow, and launches the standalone AI Dash workspace.
 
 ## Run dashboard E2E tests
 

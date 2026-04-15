@@ -32,6 +32,7 @@ Optional environment overrides:
 
 ```bash
 export OPENROUTER_API_KEY="<your-key>"
+# export AI_MODEL="deepseek/deepseek-v3.2"
 export AI_MODEL="google/gemini-3-flash-preview"
 ```
 
@@ -39,6 +40,7 @@ Recommended local setup is a `.env` file in repo root:
 
 ```dotenv
 OPENROUTER_API_KEY=<your-key>
+# AI_MODEL=deepseek/deepseek-v3.2
 AI_MODEL=google/gemini-3-flash-preview
 OPENROUTER_HTTP_REFERER=http://localhost
 OPENROUTER_APP_TITLE=reserving-studio

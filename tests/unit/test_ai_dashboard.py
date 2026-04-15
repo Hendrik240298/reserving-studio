@@ -74,7 +74,8 @@ def test_analysis_basis_rows_show_bound_scenario_and_session_match() -> None:
     rows = AIDashboard._analysis_basis_rows(
         {
             "basis_type": "review_candidate",
-            "scenario_id": "drop_combo_1",
+            "scenario_id": "review_drop_abc123",
+            "candidate_id": "drop_combo_1",
             "source_tool": "tool_run_tail_review",
             "is_active_session": False,
             "parameters": {
@@ -91,18 +92,16 @@ def test_analysis_basis_rows_show_bound_scenario_and_session_match() -> None:
         }
     )
 
-    assert rows[0]["field"] == "Meaning"
-    assert rows[1] == {
-        "field": "Used For Future Analysis",
-        "value": "yes, the AI will use this shown basis for future analysis until you explicitly switch basis",
-    }
-    assert rows[2] == {"field": "Basis Type", "value": "review_candidate"}
-    assert rows[3] == {"field": "Scenario", "value": "drop_combo_1"}
-    assert rows[4] == {
-        "field": "Matches Active Session",
-        "value": "no, this basis differs from the current active session",
-    }
-    assert rows[5] == {"field": "Source Tool", "value": "tool_run_tail_review"}
+    row_map = {row["field"]: row["value"] for row in rows}
+    assert row_map["Basis Type"] == "review_candidate"
+    assert row_map["Scenario"] == "drop_combo_1"
+    assert row_map["Stable Scenario Key"] == "review_drop_abc123"
+    assert row_map["Matches Active Session"] == (
+        "no, this basis differs from the current active session"
+    )
+    assert row_map["Source Tool"] == "tool_run_tail_review"
+    assert row_map["Tail Active"] == "yes"
+    assert row_map["Tail Mode"] == "attached"
 
 
 def test_analysis_basis_rows_label_bespoke_basis_without_baseline_scenario_name() -> (
@@ -117,7 +116,10 @@ def test_analysis_basis_rows_label_bespoke_basis_without_baseline_scenario_name(
         }
     )
 
-    assert rows[3] == {"field": "Scenario", "value": "custom parameter basis"}
+    row_map = {row["field"]: row["value"] for row in rows}
+    assert row_map["Scenario"] == "custom parameter basis"
+    assert row_map["Tail Active"] == "no"
+    assert row_map["Tail Mode"] == "reference_fit_only"
 
 
 def test_memory_proposal_options_render_expected_labels() -> None:

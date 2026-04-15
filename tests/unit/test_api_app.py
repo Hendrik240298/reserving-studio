@@ -234,6 +234,8 @@ class FakeBackend:
             ],
             observed_ldf=[{"age": 12, "ldf": 1.2}],
             fitted_tail_ldf=[{"age": 12, "ldf": 1.18}],
+            tail_active=False,
+            tail_mode="reference_fit_only",
         )
 
     def get_assumption_context_detail(self, payload):
@@ -247,6 +249,8 @@ class FakeBackend:
             parameters={"average": "volume"},
             selected_ldf=[{"age": 21, "development_label": "21-24", "ldf": 1.058}],
             fitted_tail_ldf=[{"age": 30, "development_label": "30-33", "ldf": 1.048}],
+            tail_active=False,
+            tail_mode="reference_fit_only",
             observed_a2a=[
                 {
                     "origin": "2005",
@@ -265,6 +269,7 @@ class FakeBackend:
             candidates=[
                 {
                     "candidate_id": "drop_1",
+                    "scenario_id": "review_drop_stub",
                     "summary": "Drop AY 2022 age 24",
                     "parameters": {"drop": [["2022", 24]]},
                     "score": 0.8,
@@ -274,6 +279,7 @@ class FakeBackend:
             recommendation={
                 "recommendation_class": "recommend",
                 "candidate_id": "drop_1",
+                "scenario_id": "review_drop_stub",
                 "summary": "Adopt tested drop",
             },
             continuity_notes=[],
@@ -546,6 +552,7 @@ def test_api_scaffold_endpoints() -> None:
     )
     assert tail_response.status_code == 200
     assert tail_response.json()["r2"] == 0.98
+    assert tail_response.json()["tail_mode"] == "reference_fit_only"
 
     assumption_detail_response = client.post(
         "/v1/reserving/assumption-detail",
@@ -573,6 +580,7 @@ def test_api_scaffold_endpoints() -> None:
     )
     assert assumption_detail_response.status_code == 200
     assert assumption_detail_response.json()["selected_ldf"][0]["ldf"] == 1.058
+    assert assumption_detail_response.json()["tail_mode"] == "reference_fit_only"
     assert (
         assumption_detail_response.json()["analysis_basis"]["scenario_id"]
         == "drop_combo_1"

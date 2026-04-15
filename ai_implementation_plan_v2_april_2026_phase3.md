@@ -21,13 +21,13 @@ Assumptions
 ## Milestone 1: Memory Authoring UI And Persistence Hardening
 Remark: the structured memory schema already exists; this milestone turns it into a practical user-facing editing and approval workflow.
 
-1. Epic: Structured segment memory authoring surface
+1. Epic: ~~Structured segment memory authoring surface~~
 Goal: expose the existing segment memory as editable workspace fields instead of YAML-only infrastructure.
 Tasks:
-- Add editable sidebar fields in `source/ai_dashboard.py` for `segment_overview`, `known_issues`, `house_preferences`, `recent_quarter_notes`, and `open_items`.
-- Define how each field maps into the existing segment memory payload without breaking backward compatibility.
-- Keep the UI compact, segment-scoped, and confined to the AI dashboard rather than introducing a separate document editor or modifying the main reserving workspace.
-- Load saved values on workspace startup and refresh them when the segment changes.
+- ~~Add editable sidebar fields in `source/ai_dashboard.py` for `segment_overview`, `known_issues`, `house_preferences`, `recent_quarter_notes`, and `open_items`.~~
+- ~~Define how each field maps into the existing segment memory payload without breaking backward compatibility.~~
+- ~~Keep the UI compact, segment-scoped, and confined to the AI dashboard rather than introducing a separate document editor or modifying the main reserving workspace.~~
+- ~~Load saved values on workspace startup and refresh them when the segment changes.~~
 Files to add:
 - optionally `source/services/memory_authoring_service.py`
 Files to change:
@@ -39,16 +39,16 @@ Tests:
 - new `tests/unit/test_memory_authoring_service.py` if a new service is added
 - new `tests/unit/test_ai_dashboard_memory_sidebar.py`
 Exit criteria:
-- A user can view and edit structured segment memory from the AI dashboard without touching YAML directly.
-- Saved memory remains schema-valid and segment-scoped.
+- ~~A user can view and edit structured segment memory from the AI dashboard without touching YAML directly.~~
+- ~~Saved memory remains schema-valid and segment-scoped.~~
 
-2. Epic: AI-proposed memory updates with human approval
+2. Epic: ~~AI-proposed memory updates with human approval~~
 Goal: let the assistant suggest memory updates without silently rewriting institutional context.
 Tasks:
-- Define a structured proposal format for AI-suggested memory updates.
-- Add assistant output support for memory-update suggestions tied to specific fields.
-- Add UI controls in `source/ai_dashboard.py` to review, accept, reject, or edit the proposed update before save.
-- Record approved changes in a simple audit-friendly way such as updated timestamp and source.
+- ~~Define a structured proposal format for AI-suggested memory updates.~~
+- ~~Add assistant output support for memory-update suggestions tied to specific fields.~~
+- ~~Add UI controls in `source/ai_dashboard.py` to review, accept, reject, or edit the proposed update before save.~~
+- ~~Record approved changes in a simple audit-friendly way such as updated timestamp and source.~~
 Files to add:
 - optionally `ai/memory_update_policy.py`
 Files to change:
@@ -63,17 +63,19 @@ Tests:
 - `tests/unit/test_ai_dashboard.py`
 - new `tests/unit/test_ai_dashboard_memory_proposals.py`
 Exit criteria:
-- The assistant can propose a memory update.
-- No proposed memory update is persisted without an explicit human action.
+- ~~The assistant can propose a memory update.~~
+- ~~No proposed memory update is persisted without an explicit human action.~~
 
-3. Epic: Segment memory read-path expansion for assistant context
+3. Epic: ~~Segment memory read-path expansion for assistant context~~
 Goal: make the richer memory fields reliably available to the assistant and deterministic summaries.
 Tasks:
-- Extend memory normalization to include the new authoring fields.
-- Surface those fields in compact assistant-readable context packets built from the canonical stored memory.
-- Keep the full stored values for `segment_overview`, `known_issues`, `house_preferences`, and `open_items` in assistant context unless they become genuinely too large in practice.
-- Bound `recent_quarter_notes` to the latest four entries in assistant context to keep the prompt efficient while preserving roughly one year of continuity.
-- Keep continuity checks and recommendation logic stable when richer memory is present.
+- ~~Extend memory normalization to include the new authoring fields.~~
+- ~~Surface those fields in compact assistant-readable context packets built from the canonical stored memory.~~
+- ~~Render each memory field with both its stored content and a short field-definition line so the model can interpret the role of each memory block correctly.~~
+- ~~Keep the full stored values for `segment_overview`, `known_issues`, `house_preferences`, and `open_items` in assistant context unless they become genuinely too large in practice.~~
+- ~~Bound `recent_quarter_notes` to the latest four entries in assistant context to keep the prompt efficient while preserving roughly one year of continuity.~~
+- ~~Keep these memory fields soft/contextual in prompt rendering rather than automatically treating free-text memory as deterministic policy.~~
+- ~~Keep continuity checks and recommendation logic stable when richer memory is present.~~
 Files to change:
 - `source/services/segment_memory_service.py`
 - `source/services/memory_authoring_service.py`
@@ -87,7 +89,7 @@ Tests:
 - `tests/unit/test_ai_phase2_control_layer.py`
 - new `tests/unit/test_ai_memory_context_rendering.py`
 Exit criteria:
-- The assistant uses the richer memory fields as context without losing deterministic control-layer behavior.
+- ~~The assistant uses the richer memory fields as context without losing deterministic control-layer behavior.~~
 
 ## Milestone 2: Uncertainty Overlays And Explanation Integration
 Remark: uncertainty primitives already exist; this milestone makes them more usable, comparative, and explainable.
@@ -241,6 +243,8 @@ Remark: this milestone makes Phase 3 measurable and safe to evolve.
 Goal: extend the benchmark harness to cover new memory UI, uncertainty, hypothesis, and retrieval behavior.
 Tasks:
 - Add benchmark fixtures for memory-aware continuity behavior, uncertainty-aware recommendation language, and grounded hypothesis explanations.
+- Add regression coverage that locks in stable review-candidate identity across reruns so follow-up questions do not rebound to recycled display labels such as `drop_3`.
+- Add regression coverage that locks in explicit tail-state semantics so assistant and UI behavior continue to distinguish `tail_active=false` reference-only fits from truly attached tail selections.
 - Add retrieval benchmarks that test citation discipline and refusal of unsupported retrieval-only conclusions.
 - Add regression tests for memory proposal approval flow and stale-context contradictions.
 - Extend the benchmark scoring rubric where necessary while preserving comparability with the Phase 2 baseline.
@@ -253,6 +257,7 @@ Files to change:
 - `tests/unit/test_ai_dashboard.py`
 Exit criteria:
 - Phase 3 behavior is measurable against fixed scenarios before release.
+- Scenario identity and tail-state interpretation remain stable under iterative review reruns and exact numeric follow-up prompts.
 
 11. Epic: Release gating dashboard
 Goal: make benchmark and regression health visible before shipping changes.
@@ -342,4 +347,5 @@ That remains readable in YAML, easy to summarize for AI context, and compatible 
 Implementation note:
 - Store the full canonical values in segment memory.
 - Render a compact assistant context packet from that stored memory rather than appending raw YAML or long note blobs directly into prompts.
+- In prompt rendering, pair each field's content with a short description of what that field means so the AI can use the memory more consistently.
 - For v1 context rendering, keep full `segment_overview`, `known_issues`, `house_preferences`, and `open_items`, while limiting `recent_quarter_notes` to the latest four entries.

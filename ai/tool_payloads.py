@@ -713,6 +713,16 @@ def build_tool_specs() -> list[dict[str, Any]]:
     ]
 
 
+def compact_tool_result_for_model(*, tool_name: str, result: Any) -> Any:
+    if not isinstance(result, dict):
+        return result
+    if tool_name == "tool_get_assumption_context_detail":
+        return summarize_assumption_detail_payload(result)
+    if tool_name == "tool_get_data_view":
+        return summarize_detailed_data_view_payload(result)
+    return result
+
+
 def summarize_session_payload(payload: dict[str, Any]) -> dict[str, Any]:
     params = payload.get("params_store")
     result_meta = payload.get("results_store_meta")
@@ -868,6 +878,7 @@ def summarize_data_view_payload(payload: dict[str, Any]) -> dict[str, Any]:
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     return {
         "session_id": payload.get("session_id"),
+        "analysis_basis": _compact_analysis_basis(payload.get("analysis_basis")),
         "query": payload.get("query", {}),
         "shape": summary.get("shape", {}),
         "latest_age": summary.get("latest_age"),
@@ -875,6 +886,36 @@ def summarize_data_view_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "latest_diagonal_total": summary.get("latest_diagonal_total"),
         "top_latest_diagonal_rows": summary.get("top_latest_diagonal_rows", []),
         "late_movement_candidates": summary.get("late_movement_candidates", []),
+    }
+
+
+def summarize_detailed_data_view_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    summary_payload = summarize_data_view_payload(payload)
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    records = data.get("records") if isinstance(data.get("records"), list) else []
+    return {
+        **summary_payload,
+        "record_count": len(records),
+        "sample_rows": [dict(item) for item in records[:5] if isinstance(item, dict)],
+    }
+
+
+def summarize_assumption_detail_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "session_id": payload.get("session_id"),
+        "metric": payload.get("metric"),
+        "analysis_basis": _compact_analysis_basis(payload.get("analysis_basis")),
+        "parameter_summary": _compact_parameter_summary(payload.get("parameters")),
+        "selected_ldf": _dict_list(payload.get("selected_ldf")),
+        "fitted_tail_ldf": _dict_list(payload.get("fitted_tail_ldf")),
+        "tail_active": payload.get("tail_active"),
+        "tail_mode": payload.get("tail_mode"),
+        "tail_applies_from_age": payload.get("tail_applies_from_age"),
+        "observed_a2a": _dict_list(payload.get("observed_a2a")),
+        "bf_apriori_by_uwy": _string_key_dict(payload.get("bf_apriori_by_uwy")),
+        "selected_ultimate_by_uwy": _string_key_dict(
+            payload.get("selected_ultimate_by_uwy")
+        ),
     }
 
 
@@ -1006,6 +1047,9 @@ def summarize_tail_evaluation_payload(payload: dict[str, Any]) -> dict[str, Any]
         "fit_period": payload.get("fit_period", []),
         "attachment_age": payload.get("attachment_age"),
         "projection_period": payload.get("projection_period"),
+        "tail_active": payload.get("tail_active"),
+        "tail_mode": payload.get("tail_mode"),
+        "tail_applies_from_age": payload.get("tail_applies_from_age"),
         "r2": payload.get("r2"),
         "rmse": payload.get("rmse"),
         "point_count": payload.get("point_count"),
@@ -1527,6 +1571,7 @@ def build_analysis_basis(
     basis_type: str,
     parameters: dict[str, Any] | None,
     scenario_id: str | None = None,
+    candidate_id: str | None = None,
     source_tool: str | None = None,
     source_review_type: str | None = None,
     is_active_session: bool | None = None,
@@ -1537,6 +1582,7 @@ def build_analysis_basis(
         "basis_type": str(basis_type or "baseline"),
         "session_id": str(session_id or "").strip(),
         "scenario_id": str(scenario_id or "").strip() or None,
+        "candidate_id": str(candidate_id or "").strip() or None,
         "scenario_signature": signature,
         "source_tool": str(source_tool or "").strip() or None,
         "source_review_type": str(source_review_type or "").strip() or None,
@@ -1799,6 +1845,7 @@ def _store_basis_candidate(
         session_id=session_id,
         basis_type=basis_type,
         scenario_id=scenario_id,
+        candidate_id=str(item.get("candidate_id") or "").strip() or None,
         source_tool=source_tool,
         source_review_type=source_review_type,
         is_active_session=scenario_id == "baseline",
@@ -1936,6 +1983,7 @@ def _compact_review_candidate(item: object) -> dict[str, Any]:
         return {}
     return {
         "candidate_id": item.get("candidate_id"),
+        "scenario_id": item.get("scenario_id"),
         "summary": item.get("summary"),
         "score": item.get("score"),
         "recommendation_class": item.get("recommendation_class"),
@@ -1953,9 +2001,11 @@ def _compact_review_recommendation(item: object) -> dict[str, Any]:
     return {
         "recommendation_class": item.get("recommendation_class"),
         "candidate_id": item.get("candidate_id"),
+        "scenario_id": item.get("scenario_id"),
         "summary": item.get("summary"),
         "caveats": item.get("caveats", []),
         "alternatives": item.get("alternatives", []),
+        "alternative_scenario_ids": item.get("alternative_scenario_ids", []),
     }
 
 
@@ -1963,6 +2013,71 @@ def _top_continuity_notes(items: object) -> list[dict[str, Any]]:
     if not isinstance(items, list):
         return []
     return [dict(item) for item in items[:5] if isinstance(item, dict)]
+
+
+def _compact_analysis_basis(basis: object) -> dict[str, Any]:
+    if not isinstance(basis, dict):
+        return {}
+    return {
+        "basis_type": basis.get("basis_type"),
+        "session_id": basis.get("session_id"),
+        "scenario_id": basis.get("scenario_id"),
+        "candidate_id": basis.get("candidate_id"),
+        "scenario_signature": basis.get("scenario_signature"),
+        "source_tool": basis.get("source_tool"),
+        "source_review_type": basis.get("source_review_type"),
+        "is_active_session": basis.get("is_active_session"),
+        "parameter_summary": _compact_parameter_summary(basis.get("parameters")),
+    }
+
+
+def _compact_parameter_summary(parameters: object) -> dict[str, Any]:
+    if not isinstance(parameters, dict):
+        return {}
+    drop = parameters.get("drop") if isinstance(parameters.get("drop"), list) else []
+    drop_valuation = (
+        parameters.get("drop_valuation")
+        if isinstance(parameters.get("drop_valuation"), list)
+        else []
+    )
+    tail = parameters.get("tail") if isinstance(parameters.get("tail"), dict) else {}
+    bf_apriori = (
+        parameters.get("bf_apriori")
+        if isinstance(parameters.get("bf_apriori"), dict)
+        else {}
+    )
+    selected_methods = (
+        parameters.get("selected_ultimate_by_uwy")
+        if isinstance(parameters.get("selected_ultimate_by_uwy"), dict)
+        else {}
+    )
+    return {
+        "average": parameters.get("average"),
+        "drop_count": len(drop),
+        "drop_preview": [list(item) for item in drop[:8] if isinstance(item, list)],
+        "drop_valuation_count": len(drop_valuation),
+        "tail": {
+            "curve": tail.get("curve"),
+            "attachment_age": tail.get("attachment_age"),
+            "projection_period": tail.get("projection_period"),
+            "fit_period": tail.get("fit_period", []),
+        },
+        "bf_apriori_count": len(bf_apriori),
+        "final_ultimate": parameters.get("final_ultimate"),
+        "selected_ultimate_by_uwy_count": len(selected_methods),
+    }
+
+
+def _dict_list(items: object) -> list[dict[str, Any]]:
+    if not isinstance(items, list):
+        return []
+    return [dict(item) for item in items if isinstance(item, dict)]
+
+
+def _string_key_dict(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items()}
 
 
 def _match_findings(
@@ -2072,15 +2187,18 @@ def _merge_review_scenario_entries(
     review_summary: dict[str, Any],
 ) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {
-        str(item.get("scenario_id")): dict(item)
+        str(item.get("scenario_key") or item.get("scenario_id")): dict(item)
         for item in existing
-        if isinstance(item, dict) and item.get("scenario_id")
+        if isinstance(item, dict)
+        and str(item.get("scenario_key") or item.get("scenario_id") or "").strip()
     }
     for candidate in _review_candidates_for_ledger(review_summary):
-        scenario_id = str(candidate.get("scenario_id", "")).strip()
-        if not scenario_id:
+        scenario_key = str(
+            candidate.get("scenario_key") or candidate.get("scenario_id") or ""
+        ).strip()
+        if not scenario_key:
             continue
-        merged[scenario_id] = candidate
+        merged[scenario_key] = candidate
     ordered = list(merged.values())
     ordered.sort(
         key=lambda item: float(item.get("score", 0.0) or 0.0),
@@ -2119,10 +2237,12 @@ def _review_candidates_for_ledger(
                 candidates.append(compact)
     deduped: dict[str, dict[str, Any]] = {}
     for item in candidates:
-        scenario_id = str(item.get("scenario_id", "")).strip()
-        if not scenario_id:
+        scenario_key = str(
+            item.get("scenario_key") or item.get("scenario_id") or ""
+        ).strip()
+        if not scenario_key:
             continue
-        deduped[scenario_id] = item
+        deduped[scenario_key] = item
     return list(deduped.values())
 
 
@@ -2165,6 +2285,7 @@ def _compact_review_candidate_for_ledger(
         tier = policy_trace.get("governance_tier")
     return {
         "scenario_id": candidate_id,
+        "scenario_key": item.get("scenario_id"),
         "score": item.get("score"),
         "tier": tier,
         "transform": transform or "composite_review",

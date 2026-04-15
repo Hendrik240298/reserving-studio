@@ -1175,6 +1175,10 @@ class InMemoryReservingBackend:
             context.last_results_payload = self._build_results_payload(
                 context.reserving
             )
+            tail_state = self._tail_state_from_params(
+                params=params,
+                tail_reference_available=not fitted_row.empty,
+            )
 
             return TailEvaluationResponse(
                 session_id=context.session_id,
@@ -1188,6 +1192,9 @@ class InMemoryReservingBackend:
                 residuals=residuals,
                 observed_ldf=observed_points,
                 fitted_tail_ldf=fitted_points,
+                tail_active=tail_state["tail_active"],
+                tail_mode=tail_state["tail_mode"],
+                tail_applies_from_age=tail_state["tail_applies_from_age"],
                 attachment_previous_age=attachment_previous_age,
                 attachment_previous_ldf=round(attachment_previous_ldf, 6)
                 if attachment_previous_ldf is not None
@@ -1292,12 +1299,20 @@ class InMemoryReservingBackend:
                             }
                         )
 
+                tail_state = self._tail_state_from_params(
+                    params=params,
+                    tail_reference_available=not fitted_row.empty,
+                )
+
                 return AssumptionDetailResponse(
                     session_id=context.session_id,
                     analysis_basis=analysis_basis,
                     parameters=params,
                     selected_ldf=selected_ldf,
                     fitted_tail_ldf=fitted_tail_ldf,
+                    tail_active=tail_state["tail_active"],
+                    tail_mode=tail_state["tail_mode"],
+                    tail_applies_from_age=tail_state["tail_applies_from_age"],
                     observed_a2a=observed_a2a,
                     bf_apriori_by_uwy=dict(params.get("bf_apriori", {})),
                     selected_ultimate_by_uwy=dict(
@@ -2524,6 +2539,27 @@ class InMemoryReservingBackend:
             ),
         }
         return cloned
+
+    @staticmethod
+    def _tail_state_from_params(
+        *,
+        params: dict[str, Any],
+        tail_reference_available: bool,
+    ) -> dict[str, Any]:
+        tail_config = params.get("tail") if isinstance(params.get("tail"), dict) else {}
+        attachment_age = tail_config.get("attachment_age")
+        tail_active = attachment_age is not None
+        if tail_active:
+            tail_mode = "attached"
+        elif tail_reference_available:
+            tail_mode = "reference_fit_only"
+        else:
+            tail_mode = "inactive"
+        return {
+            "tail_active": tail_active,
+            "tail_mode": tail_mode,
+            "tail_applies_from_age": int(attachment_age) if tail_active else None,
+        }
 
     @staticmethod
     def _normalize_final_ultimate(

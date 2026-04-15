@@ -11,6 +11,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from source.services.assumption_review_service import AssumptionReviewService
+from source.services.segment_memory_service import SegmentMemoryService
 
 
 class _ReservingStub:
@@ -179,11 +180,16 @@ def test_tail_review_ranks_stable_candidate_above_unstable_one(monkeypatch) -> N
         candidate_limit=4,
     )
 
+    top_signature = SegmentMemoryService.scenario_signature(
+        result["candidates"][0]["parameters"]
+    )
     assert result["candidates"][0]["candidate_id"].startswith("tail_weibull_60")
+    assert result["candidates"][0]["scenario_id"] == f"review_tail_{top_signature}"
     assert (
         result["recommendation"]["candidate_id"]
         == result["candidates"][0]["candidate_id"]
     )
+    assert result["recommendation"]["scenario_id"] == f"review_tail_{top_signature}"
     assert result["candidates"][0]["recommendation_class"] == "recommend"
     unstable = next(
         item

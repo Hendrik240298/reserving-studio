@@ -10,6 +10,7 @@ SCHEMA_VERSION = "v1"
 
 SelectionMethod = Literal["chainladder", "bornhuetter_ferguson"]
 SeverityLevel = Literal["low", "medium", "high", "critical"]
+TailMode = Literal["inactive", "attached", "reference_fit_only"]
 RecommendationClass = Literal[
     "recommend",
     "reasonable_alternative",
@@ -142,6 +143,9 @@ class TailEvaluationResponse(BaseModel):
     residuals: list[dict] = Field(default_factory=list)
     observed_ldf: list[dict] = Field(default_factory=list)
     fitted_tail_ldf: list[dict] = Field(default_factory=list)
+    tail_active: bool = False
+    tail_mode: TailMode = "inactive"
+    tail_applies_from_age: int | None = None
     attachment_previous_age: int | None = None
     attachment_previous_ldf: float | None = None
     attachment_first_fitted_ldf: float | None = None
@@ -168,6 +172,9 @@ class AssumptionDetailResponse(BaseModel):
     parameters: dict = Field(default_factory=dict)
     selected_ldf: list[dict] = Field(default_factory=list)
     fitted_tail_ldf: list[dict] = Field(default_factory=list)
+    tail_active: bool = False
+    tail_mode: TailMode = "inactive"
+    tail_applies_from_age: int | None = None
     observed_a2a: list[dict] = Field(default_factory=list)
     bf_apriori_by_uwy: dict[str, float] = Field(default_factory=dict)
     selected_ultimate_by_uwy: dict[str, SelectionMethod] = Field(default_factory=dict)
@@ -197,6 +204,7 @@ class PolicyTrace(BaseModel):
 
 class ReviewCandidate(BaseModel):
     candidate_id: str
+    scenario_id: str | None = None
     summary: str
     parameters: dict = Field(default_factory=dict)
     score: float = 0.0
@@ -211,9 +219,11 @@ class ReviewCandidate(BaseModel):
 class ReviewRecommendation(BaseModel):
     recommendation_class: RecommendationClass = "watch"
     candidate_id: str | None = None
+    scenario_id: str | None = None
     summary: str = ""
     caveats: list[str] = Field(default_factory=list)
     alternatives: list[str] = Field(default_factory=list)
+    alternative_scenario_ids: list[str] = Field(default_factory=list)
 
 
 class DropReviewRequest(BaseModel):

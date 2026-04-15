@@ -410,9 +410,11 @@ class AssumptionReviewService:
             drops = {item for item in baseline_drop_pairs if item is not None}
             drops.add(pair)
             params["drop"] = [list(item) for item in sorted(drops)]
+            scenario_id = self._review_scenario_id(params=params, review_type="drop")
             candidates.append(
                 {
                     "candidate_id": f"drop_{index}",
+                    "scenario_id": scenario_id,
                     "summary": f"Add drop for AY {pair[0]} age {pair[1]}",
                     "parameters": params,
                     "drop_pairs": [pair],
@@ -425,9 +427,11 @@ class AssumptionReviewService:
             for pair in combo_pairs:
                 drops.add(pair)
             params["drop"] = [list(item) for item in sorted(drops)]
+            scenario_id = self._review_scenario_id(params=params, review_type="drop")
             candidates.append(
                 {
                     "candidate_id": "drop_combo_1",
+                    "scenario_id": scenario_id,
                     "summary": "Combine the top two supported drop candidates",
                     "parameters": params,
                     "drop_pairs": combo_pairs,
@@ -527,6 +531,7 @@ class AssumptionReviewService:
         )
         return {
             "candidate_id": str(candidate.get("candidate_id")),
+            "scenario_id": str(candidate.get("scenario_id") or "").strip() or None,
             "summary": str(candidate.get("summary", "")),
             "parameters": params,
             "score": score_breakdown["score"],
@@ -603,9 +608,14 @@ class AssumptionReviewService:
                     if key in seen:
                         continue
                     seen.add(key)
+                    scenario_id = self._review_scenario_id(
+                        params=params,
+                        review_type="tail",
+                    )
                     candidates.append(
                         {
                             "candidate_id": f"tail_{curve}_{attachment_age}_{fit_period[0]}_{fit_period[-1]}",
+                            "scenario_id": scenario_id,
                             "summary": f"Test tail {curve} attachment {attachment_age} fit {fit_period[0]}-{fit_period[-1]}",
                             "parameters": params,
                         }
@@ -688,6 +698,7 @@ class AssumptionReviewService:
         )
         return {
             "candidate_id": str(candidate.get("candidate_id")),
+            "scenario_id": str(candidate.get("scenario_id") or "").strip() or None,
             "summary": str(candidate.get("summary", "")),
             "parameters": params,
             "score": score_breakdown["score"],
@@ -1309,15 +1320,22 @@ class AssumptionReviewService:
             return {
                 "recommendation_class": "avoid",
                 "candidate_id": None,
+                "scenario_id": None,
                 "summary": "No tested candidates were available.",
                 "caveats": ["missing_candidates"],
                 "alternatives": [],
+                "alternative_scenario_ids": [],
             }
         recommendation_class = str(best.get("recommendation_class", "watch"))
         alternatives = [
             str(item.get("candidate_id"))
             for item in ordered[1:3]
             if isinstance(item, dict) and str(item.get("candidate_id", "")).strip()
+        ]
+        alternative_scenario_ids = [
+            str(item.get("scenario_id"))
+            for item in ordered[1:3]
+            if isinstance(item, dict) and str(item.get("scenario_id", "")).strip()
         ]
         summary_by_class = {
             "recommend": "Tested evidence supports adopting the top-ranked candidate.",
@@ -1333,12 +1351,21 @@ class AssumptionReviewService:
         return {
             "recommendation_class": recommendation_class,
             "candidate_id": best.get("candidate_id"),
+            "scenario_id": best.get("scenario_id"),
             "summary": summary_by_class.get(
                 recommendation_class, summary_by_class["watch"]
             ),
             "caveats": caveats,
             "alternatives": alternatives,
+            "alternative_scenario_ids": alternative_scenario_ids,
         }
+
+    @staticmethod
+    def _review_scenario_id(*, params: dict[str, Any], review_type: str) -> str:
+        signature = SegmentMemoryService.scenario_signature(params)
+        if not signature:
+            return f"review_{review_type}"
+        return f"review_{review_type}_{signature}"
 
     @staticmethod
     def _diagnostic_classification(code: str) -> dict[str, Any] | None:
