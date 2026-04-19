@@ -194,19 +194,26 @@ def test_drop_review_ranks_candidates_and_applies_house_preferences(
     first_candidate_signature = SegmentMemoryService.scenario_signature(
         result["candidates"][0]["parameters"]
     )
-    assert result["recommendation"]["candidate_id"] == "drop_1"
+    assert (
+        result["recommendation"]["candidate_id"]
+        == f"drop_ay2022_age24_{first_candidate_signature[:8]}"
+    )
     assert (
         result["recommendation"]["scenario_id"]
         == f"review_drop_{first_candidate_signature}"
     )
-    assert result["candidates"][0]["candidate_id"] == "drop_1"
+    assert result["candidates"][0]["candidate_id"] == (
+        f"drop_ay2022_age24_{first_candidate_signature[:8]}"
+    )
     assert (
         result["candidates"][0]["scenario_id"]
         == f"review_drop_{first_candidate_signature}"
     )
     assert result["candidates"][0]["recommendation_class"] == "recommend"
     combo = next(
-        item for item in result["candidates"] if item["candidate_id"] == "drop_combo_1"
+        item
+        for item in result["candidates"]
+        if item["candidate_id"].startswith("drop_ay2021_age36__ay2022_age24_")
     )
     assert combo["policy_trace"]["house_preference_conflicts"]
 
@@ -236,6 +243,7 @@ def test_drop_review_marks_rejected_before_candidate_as_avoid(monkeypatch) -> No
         "drop": [["2022", 24]],
     }
     signature = SegmentMemoryService.scenario_signature(candidate_params)
+    candidate_id = f"drop_ay2022_age24_{signature[:8]}"
     evaluations = {
         "baseline": _evaluation_payload(
             scenario_id="baseline",
@@ -250,9 +258,12 @@ def test_drop_review_marks_rejected_before_candidate_as_avoid(monkeypatch) -> No
                 )
             ],
         ),
-        "drop_1": _evaluation_payload(scenario_id="drop_1"),
+        candidate_id: _evaluation_payload(scenario_id=candidate_id),
     }
-    totals = {"baseline": {"total_ibnr": 100.0}, "drop_1": {"total_ibnr": 95.0}}
+    totals = {
+        "baseline": {"total_ibnr": 100.0},
+        candidate_id: {"total_ibnr": 95.0},
+    }
 
     reserving = _ReservingStub(
         results_by_mode={
@@ -268,7 +279,7 @@ def test_drop_review_marks_rejected_before_candidate_as_avoid(monkeypatch) -> No
         evaluation_service=_EvaluationStub(
             evaluations=evaluations,
             totals=totals,
-            selector=lambda params: "drop_1" if params.get("drop") else "baseline",
+            selector=lambda params: candidate_id if params.get("drop") else "baseline",
         )
     )
 

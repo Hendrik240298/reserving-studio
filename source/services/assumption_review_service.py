@@ -405,7 +405,7 @@ class AssumptionReviewService:
             if pair not in baseline_drop_pairs
         ]
         candidates: list[dict[str, Any]] = []
-        for index, pair in enumerate(ranked_pairs[:candidate_limit], start=1):
+        for pair in ranked_pairs[:candidate_limit]:
             params = self._clone_params(baseline_params)
             drops = {item for item in baseline_drop_pairs if item is not None}
             drops.add(pair)
@@ -413,7 +413,10 @@ class AssumptionReviewService:
             scenario_id = self._review_scenario_id(params=params, review_type="drop")
             candidates.append(
                 {
-                    "candidate_id": f"drop_{index}",
+                    "candidate_id": self._drop_candidate_id(
+                        params=params,
+                        drop_pairs=[pair],
+                    ),
                     "scenario_id": scenario_id,
                     "summary": f"Add drop for AY {pair[0]} age {pair[1]}",
                     "parameters": params,
@@ -430,7 +433,10 @@ class AssumptionReviewService:
             scenario_id = self._review_scenario_id(params=params, review_type="drop")
             candidates.append(
                 {
-                    "candidate_id": "drop_combo_1",
+                    "candidate_id": self._drop_candidate_id(
+                        params=params,
+                        drop_pairs=combo_pairs,
+                    ),
                     "scenario_id": scenario_id,
                     "summary": "Combine the top two supported drop candidates",
                     "parameters": params,
@@ -1366,6 +1372,30 @@ class AssumptionReviewService:
         if not signature:
             return f"review_{review_type}"
         return f"review_{review_type}_{signature}"
+
+    @staticmethod
+    def _drop_candidate_id(
+        *,
+        params: dict[str, Any],
+        drop_pairs: list[tuple[str, int] | tuple[str, str] | Any],
+    ) -> str:
+        normalized_pairs: list[tuple[str, int]] = []
+        for item in drop_pairs:
+            if not isinstance(item, tuple) or len(item) != 2:
+                continue
+            year = str(item[0]).strip()
+            try:
+                age = int(item[1])
+            except (TypeError, ValueError):
+                continue
+            if year:
+                normalized_pairs.append((year, age))
+        normalized_pairs.sort()
+        pair_label = "__".join(f"ay{year}_age{age}" for year, age in normalized_pairs)
+        signature = SegmentMemoryService.scenario_signature(params)[:8]
+        if pair_label:
+            return f"drop_{pair_label}_{signature}"
+        return f"drop_{signature}"
 
     @staticmethod
     def _diagnostic_classification(code: str) -> dict[str, Any] | None:

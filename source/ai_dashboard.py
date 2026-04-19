@@ -1230,8 +1230,12 @@ class AIDashboard:
                                                                     id="ai-scenario-ledger",
                                                                     columns=[
                                                                         {
-                                                                            "name": "Scenario",
-                                                                            "id": "scenario_id",
+                                                                            "name": "Label",
+                                                                            "id": "candidate_id",
+                                                                        },
+                                                                        {
+                                                                            "name": "Stable Key",
+                                                                            "id": "scenario_key",
                                                                         },
                                                                         {
                                                                             "name": "Score",
@@ -1883,12 +1887,24 @@ class AIDashboard:
     def _scenario_ledger_rows(
         scenario_ledger: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        rows = [dict(item) for item in scenario_ledger if isinstance(item, dict)]
+        rows: list[dict[str, Any]] = []
+        for item in scenario_ledger:
+            if not isinstance(item, dict):
+                continue
+            row = dict(item)
+            row["candidate_id"] = str(
+                row.get("candidate_id") or row.get("scenario_id") or ""
+            ).strip()
+            row["scenario_key"] = str(
+                row.get("scenario_key") or row.get("scenario_id") or ""
+            ).strip()
+            rows.append(row)
         if rows:
             return rows
         return [
             {
-                "scenario_id": "No chat scenarios tested yet",
+                "candidate_id": "No chat scenarios tested yet",
+                "scenario_key": "",
                 "score": "",
                 "tier": "",
                 "transform": "",
@@ -1937,7 +1953,7 @@ class AIDashboard:
             },
             {"field": "Basis Type", "value": str(analysis_basis.get("basis_type", ""))},
             {
-                "field": "Scenario",
+                "field": "Scenario Label",
                 "value": scenario_label,
             },
             {

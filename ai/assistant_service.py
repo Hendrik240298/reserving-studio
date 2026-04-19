@@ -1987,19 +1987,37 @@ class AssistantService:
         prompt: str,
         basis_cache: dict[str, Any],
     ) -> str | None:
+        prompt_text = str(prompt or "").strip().lower()
+        if not prompt_text:
+            return None
+        stable_aliases: list[tuple[str, str]] = []
+        candidate_aliases: dict[str, set[str]] = {}
         for cache_key, cached in basis_cache.items():
-            aliases = [str(cache_key)]
+            key = str(cache_key).strip()
+            if not key or key == "baseline":
+                continue
+            aliases = {key}
             if isinstance(cached, dict):
-                aliases.extend(
-                    [
-                        str(cached.get("scenario_id") or ""),
-                        str(cached.get("candidate_id") or ""),
-                    ]
-                )
+                scenario_id = str(cached.get("scenario_id") or "").strip()
+                if scenario_id and scenario_id != "baseline":
+                    aliases.add(scenario_id)
+                candidate_id = str(cached.get("candidate_id") or "").strip().lower()
+                if candidate_id and candidate_id != "baseline":
+                    candidate_aliases.setdefault(candidate_id, set()).add(key)
             for alias in aliases:
-                candidate = alias.strip().lower()
-                if candidate and candidate != "baseline" and candidate in prompt:
-                    return str(cache_key)
+                stable_aliases.append((alias.lower(), key))
+        for alias, key in sorted(
+            stable_aliases, key=lambda item: len(item[0]), reverse=True
+        ):
+            if alias and alias in prompt_text:
+                return key
+        for alias, keys in sorted(
+            candidate_aliases.items(),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        ):
+            if len(keys) == 1 and alias in prompt_text:
+                return next(iter(keys))
         return None
 
     @staticmethod

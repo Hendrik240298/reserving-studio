@@ -1,0 +1,13 @@
+{
+  "chat_id": "chat-41888798a5c0",
+  "segment": "quarterly",
+  "reserving_session_id": "quarterly-20260416T142321Z-8b62e965",
+  "messages": [],
+  "tool_events": [],
+  "working_memory": {},
+  "scenario_ledger": [],
+  "deterministic_packet": {},
+  "metadata": {},
+  "created_at": "2026-04-16T14:23:21.743977Z",
+  "updated_at": "2026-04-16T14:23:21.743981Z"
+}

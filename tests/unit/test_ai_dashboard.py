@@ -94,7 +94,7 @@ def test_analysis_basis_rows_show_bound_scenario_and_session_match() -> None:
 
     row_map = {row["field"]: row["value"] for row in rows}
     assert row_map["Basis Type"] == "review_candidate"
-    assert row_map["Scenario"] == "drop_combo_1"
+    assert row_map["Scenario Label"] == "drop_combo_1"
     assert row_map["Stable Scenario Key"] == "review_drop_abc123"
     assert row_map["Matches Active Session"] == (
         "no, this basis differs from the current active session"
@@ -117,9 +117,36 @@ def test_analysis_basis_rows_label_bespoke_basis_without_baseline_scenario_name(
     )
 
     row_map = {row["field"]: row["value"] for row in rows}
-    assert row_map["Scenario"] == "custom parameter basis"
+    assert row_map["Scenario Label"] == "custom parameter basis"
     assert row_map["Tail Active"] == "no"
     assert row_map["Tail Mode"] == "reference_fit_only"
+
+
+def test_scenario_ledger_rows_split_label_from_stable_key() -> None:
+    rows = AIDashboard._scenario_ledger_rows(
+        [
+            {
+                "scenario_id": "drop_3",
+                "scenario_key": "review_drop_sig_a",
+                "score": 1.25,
+                "tier": "amber",
+                "transform": "drop_review",
+                "summary": "Add drop for AY 2002 age 39 [reasonable_alternative]",
+            }
+        ]
+    )
+
+    assert rows == [
+        {
+            "scenario_id": "drop_3",
+            "candidate_id": "drop_3",
+            "scenario_key": "review_drop_sig_a",
+            "score": 1.25,
+            "tier": "amber",
+            "transform": "drop_review",
+            "summary": "Add drop for AY 2002 age 39 [reasonable_alternative]",
+        }
+    ]
 
 
 def test_memory_proposal_options_render_expected_labels() -> None:

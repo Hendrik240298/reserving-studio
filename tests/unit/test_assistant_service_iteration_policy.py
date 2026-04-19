@@ -946,3 +946,81 @@ def test_exact_follow_up_marks_inactive_tail_as_reference_only_in_prompt() -> No
     assert any(
         "inactive/reference-only" in content.lower() for content in system_messages
     )
+
+
+def test_ambiguous_recycled_display_label_does_not_bind_arbitrarily() -> None:
+    basis = AssistantService._resolve_exact_question_basis(
+        prompt="What are the fitted tail LDFs for drop_3 from 39 to 60?",
+        memory_state={
+            "session_summary": {
+                "session_id": "s-1",
+                "params": {
+                    "average": "volume",
+                    "drop_store": [],
+                    "tail_curve": "weibull",
+                    "tail_attachment_age": None,
+                    "tail_projection_months": 0,
+                    "tail_fit_period_selection": [],
+                    "bf_apriori_by_uwy": {},
+                    "selected_ultimate_by_uwy": {},
+                },
+            },
+            "scenario_basis_cache": {
+                "review_drop_sig_a": {
+                    "basis_type": "review_candidate",
+                    "session_id": "s-1",
+                    "scenario_id": "review_drop_sig_a",
+                    "candidate_id": "drop_3",
+                    "is_active_session": False,
+                    "parameters": {"drop": [["2002", 39]]},
+                },
+                "review_drop_sig_b": {
+                    "basis_type": "review_candidate",
+                    "session_id": "s-1",
+                    "scenario_id": "review_drop_sig_b",
+                    "candidate_id": "drop_3",
+                    "is_active_session": False,
+                    "parameters": {"drop": [["2001", 60]]},
+                },
+            },
+        },
+        session_context={"segment": "seg", "session_id": "s-1"},
+    )
+
+    assert basis["scenario_id"] == "baseline"
+    assert basis["parameters"]["drop"] == []
+
+
+def test_unique_display_label_still_binds_when_not_ambiguous() -> None:
+    basis = AssistantService._resolve_exact_question_basis(
+        prompt="What are the fitted tail LDFs for drop_4 from 39 to 60?",
+        memory_state={
+            "session_summary": {
+                "session_id": "s-1",
+                "params": {
+                    "average": "volume",
+                    "drop_store": [],
+                    "tail_curve": "weibull",
+                    "tail_attachment_age": None,
+                    "tail_projection_months": 0,
+                    "tail_fit_period_selection": [],
+                    "bf_apriori_by_uwy": {},
+                    "selected_ultimate_by_uwy": {},
+                },
+            },
+            "scenario_basis_cache": {
+                "review_drop_sig_b": {
+                    "basis_type": "review_candidate",
+                    "session_id": "s-1",
+                    "scenario_id": "review_drop_sig_b",
+                    "candidate_id": "drop_4",
+                    "is_active_session": False,
+                    "parameters": {"drop": [["2001", 60]]},
+                },
+            },
+        },
+        session_context={"segment": "seg", "session_id": "s-1"},
+    )
+
+    assert basis["scenario_id"] == "review_drop_sig_b"
+    assert basis["parameters"]["drop"] == [["2001", 60]]
