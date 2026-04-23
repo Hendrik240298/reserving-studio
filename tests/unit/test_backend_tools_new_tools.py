@@ -395,6 +395,7 @@ def test_backend_tools_support_new_ai_tools() -> None:
         {"session_id": "s-1"},
     )
     assert movement_summary["finding_count"] == 1
+    assert movement_summary["execution_status"] == "executed_exactly"
 
     ldf_summary = tools.call_tool(
         "tool_run_ldf_consistency_diagnostics",
@@ -513,6 +514,7 @@ def test_backend_tools_support_new_ai_tools() -> None:
     assert tail_eval["r2"] == 0.98
     assert tail_eval["tail_active"] is False
     assert tail_eval["tail_mode"] == "reference_fit_only"
+    assert tail_eval["execution_status"] == "executed_exactly"
 
     drop_review = tools.call_tool(
         "tool_run_drop_review",
@@ -606,6 +608,7 @@ def test_backend_tools_support_new_ai_tools() -> None:
     )
     assert recalc["analysis_basis"]["basis_type"] == "bespoke"
     assert backend.last_recalculate_payload.persist_to_session is False
+    assert recalc["execution_status"] == "executed_exactly"
 
     result_row = tools.call_tool(
         "tool_get_result_for_uwy",
@@ -659,6 +662,7 @@ def test_backend_tools_support_new_ai_tools() -> None:
         "Collapsed tail.fit_period to [12, 48].",
         "Dropped 2 invalid selected_ultimate_by_uwy override(s) and kept only method values.",
     ]
+    assert reserve_change_sanitized["execution_status"] == "partially_executed"
     assert backend.last_reserve_change_payload.basis_type == "review_candidate"
     assert backend.last_reserve_change_payload.scenario_id == "tail_weibull_27_12_108"
     assert backend.last_reserve_change_payload.basis_parameters["drop"] == [["2003", 9]]
@@ -692,6 +696,7 @@ def test_explain_reserve_change_drops_invalid_drop_entries() -> None:
         "Dropped 2 invalid drop entries.",
         "Dropped 2 invalid drop_valuation entries.",
     ]
+    assert reserve_change["execution_status"] == "partially_executed"
     assert backend.last_reserve_change_payload is not None
     assert backend.last_reserve_change_payload.drop == [["2002", 12]]
     assert backend.last_reserve_change_payload.drop_valuation == [["2000", 12]]

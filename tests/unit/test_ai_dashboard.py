@@ -49,6 +49,33 @@ def test_prompt_text_for_trigger_uses_typed_prompt_for_send_button() -> None:
     assert prompt == "Custom typed question"
 
 
+def test_proposal_action_from_trigger_requires_real_click() -> None:
+    assert (
+        AIDashboard._proposal_action_from_trigger(
+            triggered_id="ai-chat-proposal-accept",
+            accept_clicks=0,
+            reject_clicks=0,
+        )
+        == ""
+    )
+    assert (
+        AIDashboard._proposal_action_from_trigger(
+            triggered_id="ai-chat-proposal-accept",
+            accept_clicks=1,
+            reject_clicks=0,
+        )
+        == "accept"
+    )
+    assert (
+        AIDashboard._proposal_action_from_trigger(
+            triggered_id="ai-chat-proposal-reject",
+            accept_clicks=0,
+            reject_clicks=1,
+        )
+        == "reject"
+    )
+
+
 def test_intro_chat_message_contains_2x3_prompt_grid() -> None:
     intro = AIDashboard._intro_chat_message()
     body = intro.children[0]
@@ -68,6 +95,72 @@ def test_render_chat_messages_excludes_intro_shell() -> None:
     rendered = AIDashboard.__new__(AIDashboard)._render_chat_messages([])
 
     assert rendered == []
+
+
+def test_render_chat_messages_shows_pending_proposal_below_origin_message() -> None:
+    history = [
+        {
+            "message_id": "msg-1",
+            "role": "assistant",
+            "content": "I recommend a tested drop scenario.",
+            "proposal_basis": {
+                "proposal_id": "proposal-1",
+                "status": "pending",
+                "scenario_label": "drop_1",
+                "recommendation_strength": "recommended",
+                "parameters": {
+                    "average": "volume",
+                    "drop": [["2022", 24]],
+                    "tail": {"curve": "weibull", "attachment_age": None},
+                },
+                "presented_in_message_id": "msg-1",
+            },
+        }
+    ]
+    current_proposal = {
+        "proposal_id": "proposal-1",
+        "status": "pending",
+        "scenario_label": "drop_1",
+        "recommendation_strength": "recommended",
+        "parameters": {
+            "average": "volume",
+            "drop": [["2022", 24]],
+            "tail": {"curve": "weibull", "attachment_age": None},
+        },
+        "presented_in_message_id": "msg-1",
+    }
+
+    rendered = AIDashboard.__new__(AIDashboard)._render_chat_messages(
+        history,
+        current_proposal,
+    )
+
+    assert len(rendered) == 1
+    assert len(rendered[0].children) == 2
+    proposal_card = rendered[0].children[1]
+    assert proposal_card.children[0].children == "Recommended Change Pending Acceptance"
+    assert proposal_card.children[-1].children[0].id == "ai-chat-proposal-accept"
+    assert proposal_card.children[-1].children[1].id == "ai-chat-proposal-reject"
+
+
+def test_render_chat_messages_hides_non_pending_proposal_cards() -> None:
+    history = [
+        {
+            "message_id": "msg-1",
+            "role": "assistant",
+            "content": "The proposal was accepted.",
+            "proposal_basis": {
+                "proposal_id": "proposal-1",
+                "status": "accepted",
+                "scenario_label": "drop_1",
+            },
+        }
+    ]
+
+    rendered = AIDashboard.__new__(AIDashboard)._render_chat_messages(history, {})
+
+    assert len(rendered) == 1
+    assert len(rendered[0].children) == 1
 
 
 def test_analysis_basis_rows_show_bound_scenario_and_session_match() -> None:
@@ -95,9 +188,10 @@ def test_analysis_basis_rows_show_bound_scenario_and_session_match() -> None:
     row_map = {row["field"]: row["value"] for row in rows}
     assert row_map["Basis Type"] == "review_candidate"
     assert row_map["Scenario Label"] == "drop_combo_1"
-    assert row_map["Stable Scenario Key"] == "review_drop_abc123"
+    assert row_map["Basis Key"] == ""
+    assert row_map["Scenario ID"] == "review_drop_abc123"
     assert row_map["Matches Active Session"] == (
-        "no, this basis differs from the current active session"
+        "no, this accepted basis differs from the current active session"
     )
     assert row_map["Source Tool"] == "tool_run_tail_review"
     assert row_map["Tail Active"] == "yes"
@@ -127,6 +221,7 @@ def test_scenario_ledger_rows_split_label_from_stable_key() -> None:
         [
             {
                 "scenario_id": "drop_3",
+                "basis_key": "basis-key-a",
                 "scenario_key": "review_drop_sig_a",
                 "score": 1.25,
                 "tier": "amber",
@@ -140,6 +235,7 @@ def test_scenario_ledger_rows_split_label_from_stable_key() -> None:
         {
             "scenario_id": "drop_3",
             "candidate_id": "drop_3",
+            "basis_key": "basis-key-a",
             "scenario_key": "review_drop_sig_a",
             "score": 1.25,
             "tier": "amber",
@@ -160,6 +256,30 @@ def test_memory_proposal_options_render_expected_labels() -> None:
     )
 
     assert options == [{"label": "open_items: mem-1", "value": "mem-1"}]
+
+
+def test_execution_record_rows_render_requested_and_effective_focus() -> None:
+    rows = AIDashboard._execution_record_rows(
+        [
+            {
+                "tool_name": "tool_explain_reserve_change",
+                "execution_status": "partially_executed",
+                "requested_inputs": {"scenario_id": "requested_drop", "session_id": "s-1"},
+                "effective_inputs": {"scenario_id": "effective_drop", "session_id": "s-1"},
+                "warnings": ["Dropped 1 invalid drop entry."],
+            }
+        ]
+    )
+
+    assert rows == [
+        {
+            "tool": "tool_explain_reserve_change",
+            "status": "partially_executed",
+            "requested": "requested_drop",
+            "effective": "effective_drop",
+            "notes": "Dropped 1 invalid drop entry.",
+        }
+    ]
 
 
 def test_memory_payload_outputs_render_structured_preference_summary() -> None:

@@ -276,7 +276,7 @@ def test_quarter_close_service_returns_review_packet_and_restores_baseline() -> 
     assert result["recommendation"]["status"] == "recommended"
     assert len(result["recommendation"]["recommended_changes"]) == 2
     assert result["scenario_summary"]["top_ranked"][0]["candidate_id"] == "drop_1"
-    assert result["continuity"]["memory_schema_version"] == 2
+    assert result["continuity"]["memory_schema_version"] == 3
     assert any(
         item.get("code") == "prior_selection_tension"
         for item in result["continuity"]["continuity_notes"]

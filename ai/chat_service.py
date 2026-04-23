@@ -4,7 +4,14 @@ import threading
 from typing import Any, Callable
 
 from ai.assistant_service import AssistantService
+from ai.control_plane_types import (
+    normalize_accepted_analysis_basis,
+    normalize_basis_transition_record,
+    normalize_preview_basis,
+    normalize_proposal_basis,
+)
 from ai.chat_store import ChatSession, InMemoryChatStore
+from ai.proposal_manager import ProposalManager
 
 
 class AIChatService:
@@ -79,6 +86,10 @@ class AIChatService:
                     "segment": session.segment,
                     "session_id": session.reserving_session_id,
                 },
+                accepted_analysis_basis=session.accepted_analysis_basis,
+                proposal_basis=session.proposal_basis,
+                preview_basis=session.preview_basis,
+                execution_records=session.execution_records,
                 working_memory={
                     **dict(session.working_memory),
                     "scenario_ledger": [dict(item) for item in session.scenario_ledger],
@@ -98,12 +109,83 @@ class AIChatService:
                 )
             memory_snapshot = result.get("memory_snapshot")
             if isinstance(memory_snapshot, dict):
+                accepted_analysis_basis = memory_snapshot.get("accepted_analysis_basis")
+                if not isinstance(accepted_analysis_basis, dict):
+                    accepted_analysis_basis = memory_snapshot.get("analysis_basis")
+                proposal_basis = normalize_proposal_basis(
+                    memory_snapshot.get("proposal_basis")
+                )
+                prior_pending_proposal = normalize_proposal_basis(session.proposal_basis)
+                if (
+                    prior_pending_proposal
+                    and str(prior_pending_proposal.get("status") or "").strip()
+                    == "pending"
+                    and proposal_basis
+                    and str(proposal_basis.get("proposal_id") or "").strip()
+                    != str(prior_pending_proposal.get("proposal_id") or "").strip()
+                ):
+                    superseded = ProposalManager.mark_superseded(
+                        prior_pending_proposal,
+                        superseded_by_proposal_id=proposal_basis.get("proposal_id"),
+                    )
+                    prior_message_id = str(
+                        prior_pending_proposal.get("presented_in_message_id") or ""
+                    ).strip()
+                    if prior_message_id:
+                        self._store.update_message_fields(
+                            chat_id,
+                            message_id=prior_message_id,
+                            fields={"proposal_basis": superseded},
+                        )
+                if proposal_basis and str(proposal_basis.get("status") or "").strip() == "pending":
+                    same_as_prior = bool(
+                        prior_pending_proposal
+                        and str(prior_pending_proposal.get("proposal_id") or "").strip()
+                        == str(proposal_basis.get("proposal_id") or "").strip()
+                    )
+                    if same_as_prior and prior_pending_proposal.get("presented_in_message_id"):
+                        proposal_basis = dict(prior_pending_proposal)
+                    else:
+                        proposal_basis = ProposalManager.attach_to_message(
+                            proposal_basis,
+                            message_id=message_id,
+                        )
+                stripped_working_memory = {
+                    key: value
+                    for key, value in memory_snapshot.items()
+                    if key
+                    not in {
+                        "analysis_basis",
+                        "accepted_analysis_basis",
+                        "proposal_basis",
+                        "preview_basis",
+                        "execution_records",
+                        "basis_transition_history",
+                    }
+                }
                 self._store.update_memory(
                     chat_id,
-                    working_memory=memory_snapshot,
+                    working_memory=stripped_working_memory,
+                    accepted_analysis_basis=accepted_analysis_basis,
+                    proposal_basis=proposal_basis,
+                    preview_basis=memory_snapshot.get("preview_basis"),
                     scenario_ledger=memory_snapshot.get("scenario_ledger"),
+                    execution_records=memory_snapshot.get("execution_records"),
+                    basis_transition_history=memory_snapshot.get(
+                        "basis_transition_history"
+                    ),
                     deterministic_packet=memory_snapshot.get("deterministic_packet"),
                 )
+                if proposal_basis and str(proposal_basis.get("status") or "").strip() == "pending":
+                    presented_in_message_id = str(
+                        proposal_basis.get("presented_in_message_id") or ""
+                    ).strip()
+                    if presented_in_message_id:
+                        self._store.update_message_fields(
+                            chat_id,
+                            message_id=presented_in_message_id,
+                            fields={"proposal_basis": proposal_basis},
+                        )
             self._store.update_assistant_message(
                 chat_id,
                 message_id=message_id,
@@ -154,6 +236,89 @@ class AIChatService:
             raise LookupError(f"Chat session not found: {chat_id}")
         return self._build_response(session)
 
+    def accept_proposal(self, chat_id: str, proposal_id: str) -> dict[str, Any]:
+        session = self._store.get_chat(chat_id)
+        if session is None:
+            raise LookupError(f"Chat session not found: {chat_id}")
+        proposal = normalize_proposal_basis(session.proposal_basis)
+        if not proposal:
+            raise ValueError("No proposal is pending for this chat")
+        if str(proposal.get("status") or "").strip() != "pending":
+            raise ValueError("Current proposal is not pending")
+        if str(proposal.get("proposal_id") or "").strip() != str(proposal_id or "").strip():
+            raise ValueError("Proposal ID does not match the pending proposal")
+        accepted_basis, updated_proposal, transition = ProposalManager.accept(
+            proposal,
+            chat_id=chat_id,
+            current_accepted_basis=session.accepted_analysis_basis,
+        )
+        deterministic_packet = dict(session.deterministic_packet)
+        deterministic_packet["accepted_analysis_basis"] = dict(accepted_basis)
+        deterministic_packet["proposal_basis"] = dict(updated_proposal)
+        updated = self._store.update_memory(
+            chat_id,
+            working_memory=session.working_memory,
+            accepted_analysis_basis=accepted_basis,
+            proposal_basis=updated_proposal,
+            preview_basis=session.preview_basis,
+            scenario_ledger=session.scenario_ledger,
+            execution_records=session.execution_records,
+            basis_transition_history=[
+                *session.basis_transition_history,
+                normalize_basis_transition_record(transition),
+            ],
+            deterministic_packet=deterministic_packet,
+        )
+        presented_in_message_id = str(
+            updated_proposal.get("presented_in_message_id") or ""
+        ).strip()
+        if presented_in_message_id:
+            updated = self._store.update_message_fields(
+                chat_id,
+                message_id=presented_in_message_id,
+                fields={"proposal_basis": updated_proposal},
+            )
+        return self._build_response(updated)
+
+    def reject_proposal(self, chat_id: str, proposal_id: str) -> dict[str, Any]:
+        session = self._store.get_chat(chat_id)
+        if session is None:
+            raise LookupError(f"Chat session not found: {chat_id}")
+        proposal = normalize_proposal_basis(session.proposal_basis)
+        if not proposal:
+            raise ValueError("No proposal is pending for this chat")
+        if str(proposal.get("status") or "").strip() != "pending":
+            raise ValueError("Current proposal is not pending")
+        if str(proposal.get("proposal_id") or "").strip() != str(proposal_id or "").strip():
+            raise ValueError("Proposal ID does not match the pending proposal")
+        updated_proposal, transition = ProposalManager.reject(proposal, chat_id=chat_id)
+        deterministic_packet = dict(session.deterministic_packet)
+        deterministic_packet["proposal_basis"] = dict(updated_proposal)
+        updated = self._store.update_memory(
+            chat_id,
+            working_memory=session.working_memory,
+            accepted_analysis_basis=session.accepted_analysis_basis,
+            proposal_basis=updated_proposal,
+            preview_basis=session.preview_basis,
+            scenario_ledger=session.scenario_ledger,
+            execution_records=session.execution_records,
+            basis_transition_history=[
+                *session.basis_transition_history,
+                normalize_basis_transition_record(transition),
+            ],
+            deterministic_packet=deterministic_packet,
+        )
+        presented_in_message_id = str(
+            updated_proposal.get("presented_in_message_id") or ""
+        ).strip()
+        if presented_in_message_id:
+            updated = self._store.update_message_fields(
+                chat_id,
+                message_id=presented_in_message_id,
+                fields={"proposal_basis": updated_proposal},
+            )
+        return self._build_response(updated)
+
     def update_working_memory_fields(
         self,
         chat_id: str,
@@ -165,20 +330,39 @@ class AIChatService:
             raise LookupError(f"Chat session not found: {chat_id}")
         next_memory = dict(session.working_memory)
         next_memory.update(dict(fields or {}))
+        accepted_analysis_basis = session.accepted_analysis_basis
+        proposal_basis = session.proposal_basis
+        preview_basis = session.preview_basis
+        if "analysis_basis" in next_memory:
+            accepted_analysis_basis = normalize_accepted_analysis_basis(
+                next_memory.pop("analysis_basis")
+            )
+        if "accepted_analysis_basis" in next_memory:
+            accepted_analysis_basis = normalize_accepted_analysis_basis(
+                next_memory.pop("accepted_analysis_basis")
+            )
+        if "proposal_basis" in next_memory:
+            proposal_basis = normalize_proposal_basis(next_memory.pop("proposal_basis"))
+        if "preview_basis" in next_memory:
+            preview_basis = normalize_preview_basis(next_memory.pop("preview_basis"))
         updated = self._store.update_memory(
             chat_id,
             working_memory=next_memory,
+            accepted_analysis_basis=accepted_analysis_basis,
+            proposal_basis=proposal_basis,
+            preview_basis=preview_basis,
             scenario_ledger=session.scenario_ledger,
+            execution_records=session.execution_records,
+            basis_transition_history=session.basis_transition_history,
             deterministic_packet=session.deterministic_packet,
         )
         return self._build_response(updated)
 
     def _build_response(self, refreshed: ChatSession) -> dict[str, Any]:
-        analysis_basis = (
-            refreshed.working_memory.get("analysis_basis")
-            if isinstance(refreshed.working_memory.get("analysis_basis"), dict)
-            else {}
+        accepted_analysis_basis = normalize_accepted_analysis_basis(
+            refreshed.accepted_analysis_basis
         )
+        proposal_basis = normalize_proposal_basis(refreshed.proposal_basis)
         return {
             "chat_id": refreshed.chat_id,
             "segment": refreshed.segment,
@@ -188,8 +372,15 @@ class AIChatService:
             "tool_events": [dict(item) for item in refreshed.tool_events],
             "messages": [dict(item) for item in refreshed.messages],
             "working_memory": dict(refreshed.working_memory),
-            "analysis_basis": dict(analysis_basis),
+            "accepted_analysis_basis": dict(accepted_analysis_basis),
+            "analysis_basis": dict(accepted_analysis_basis),
+            "proposal_basis": dict(proposal_basis),
+            "preview_basis": dict(refreshed.preview_basis),
             "scenario_ledger": [dict(item) for item in refreshed.scenario_ledger],
+            "execution_records": [dict(item) for item in refreshed.execution_records],
+            "basis_transition_history": [
+                dict(item) for item in refreshed.basis_transition_history
+            ],
             "deterministic_packet": dict(refreshed.deterministic_packet),
             "memory_update_proposals": [
                 dict(item)

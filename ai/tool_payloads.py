@@ -4,6 +4,8 @@ import hashlib
 import json
 from typing import Any
 
+from ai.control_plane_types import basis_key_from_parameters, scenario_label_from_basis_payload
+
 
 def build_tool_specs() -> list[dict[str, Any]]:
     return [
@@ -1579,7 +1581,15 @@ def build_analysis_basis(
     normalized_parameters = _normalize_basis_parameters(parameters)
     signature = _scenario_signature(normalized_parameters)
     return {
+        "basis_key": basis_key_from_parameters(normalized_parameters),
         "basis_type": str(basis_type or "baseline"),
+        "scenario_label": scenario_label_from_basis_payload(
+            {
+                "basis_type": basis_type,
+                "scenario_id": scenario_id,
+                "candidate_id": candidate_id,
+            }
+        ),
         "session_id": str(session_id or "").strip(),
         "scenario_id": str(scenario_id or "").strip() or None,
         "candidate_id": str(candidate_id or "").strip() or None,
@@ -1634,13 +1644,28 @@ def merge_scenario_basis_cache(
 ) -> dict[str, Any]:
     cache: dict[str, Any] = {}
     if isinstance(existing_cache, dict):
-        for key, value in existing_cache.items():
-            if isinstance(value, dict):
-                cache[str(key)] = dict(value)
+        for value in existing_cache.values():
+            if not isinstance(value, dict):
+                continue
+            normalized = build_analysis_basis(
+                session_id=value.get("session_id"),
+                basis_type=str(value.get("basis_type") or "baseline"),
+                parameters=value.get("parameters"),
+                scenario_id=value.get("scenario_id"),
+                candidate_id=value.get("candidate_id"),
+                source_tool=value.get("source_tool"),
+                source_review_type=value.get("source_review_type"),
+                is_active_session=bool(value.get("is_active_session")),
+            )
+            basis_key = str(normalized.get("basis_key") or "").strip()
+            if basis_key:
+                cache[basis_key] = normalized
 
     baseline_basis = build_baseline_analysis_basis(session_summary)
     if baseline_basis:
-        cache["baseline"] = baseline_basis
+        baseline_key = str(baseline_basis.get("basis_key") or "").strip()
+        if baseline_key:
+            cache[baseline_key] = baseline_basis
 
     iteration = iteration_summary if isinstance(iteration_summary, dict) else {}
     session_id = (
@@ -1712,7 +1737,7 @@ def build_memory_snapshot(
     reserve_change_summary: dict[str, Any] | None = None,
     review_summary: dict[str, Any] | None = None,
     existing_scenario_ledger: list[dict[str, Any]] | None = None,
-    existing_analysis_basis: dict[str, Any] | None = None,
+    existing_accepted_analysis_basis: dict[str, Any] | None = None,
     existing_scenario_basis_cache: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     scenario_ledger = list(existing_scenario_ledger or [])
@@ -1722,7 +1747,7 @@ def build_memory_snapshot(
         review_summary=review_summary,
         existing_cache=existing_scenario_basis_cache,
     )
-    analysis_basis = dict(existing_analysis_basis or {})
+    accepted_analysis_basis = dict(existing_accepted_analysis_basis or {})
     if isinstance(iteration_summary, dict):
         entries = iteration_summary.get("top_scenarios")
         baseline = iteration_summary.get("baseline")
@@ -1741,7 +1766,7 @@ def build_memory_snapshot(
         "reserve_change_summary": reserve_change_summary or {},
         "review_summary": review_summary or {},
         "scenario_ledger": scenario_ledger,
-        "analysis_basis": analysis_basis,
+        "accepted_analysis_basis": accepted_analysis_basis,
         "scenario_basis_cache": scenario_basis_cache,
     }
 
@@ -1758,13 +1783,15 @@ def render_memory_hint(memory: dict[str, Any] | None) -> str:
             f"segment={session_summary.get('segment')}, average={params.get('average')}, "
             f"tail_curve={params.get('tail_curve')}, drop_count={params.get('drop_count')}"
         )
-    analysis_basis = memory.get("analysis_basis")
-    if isinstance(analysis_basis, dict) and analysis_basis:
+    accepted_analysis_basis = memory.get("accepted_analysis_basis")
+    if not isinstance(accepted_analysis_basis, dict) or not accepted_analysis_basis:
+        accepted_analysis_basis = memory.get("analysis_basis")
+    if isinstance(accepted_analysis_basis, dict) and accepted_analysis_basis:
         parts.append(
-            "Current analysis basis: "
-            f"type={analysis_basis.get('basis_type')}, "
-            f"scenario_id={analysis_basis.get('scenario_id')}, "
-            f"active_session={analysis_basis.get('is_active_session')}"
+            "Current accepted analysis basis: "
+            f"type={accepted_analysis_basis.get('basis_type')}, "
+            f"scenario_id={accepted_analysis_basis.get('scenario_id')}, "
+            f"active_session={accepted_analysis_basis.get('is_active_session')}"
         )
     diagnostics = memory.get("diagnostics_summary")
     if isinstance(diagnostics, dict) and diagnostics:
@@ -1841,7 +1868,7 @@ def _store_basis_candidate(
     )
     if not scenario_id or not parameters:
         return
-    cache[scenario_id] = build_analysis_basis(
+    basis = build_analysis_basis(
         session_id=session_id,
         basis_type=basis_type,
         scenario_id=scenario_id,
@@ -1851,6 +1878,9 @@ def _store_basis_candidate(
         is_active_session=scenario_id == "baseline",
         parameters=parameters,
     )
+    basis_key = str(basis.get("basis_key") or "").strip()
+    if basis_key:
+        cache[basis_key] = basis
 
 
 def _review_source_tool(review_type: str | None) -> str | None:
@@ -1967,14 +1997,17 @@ def _compact_scenario(item: object) -> dict[str, Any]:
         item.get("governance") if isinstance(item.get("governance"), dict) else {}
     )
     lineage = item.get("lineage") if isinstance(item.get("lineage"), dict) else {}
+    parameters = item.get("parameters") if isinstance(item.get("parameters"), dict) else {}
     return {
+        "basis_key": basis_key_from_parameters(parameters),
         "scenario_id": item.get("scenario_id"),
+        "scenario_label": item.get("scenario_id"),
         "score": item.get("score"),
         "summary": item.get("summary"),
         "tier": governance.get("tier"),
         "transform": lineage.get("transform"),
         "rationale_evidence_ids": lineage.get("rationale_evidence_ids", [])[:5],
-        "parameters": item.get("parameters", {}),
+        "parameters": parameters,
     }
 
 
@@ -2019,8 +2052,10 @@ def _compact_analysis_basis(basis: object) -> dict[str, Any]:
     if not isinstance(basis, dict):
         return {}
     return {
+        "basis_key": basis.get("basis_key"),
         "basis_type": basis.get("basis_type"),
         "session_id": basis.get("session_id"),
+        "scenario_label": basis.get("scenario_label"),
         "scenario_id": basis.get("scenario_id"),
         "candidate_id": basis.get("candidate_id"),
         "scenario_signature": basis.get("scenario_signature"),
@@ -2166,17 +2201,26 @@ def _merge_scenario_entries(
     entries: object,
 ) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {
-        str(item.get("scenario_id")): dict(item)
+        str(item.get("basis_key") or item.get("scenario_id")): dict(item)
         for item in existing
-        if isinstance(item, dict) and item.get("scenario_id")
+        if isinstance(item, dict)
+        and str(item.get("basis_key") or item.get("scenario_id") or "").strip()
     }
-    if isinstance(baseline, dict) and baseline.get("scenario_id"):
-        merged[str(baseline.get("scenario_id"))] = _compact_scenario(baseline)
+    if isinstance(baseline, dict):
+        compact_baseline = _compact_scenario(baseline)
+        baseline_key = str(
+            compact_baseline.get("basis_key") or compact_baseline.get("scenario_id") or ""
+        ).strip()
+        if baseline_key:
+            merged[baseline_key] = compact_baseline
     if isinstance(entries, list):
         for item in entries:
             compact = _compact_scenario(item)
-            if compact.get("scenario_id"):
-                merged[str(compact["scenario_id"])] = compact
+            compact_key = str(
+                compact.get("basis_key") or compact.get("scenario_id") or ""
+            ).strip()
+            if compact_key:
+                merged[compact_key] = compact
     ordered = list(merged.values())
     ordered.sort(key=lambda item: float(item.get("score", 0.0) or 0.0))
     return ordered[:12]
@@ -2187,14 +2231,16 @@ def _merge_review_scenario_entries(
     review_summary: dict[str, Any],
 ) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {
-        str(item.get("scenario_key") or item.get("scenario_id")): dict(item)
+        str(item.get("basis_key") or item.get("scenario_key") or item.get("scenario_id")): dict(item)
         for item in existing
         if isinstance(item, dict)
-        and str(item.get("scenario_key") or item.get("scenario_id") or "").strip()
+        and str(
+            item.get("basis_key") or item.get("scenario_key") or item.get("scenario_id") or ""
+        ).strip()
     }
     for candidate in _review_candidates_for_ledger(review_summary):
         scenario_key = str(
-            candidate.get("scenario_key") or candidate.get("scenario_id") or ""
+            candidate.get("basis_key") or candidate.get("scenario_key") or candidate.get("scenario_id") or ""
         ).strip()
         if not scenario_key:
             continue
@@ -2238,7 +2284,7 @@ def _review_candidates_for_ledger(
     deduped: dict[str, dict[str, Any]] = {}
     for item in candidates:
         scenario_key = str(
-            item.get("scenario_key") or item.get("scenario_id") or ""
+            item.get("basis_key") or item.get("scenario_key") or item.get("scenario_id") or ""
         ).strip()
         if not scenario_key:
             continue
@@ -2283,8 +2329,10 @@ def _compact_review_candidate_for_ledger(
         tier = metrics.get("governance_tier")
     if tier is None:
         tier = policy_trace.get("governance_tier")
+    parameters = item.get("parameters") if isinstance(item.get("parameters"), dict) else {}
     return {
         "scenario_id": candidate_id,
+        "basis_key": basis_key_from_parameters(parameters),
         "scenario_key": item.get("scenario_id"),
         "score": item.get("score"),
         "tier": tier,

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ai.execution_records import collect_evidence_ids
+
 
 def normalize_tool_result(
     *,
@@ -12,7 +14,8 @@ def normalize_tool_result(
     evidence_key: str,
 ) -> dict[str, Any]:
     payload = dict(result)
-    evidence_ids = _collect_evidence_ids(payload)
+    execution_status = str(payload.get("execution_status") or "ok")
+    evidence_ids = collect_evidence_ids(payload)
     metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
     governance = (
         payload.get("governance") if isinstance(payload.get("governance"), dict) else {}
@@ -35,7 +38,12 @@ def normalize_tool_result(
         },
         "governance": governance,
         "uncertainty": uncertainty,
-        "status": "ok",
+        "status": execution_status,
+        "execution": {
+            "status": execution_status,
+            "warnings": payload.get("warnings", []),
+            "material_adjustments": payload.get("material_adjustments", []),
+        },
     }
 
 
@@ -46,29 +54,3 @@ def _extract_run_id(payload: dict[str, Any]) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
-
-
-def _collect_evidence_ids(payload: object) -> list[str]:
-    collected: list[str] = []
-
-    def walk(node: object) -> None:
-        if isinstance(node, dict):
-            maybe_id = node.get("evidence_id")
-            if isinstance(maybe_id, str) and maybe_id.strip():
-                collected.append(maybe_id.strip())
-            for value in node.values():
-                walk(value)
-            return
-        if isinstance(node, list):
-            for value in node:
-                walk(value)
-
-    walk(payload)
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for item in collected:
-        if item in seen:
-            continue
-        seen.add(item)
-        ordered.append(item)
-    return ordered

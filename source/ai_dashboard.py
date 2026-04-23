@@ -112,6 +112,7 @@ class AIDashboard:
             Output("ai-chat-tool-events-store", "data"),
             Output("ai-chat-scenario-ledger-store", "data"),
             Output("ai-chat-analysis-basis-store", "data"),
+            Output("ai-chat-proposal-basis-store", "data"),
             Output("ai-memory-proposals-store", "data"),
             Output("ai-chat-transcript", "children"),
             Output("ai-analysis-trace", "data"),
@@ -123,17 +124,20 @@ class AIDashboard:
         def _refresh_review(_n_clicks):
             history = self._initial_chat_history()
             tool_events = self._initial_tool_events()
+            execution_records = self._initial_execution_records()
             scenario_ledger = self._initial_scenario_ledger()
             analysis_basis = self._initial_analysis_basis()
+            proposal_basis = self._initial_proposal_basis()
             proposals = self._initial_memory_proposals()
             return (
                 history,
                 tool_events,
                 scenario_ledger,
                 analysis_basis,
+                proposal_basis,
                 proposals,
-                self._render_chat_messages(history),
-                self._tool_event_rows(tool_events),
+                self._render_chat_messages(history, proposal_basis),
+                self._execution_record_rows(execution_records),
                 self._chat_evidence_rows(tool_events),
                 self._scenario_ledger_rows(scenario_ledger),
                 self._analysis_basis_rows(analysis_basis),
@@ -144,6 +148,7 @@ class AIDashboard:
             Output("ai-chat-tool-events-store", "data", allow_duplicate=True),
             Output("ai-chat-scenario-ledger-store", "data", allow_duplicate=True),
             Output("ai-chat-analysis-basis-store", "data", allow_duplicate=True),
+            Output("ai-chat-proposal-basis-store", "data", allow_duplicate=True),
             Output("ai-memory-proposals-store", "data", allow_duplicate=True),
             Output("ai-chat-transcript", "children", allow_duplicate=True),
             Output("ai-chat-input", "value"),
@@ -182,9 +187,11 @@ class AIDashboard:
                     no_update,
                     no_update,
                     no_update,
+                    no_update,
                 )
             if self._chat_service is None or not self._chat_id:
                 return (
+                    no_update,
                     no_update,
                     no_update,
                     no_update,
@@ -216,11 +223,15 @@ class AIDashboard:
                     self._initial_tool_events(),
                     self._initial_scenario_ledger(),
                     self._initial_analysis_basis(),
+                    self._initial_proposal_basis(),
                     self._initial_memory_proposals(),
-                    self._render_chat_messages(normalized),
+                    self._render_chat_messages(
+                        normalized,
+                        self._initial_proposal_basis(),
+                    ),
                     "",
                     "AI response failed.",
-                    self._tool_event_rows(self._initial_tool_events()),
+                    self._execution_record_rows(self._initial_execution_records()),
                     self._chat_evidence_rows(self._initial_tool_events()),
                     self._scenario_ledger_rows(self._initial_scenario_ledger()),
                     self._analysis_basis_rows(self._initial_analysis_basis()),
@@ -229,6 +240,7 @@ class AIDashboard:
             messages = response.get("messages")
             if not isinstance(messages, list):
                 return (
+                    no_update,
                     no_update,
                     no_update,
                     no_update,
@@ -244,11 +256,18 @@ class AIDashboard:
                     True,
                 )
             tool_events = response.get("tool_events")
+            execution_records = response.get("execution_records")
             scenario_ledger = response.get("scenario_ledger")
-            analysis_basis = response.get("analysis_basis")
+            analysis_basis = response.get("accepted_analysis_basis")
+            proposal_basis = response.get("proposal_basis")
             normalized_tool_events = (
                 [dict(item) for item in tool_events if isinstance(item, dict)]
                 if isinstance(tool_events, list)
+                else []
+            )
+            normalized_execution_records = (
+                [dict(item) for item in execution_records if isinstance(item, dict)]
+                if isinstance(execution_records, list)
                 else []
             )
             normalized_scenario_ledger = (
@@ -258,6 +277,9 @@ class AIDashboard:
             )
             normalized_analysis_basis = (
                 dict(analysis_basis) if isinstance(analysis_basis, dict) else {}
+            )
+            normalized_proposal_basis = (
+                dict(proposal_basis) if isinstance(proposal_basis, dict) else {}
             )
             proposals = response.get("memory_update_proposals")
             normalized_proposals = (
@@ -273,11 +295,12 @@ class AIDashboard:
                 normalized_tool_events,
                 normalized_scenario_ledger,
                 normalized_analysis_basis,
+                normalized_proposal_basis,
                 normalized_proposals,
-                self._render_chat_messages(messages),
+                self._render_chat_messages(messages, normalized_proposal_basis),
                 "",
                 status,
-                self._tool_event_rows(normalized_tool_events),
+                self._execution_record_rows(normalized_execution_records),
                 self._chat_evidence_rows(normalized_tool_events),
                 self._scenario_ledger_rows(normalized_scenario_ledger),
                 self._analysis_basis_rows(normalized_analysis_basis),
@@ -289,6 +312,7 @@ class AIDashboard:
             Output("ai-chat-tool-events-store", "data", allow_duplicate=True),
             Output("ai-chat-scenario-ledger-store", "data", allow_duplicate=True),
             Output("ai-chat-analysis-basis-store", "data", allow_duplicate=True),
+            Output("ai-chat-proposal-basis-store", "data", allow_duplicate=True),
             Output("ai-memory-proposals-store", "data", allow_duplicate=True),
             Output("ai-chat-transcript", "children", allow_duplicate=True),
             Output("ai-chat-status", "children", allow_duplicate=True),
@@ -314,15 +338,19 @@ class AIDashboard:
                     no_update,
                     no_update,
                     no_update,
+                    no_update,
                     True,
                 )
             response = self._chat_service.build_chat_response(self._chat_id)
             messages = response.get("messages")
             tool_events = response.get("tool_events")
+            execution_records = response.get("execution_records")
             scenario_ledger = response.get("scenario_ledger")
-            analysis_basis = response.get("analysis_basis")
+            analysis_basis = response.get("accepted_analysis_basis")
+            proposal_basis = response.get("proposal_basis")
             if not isinstance(messages, list):
                 return (
+                    no_update,
                     no_update,
                     no_update,
                     no_update,
@@ -341,6 +369,11 @@ class AIDashboard:
                 if isinstance(tool_events, list)
                 else []
             )
+            normalized_execution_records = (
+                [dict(item) for item in execution_records if isinstance(item, dict)]
+                if isinstance(execution_records, list)
+                else []
+            )
             normalized_scenario_ledger = (
                 [dict(item) for item in scenario_ledger if isinstance(item, dict)]
                 if isinstance(scenario_ledger, list)
@@ -348,6 +381,9 @@ class AIDashboard:
             )
             normalized_analysis_basis = (
                 dict(analysis_basis) if isinstance(analysis_basis, dict) else {}
+            )
+            normalized_proposal_basis = (
+                dict(proposal_basis) if isinstance(proposal_basis, dict) else {}
             )
             proposals = response.get("memory_update_proposals")
             normalized_proposals = (
@@ -363,14 +399,110 @@ class AIDashboard:
                 normalized_tool_events,
                 normalized_scenario_ledger,
                 normalized_analysis_basis,
+                normalized_proposal_basis,
                 normalized_proposals,
-                self._render_chat_messages(messages),
+                self._render_chat_messages(messages, normalized_proposal_basis),
                 status,
-                self._tool_event_rows(normalized_tool_events),
+                self._execution_record_rows(normalized_execution_records),
                 self._chat_evidence_rows(normalized_tool_events),
                 self._scenario_ledger_rows(normalized_scenario_ledger),
                 self._analysis_basis_rows(normalized_analysis_basis),
                 not bool(response.get("streaming")),
+            )
+
+        @self.app.callback(
+            Output("ai-chat-history-store", "data", allow_duplicate=True),
+            Output("ai-chat-analysis-basis-store", "data", allow_duplicate=True),
+            Output("ai-chat-proposal-basis-store", "data", allow_duplicate=True),
+            Output("ai-chat-transcript", "children", allow_duplicate=True),
+            Output("ai-analysis-basis", "data", allow_duplicate=True),
+            Output("ai-chat-status", "children", allow_duplicate=True),
+            Input("ai-chat-proposal-accept", "n_clicks"),
+            Input("ai-chat-proposal-reject", "n_clicks"),
+            State("ai-chat-proposal-basis-store", "data"),
+            prevent_initial_call=True,
+        )
+        def _handle_chat_proposal(accept_clicks, reject_clicks, proposal_basis):
+            action = self._proposal_action_from_trigger(
+                triggered_id=ctx.triggered_id,
+                accept_clicks=accept_clicks,
+                reject_clicks=reject_clicks,
+            )
+            if not action:
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                )
+            normalized_proposal_basis = (
+                dict(proposal_basis) if isinstance(proposal_basis, dict) else {}
+            )
+            proposal_id = str(normalized_proposal_basis.get("proposal_id") or "").strip()
+            if not proposal_id:
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    "No pending proposal is available.",
+                )
+            if self._chat_service is None or not self._chat_id:
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    "AI chat backend is not configured.",
+                )
+            try:
+                if action == "accept":
+                    response = self._chat_service.accept_proposal(
+                        self._chat_id,
+                        proposal_id,
+                    )
+                    status = "Proposal accepted. Analysis Basis updated for this chat."
+                else:
+                    response = self._chat_service.reject_proposal(
+                        self._chat_id,
+                        proposal_id,
+                    )
+                    status = "Proposal rejected. Analysis Basis unchanged."
+            except Exception as error:
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    f"Proposal action failed: {error}",
+                )
+            messages = response.get("messages")
+            accepted_analysis_basis = response.get("accepted_analysis_basis")
+            next_proposal_basis = response.get("proposal_basis")
+            normalized_analysis_basis = (
+                dict(accepted_analysis_basis)
+                if isinstance(accepted_analysis_basis, dict)
+                else {}
+            )
+            normalized_next_proposal_basis = (
+                dict(next_proposal_basis) if isinstance(next_proposal_basis, dict) else {}
+            )
+            return (
+                [dict(item) for item in messages if isinstance(item, dict)]
+                if isinstance(messages, list)
+                else no_update,
+                normalized_analysis_basis,
+                normalized_next_proposal_basis,
+                self._render_chat_messages(messages, normalized_next_proposal_basis)
+                if isinstance(messages, list)
+                else no_update,
+                self._analysis_basis_rows(normalized_analysis_basis),
+                status,
             )
 
         @self.app.callback(
@@ -600,6 +732,10 @@ class AIDashboard:
                     data=self._initial_analysis_basis(),
                 ),
                 dcc.Store(
+                    id="ai-chat-proposal-basis-store",
+                    data=self._initial_proposal_basis(),
+                ),
+                dcc.Store(
                     id="ai-segment-memory-store",
                     data=initial_memory_payload,
                 ),
@@ -673,9 +809,12 @@ class AIDashboard:
                                         ),
                                         html.Div(
                                             [
-                                                self._intro_chat_message(),
-                                                html.Div(
-                                                    self._render_chat_messages(history),
+                                                 self._intro_chat_message(),
+                                                 html.Div(
+                                                    self._render_chat_messages(
+                                                        history,
+                                                        self._initial_proposal_basis(),
+                                                    ),
                                                     id="ai-chat-transcript",
                                                     style={
                                                         "display": "flex",
@@ -1178,16 +1317,24 @@ class AIDashboard:
                                                                             "id": "tool",
                                                                         },
                                                                         {
-                                                                            "name": "Focus",
-                                                                            "id": "focus",
+                                                                            "name": "Status",
+                                                                            "id": "status",
                                                                         },
                                                                         {
-                                                                            "name": "Summary",
-                                                                            "id": "summary",
+                                                                            "name": "Requested",
+                                                                            "id": "requested",
+                                                                        },
+                                                                        {
+                                                                            "name": "Effective",
+                                                                            "id": "effective",
+                                                                        },
+                                                                        {
+                                                                            "name": "Notes",
+                                                                            "id": "notes",
                                                                         },
                                                                     ],
-                                                                    data=self._tool_event_rows(
-                                                                        self._initial_tool_events()
+                                                                    data=self._execution_record_rows(
+                                                                        self._initial_execution_records()
                                                                     ),
                                                                     style_table={
                                                                         "overflowX": "auto"
@@ -1234,8 +1381,8 @@ class AIDashboard:
                                                                             "id": "candidate_id",
                                                                         },
                                                                         {
-                                                                            "name": "Stable Key",
-                                                                            "id": "scenario_key",
+                                                                            "name": "Basis Key",
+                                                                            "id": "basis_key",
                                                                         },
                                                                         {
                                                                             "name": "Score",
@@ -1325,6 +1472,13 @@ class AIDashboard:
                 return [dict(item) for item in session.tool_events]
         return []
 
+    def _initial_execution_records(self) -> list[dict[str, Any]]:
+        if self._chat_service is not None and self._chat_id:
+            session = self._chat_service.get_chat(self._chat_id)
+            if session is not None:
+                return [dict(item) for item in session.execution_records]
+        return []
+
     def _initial_scenario_ledger(self) -> list[dict[str, Any]]:
         if self._chat_service is not None and self._chat_id:
             session = self._chat_service.get_chat(self._chat_id)
@@ -1337,11 +1491,23 @@ class AIDashboard:
             session = self._chat_service.get_chat(self._chat_id)
             if session is not None:
                 basis = (
-                    session.working_memory.get("analysis_basis")
-                    if isinstance(session.working_memory.get("analysis_basis"), dict)
+                    session.accepted_analysis_basis
+                    if isinstance(session.accepted_analysis_basis, dict)
                     else {}
                 )
                 return dict(basis)
+        return {}
+
+    def _initial_proposal_basis(self) -> dict[str, Any]:
+        if self._chat_service is not None and self._chat_id:
+            session = self._chat_service.get_chat(self._chat_id)
+            if session is not None:
+                proposal = (
+                    session.proposal_basis
+                    if isinstance(session.proposal_basis, dict)
+                    else {}
+                )
+                return dict(proposal)
         return {}
 
     def _current_segment(self) -> str | None:
@@ -1545,11 +1711,36 @@ class AIDashboard:
                 return spec["prompt"]
         return str(typed_prompt or "").strip()
 
-    def _render_chat_messages(self, history: list[dict[str, Any]]) -> list:
+    @staticmethod
+    def _proposal_action_from_trigger(
+        *,
+        triggered_id: object,
+        accept_clicks: object,
+        reject_clicks: object,
+    ) -> str:
+        trigger = str(triggered_id or "").strip()
+        if trigger == "ai-chat-proposal-accept":
+            try:
+                return "accept" if int(accept_clicks or 0) > 0 else ""
+            except (TypeError, ValueError):
+                return ""
+        if trigger == "ai-chat-proposal-reject":
+            try:
+                return "reject" if int(reject_clicks or 0) > 0 else ""
+            except (TypeError, ValueError):
+                return ""
+        return ""
+
+    def _render_chat_messages(
+        self,
+        history: list[dict[str, Any]],
+        proposal_basis: dict[str, Any] | None = None,
+    ) -> list:
         items = [item for item in history if isinstance(item, dict)]
         rendered: list = []
         if not items:
             return rendered
+        current_proposal = dict(proposal_basis) if isinstance(proposal_basis, dict) else {}
 
         for item in items:
             role = str(item.get("role", "assistant")).strip().lower()
@@ -1593,7 +1784,26 @@ class AIDashboard:
                             style={"marginTop": "10px"},
                         )
                     )
-            rendered.append(
+            message_id = str(item.get("message_id") or "").strip()
+            embedded_proposal = (
+                dict(item.get("proposal_basis"))
+                if isinstance(item.get("proposal_basis"), dict)
+                else {}
+            )
+            active_proposal = embedded_proposal
+            if (
+                not active_proposal
+                and current_proposal
+                and message_id
+                and message_id
+                == str(current_proposal.get("presented_in_message_id") or "").strip()
+            ):
+                active_proposal = current_proposal
+            proposal_component = self._render_message_proposal(
+                active_proposal,
+                current_proposal=current_proposal,
+            )
+            message_children = [
                 html.Div(
                     [
                         html.Div(
@@ -1646,8 +1856,118 @@ class AIDashboard:
                         "boxShadow": SHADOW_SOFT,
                     },
                 )
+            ]
+            if proposal_component is not None:
+                message_children.append(proposal_component)
+            rendered.append(
+                html.Div(
+                    message_children,
+                    style={
+                        "display": "flex",
+                        "flexDirection": "column",
+                        "gap": "10px",
+                        "alignSelf": "flex-end" if is_user else "flex-start",
+                        "maxWidth": "78%",
+                    },
+                )
             )
         return rendered
+
+    @staticmethod
+    def _proposal_parameter_summary(proposal: dict[str, Any]) -> str:
+        parameters = (
+            proposal.get("parameters")
+            if isinstance(proposal.get("parameters"), dict)
+            else {}
+        )
+        tail = parameters.get("tail") if isinstance(parameters.get("tail"), dict) else {}
+        drops = parameters.get("drop") if isinstance(parameters.get("drop"), list) else []
+        return (
+            f"Average: {parameters.get('average', '')} | "
+            f"Drops: {len(drops)} | "
+            f"Tail: {tail.get('curve', '')} @ {tail.get('attachment_age', 'n/a')}"
+        )
+
+    @classmethod
+    def _render_message_proposal(
+        cls,
+        proposal: dict[str, Any],
+        *,
+        current_proposal: dict[str, Any],
+    ):
+        if not isinstance(proposal, dict) or not proposal:
+            return None
+        if str(proposal.get("status") or "").strip() != "pending":
+            return None
+        proposal_id = str(proposal.get("proposal_id") or "").strip()
+        current_id = str(current_proposal.get("proposal_id") or "").strip()
+        if not proposal_id or proposal_id != current_id:
+            return None
+        scenario_label = str(
+            proposal.get("scenario_label")
+            or proposal.get("candidate_id")
+            or proposal.get("scenario_id")
+            or "proposed basis"
+        )
+        caveats = (
+            [str(item) for item in proposal.get("caveats", []) if str(item).strip()][:3]
+            if isinstance(proposal.get("caveats"), list)
+            else []
+        )
+        children: list[Any] = [
+            html.Div(
+                "Recommended Change Pending Acceptance",
+                style={"fontSize": "12px", "fontWeight": 700, "color": COLOR_MUTED},
+            ),
+            html.Div(
+                scenario_label,
+                style={"fontSize": "16px", "fontWeight": 700, "color": COLOR_TEXT},
+            ),
+            html.Div(
+                f"Strength: {proposal.get('recommendation_strength') or 'recommended'}",
+                style={"fontSize": "13px", "color": COLOR_MUTED},
+            ),
+            html.Div(
+                cls._proposal_parameter_summary(proposal),
+                style={"fontSize": "13px", "color": COLOR_TEXT},
+            ),
+        ]
+        if caveats:
+            children.append(
+                html.Div(
+                    "Caveats: " + "; ".join(caveats),
+                    style={"fontSize": "12px", "color": COLOR_MUTED, "lineHeight": "1.5"},
+                )
+            )
+        children.append(
+            html.Div(
+                [
+                    html.Button(
+                        "Yes",
+                        id="ai-chat-proposal-accept",
+                        n_clicks=0,
+                        style=cls._primary_button_style(),
+                    ),
+                    html.Button(
+                        "No",
+                        id="ai-chat-proposal-reject",
+                        n_clicks=0,
+                        style=cls._secondary_button_style(),
+                    ),
+                ],
+                style={"display": "flex", "gap": "10px", "marginTop": "4px"},
+            )
+        )
+        return html.Div(
+            children,
+            style={
+                "background": COLOR_ACCENT_SOFT,
+                "border": f"1px solid {COLOR_BORDER}",
+                "borderRadius": RADIUS_MD,
+                "padding": "12px 14px",
+                "boxShadow": SHADOW_SOFT,
+            },
+        )
 
     @staticmethod
     def _intro_chat_message():
@@ -1808,6 +2128,64 @@ class AIDashboard:
         return rows
 
     @staticmethod
+    def _execution_record_rows(
+        execution_records: list[dict[str, Any]],
+    ) -> list[dict[str, str]]:
+        rows: list[dict[str, str]] = []
+        for item in reversed(execution_records[-12:]):
+            if not isinstance(item, dict):
+                continue
+            requested_inputs = (
+                item.get("requested_inputs")
+                if isinstance(item.get("requested_inputs"), dict)
+                else {}
+            )
+            effective_inputs = (
+                item.get("effective_inputs")
+                if isinstance(item.get("effective_inputs"), dict)
+                else {}
+            )
+            warnings = (
+                [str(entry) for entry in item.get("warnings", []) if str(entry).strip()]
+                if isinstance(item.get("warnings"), list)
+                else []
+            )
+            requested_focus = (
+                requested_inputs.get("scenario_id")
+                or requested_inputs.get("uwy")
+                or requested_inputs.get("segment")
+                or requested_inputs.get("session_id")
+                or ""
+            )
+            effective_focus = (
+                effective_inputs.get("scenario_id")
+                or effective_inputs.get("uwy")
+                or effective_inputs.get("segment")
+                or effective_inputs.get("session_id")
+                or ""
+            )
+            rows.append(
+                {
+                    "tool": str(item.get("tool_name") or item.get("workflow_name") or ""),
+                    "status": str(item.get("execution_status") or ""),
+                    "requested": str(requested_focus),
+                    "effective": str(effective_focus),
+                    "notes": "; ".join(warnings[:3]) or "executed without adjustments",
+                }
+            )
+        if rows:
+            return rows
+        return [
+            {
+                "tool": "No execution records yet",
+                "status": "",
+                "requested": "",
+                "effective": "",
+                "notes": "Material tool runs will appear here with requested and effective inputs, execution status, and adjustments.",
+            }
+        ]
+
+    @staticmethod
     def _chat_evidence_rows(tool_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -1895,8 +2273,8 @@ class AIDashboard:
             row["candidate_id"] = str(
                 row.get("candidate_id") or row.get("scenario_id") or ""
             ).strip()
-            row["scenario_key"] = str(
-                row.get("scenario_key") or row.get("scenario_id") or ""
+            row["basis_key"] = str(
+                row.get("basis_key") or row.get("scenario_key") or row.get("scenario_id") or ""
             ).strip()
             rows.append(row)
         if rows:
@@ -1904,7 +2282,7 @@ class AIDashboard:
         return [
             {
                 "candidate_id": "No chat scenarios tested yet",
-                "scenario_key": "",
+                "basis_key": "",
                 "score": "",
                 "tier": "",
                 "transform": "",
@@ -1918,7 +2296,7 @@ class AIDashboard:
             return [
                 {
                     "field": "Meaning",
-                    "value": "No conversation model is locked yet. Once the assistant recommends or analyzes a model selection, that model becomes the Analysis Basis the AI will use for future analysis until you explicitly switch basis.",
+                    "value": "No accepted Analysis Basis is set for this chat yet. Recommendations can appear in chat, but the basis shown here changes only after an explicit acceptance action.",
                 }
             ]
         parameters = (
@@ -1932,24 +2310,26 @@ class AIDashboard:
         tail_active = tail.get("attachment_age") is not None
         tail_mode = "attached" if tail_active else "reference_fit_only"
         basis_type = str(analysis_basis.get("basis_type") or "").strip().lower()
+        basis_key = str(analysis_basis.get("basis_key") or "").strip()
         scenario_id = str(analysis_basis.get("scenario_id") or "").strip()
+        scenario_label = str(analysis_basis.get("scenario_label") or "").strip()
         candidate_id = str(analysis_basis.get("candidate_id") or "").strip()
-        if scenario_id:
+        if not scenario_label and scenario_id:
             scenario_label = candidate_id or scenario_id
         elif basis_type == "baseline":
             scenario_label = "active baseline session"
         elif basis_type == "bespoke":
             scenario_label = "custom parameter basis"
-        else:
+        elif not scenario_label:
             scenario_label = "unnamed scenario basis"
         rows = [
             {
                 "field": "Meaning",
-                "value": "This is the current conversation model the user and AI are working from. Future analysis uses this basis until you explicitly switch to baseline, current session, or another scenario.",
+                "value": "This is the currently accepted reasoning basis for this chat. Future basis-aware analysis uses this accepted basis until you explicitly switch basis or accept a different proposed basis.",
             },
             {
                 "field": "Used For Future Analysis",
-                "value": "yes, the AI will use this shown basis for future analysis until you explicitly switch basis",
+                "value": "yes, this accepted basis is what the AI will use for future basis-aware analysis",
             },
             {"field": "Basis Type", "value": str(analysis_basis.get("basis_type", ""))},
             {
@@ -1957,14 +2337,18 @@ class AIDashboard:
                 "value": scenario_label,
             },
             {
-                "field": "Stable Scenario Key",
+                "field": "Basis Key",
+                "value": basis_key,
+            },
+            {
+                "field": "Scenario ID",
                 "value": scenario_id,
             },
             {
                 "field": "Matches Active Session",
-                "value": "yes, this basis is the current active session"
+                "value": "yes, this accepted basis matches the current active session"
                 if bool(analysis_basis.get("is_active_session"))
-                else "no, this basis differs from the current active session",
+                else "no, this accepted basis differs from the current active session",
             },
             {
                 "field": "Source Tool",

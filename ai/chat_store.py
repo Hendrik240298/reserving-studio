@@ -9,6 +9,14 @@ import threading
 from typing import Any
 import uuid
 
+from ai.control_plane_types import (
+    normalize_accepted_analysis_basis,
+    normalize_basis_transition_record,
+    normalize_execution_record,
+    normalize_preview_basis,
+    normalize_proposal_basis,
+)
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -22,7 +30,12 @@ class ChatSession:
     messages: list[dict[str, Any]] = field(default_factory=list)
     tool_events: list[dict[str, Any]] = field(default_factory=list)
     working_memory: dict[str, Any] = field(default_factory=dict)
+    accepted_analysis_basis: dict[str, Any] = field(default_factory=dict)
+    proposal_basis: dict[str, Any] = field(default_factory=dict)
+    preview_basis: dict[str, Any] = field(default_factory=dict)
     scenario_ledger: list[dict[str, Any]] = field(default_factory=list)
+    execution_records: list[dict[str, Any]] = field(default_factory=list)
+    basis_transition_history: list[dict[str, Any]] = field(default_factory=list)
     deterministic_packet: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=_utc_now)
@@ -124,6 +137,23 @@ class InMemoryChatStore:
             session.updated_at = _utc_now()
             return self._copy_session(session)
 
+    def update_message_fields(
+        self,
+        chat_id: str,
+        *,
+        message_id: str,
+        fields: dict[str, Any],
+    ) -> ChatSession:
+        with self._lock:
+            session = self._require(chat_id)
+            for item in reversed(session.messages):
+                if str(item.get("message_id", "")) != str(message_id or ""):
+                    continue
+                item.update(dict(fields or {}))
+                break
+            session.updated_at = _utc_now()
+            return self._copy_session(session)
+
     def extend_tool_events(
         self,
         chat_id: str,
@@ -156,16 +186,41 @@ class InMemoryChatStore:
         chat_id: str,
         *,
         working_memory: dict[str, Any] | None = None,
+        accepted_analysis_basis: dict[str, Any] | None = None,
+        proposal_basis: dict[str, Any] | None = None,
+        preview_basis: dict[str, Any] | None = None,
         scenario_ledger: list[dict[str, Any]] | None = None,
+        execution_records: list[dict[str, Any]] | None = None,
+        basis_transition_history: list[dict[str, Any]] | None = None,
         deterministic_packet: dict[str, Any] | None = None,
     ) -> ChatSession:
         with self._lock:
             session = self._require(chat_id)
             if isinstance(working_memory, dict):
                 session.working_memory = dict(working_memory)
+            if isinstance(accepted_analysis_basis, dict):
+                session.accepted_analysis_basis = normalize_accepted_analysis_basis(
+                    accepted_analysis_basis
+                )
+            if isinstance(proposal_basis, dict):
+                session.proposal_basis = normalize_proposal_basis(proposal_basis)
+            if isinstance(preview_basis, dict):
+                session.preview_basis = normalize_preview_basis(preview_basis)
             if isinstance(scenario_ledger, list):
                 session.scenario_ledger = [
                     dict(item) for item in scenario_ledger if isinstance(item, dict)
+                ]
+            if isinstance(execution_records, list):
+                session.execution_records = [
+                    normalize_execution_record(item)
+                    for item in execution_records
+                    if isinstance(item, dict)
+                ]
+            if isinstance(basis_transition_history, list):
+                session.basis_transition_history = [
+                    normalize_basis_transition_record(item)
+                    for item in basis_transition_history
+                    if isinstance(item, dict)
                 ]
             if isinstance(deterministic_packet, dict):
                 session.deterministic_packet = dict(deterministic_packet)
@@ -187,7 +242,12 @@ class InMemoryChatStore:
             messages=[dict(item) for item in session.messages],
             tool_events=[dict(item) for item in session.tool_events],
             working_memory=dict(session.working_memory),
+            accepted_analysis_basis=dict(session.accepted_analysis_basis),
+            proposal_basis=dict(session.proposal_basis),
+            preview_basis=dict(session.preview_basis),
             scenario_ledger=[dict(item) for item in session.scenario_ledger],
+            execution_records=[dict(item) for item in session.execution_records],
+            basis_transition_history=[dict(item) for item in session.basis_transition_history],
             deterministic_packet=dict(session.deterministic_packet),
             metadata=dict(session.metadata),
             created_at=session.created_at,
@@ -213,6 +273,22 @@ class FileChatStore(InMemoryChatStore):
                 segment=segment,
                 reserving_session_id=reserving_session_id,
                 metadata=metadata,
+            )
+            self._persist_session_unlocked(session)
+            return session
+
+    def update_message_fields(
+        self,
+        chat_id: str,
+        *,
+        message_id: str,
+        fields: dict[str, Any],
+    ) -> ChatSession:
+        with self._lock:
+            session = super().update_message_fields(
+                chat_id,
+                message_id=message_id,
+                fields=fields,
             )
             self._persist_session_unlocked(session)
             return session
@@ -312,14 +388,24 @@ class FileChatStore(InMemoryChatStore):
         chat_id: str,
         *,
         working_memory: dict[str, Any] | None = None,
+        accepted_analysis_basis: dict[str, Any] | None = None,
+        proposal_basis: dict[str, Any] | None = None,
+        preview_basis: dict[str, Any] | None = None,
         scenario_ledger: list[dict[str, Any]] | None = None,
+        execution_records: list[dict[str, Any]] | None = None,
+        basis_transition_history: list[dict[str, Any]] | None = None,
         deterministic_packet: dict[str, Any] | None = None,
     ) -> ChatSession:
         with self._lock:
             session = super().update_memory(
                 chat_id,
                 working_memory=working_memory,
+                accepted_analysis_basis=accepted_analysis_basis,
+                proposal_basis=proposal_basis,
+                preview_basis=preview_basis,
                 scenario_ledger=scenario_ledger,
+                execution_records=execution_records,
+                basis_transition_history=basis_transition_history,
                 deterministic_packet=deterministic_packet,
             )
             self._persist_session_unlocked(session)
@@ -378,7 +464,14 @@ class FileChatStore(InMemoryChatStore):
             "messages": [dict(item) for item in session.messages],
             "tool_events": [dict(item) for item in session.tool_events],
             "working_memory": dict(session.working_memory),
+            "accepted_analysis_basis": dict(session.accepted_analysis_basis),
+            "proposal_basis": dict(session.proposal_basis),
+            "preview_basis": dict(session.preview_basis),
             "scenario_ledger": [dict(item) for item in session.scenario_ledger],
+            "execution_records": [dict(item) for item in session.execution_records],
+            "basis_transition_history": [
+                dict(item) for item in session.basis_transition_history
+            ],
             "deterministic_packet": dict(session.deterministic_packet),
             "metadata": dict(session.metadata),
             "created_at": session.created_at,
@@ -395,6 +488,19 @@ class FileChatStore(InMemoryChatStore):
         resolved_chat_id = stored_chat_id or chat_id
         if resolved_chat_id != chat_id:
             return None
+        working_memory = (
+            dict(payload.get("working_memory"))
+            if isinstance(payload.get("working_memory"), dict)
+            else {}
+        )
+        accepted_analysis_basis = normalize_accepted_analysis_basis(
+            payload.get("accepted_analysis_basis")
+        )
+        if not accepted_analysis_basis:
+            accepted_analysis_basis = normalize_accepted_analysis_basis(
+                working_memory.get("analysis_basis")
+            )
+        working_memory.pop("analysis_basis", None)
         return ChatSession(
             chat_id=resolved_chat_id,
             segment=payload.get("segment"),
@@ -409,14 +515,23 @@ class FileChatStore(InMemoryChatStore):
                 for item in payload.get("tool_events", [])
                 if isinstance(item, dict)
             ],
-            working_memory=(
-                dict(payload.get("working_memory"))
-                if isinstance(payload.get("working_memory"), dict)
-                else {}
-            ),
+            working_memory=working_memory,
+            accepted_analysis_basis=accepted_analysis_basis,
+            proposal_basis=normalize_proposal_basis(payload.get("proposal_basis")),
+            preview_basis=normalize_preview_basis(payload.get("preview_basis")),
             scenario_ledger=[
                 dict(item)
                 for item in payload.get("scenario_ledger", [])
+                if isinstance(item, dict)
+            ],
+            execution_records=[
+                normalize_execution_record(item)
+                for item in payload.get("execution_records", [])
+                if isinstance(item, dict)
+            ],
+            basis_transition_history=[
+                normalize_basis_transition_record(item)
+                for item in payload.get("basis_transition_history", [])
                 if isinstance(item, dict)
             ],
             deterministic_packet=(

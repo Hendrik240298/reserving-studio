@@ -10,11 +10,19 @@ from typing import Any
 
 from ai.api_tools import ReservingApiTools
 from ai.backend_tools import BackendReservingTools
+from ai.basis_manager import BasisManager
 from ai.context_loader import load_segment_note
+from ai.control_plane_types import (
+    normalize_accepted_analysis_basis,
+    normalize_preview_basis,
+    normalize_proposal_basis,
+)
 from ai.deterministic_packet import build_deterministic_packet
+from ai.execution_records import execution_status_is_successful, latest_execution_record
 from ai.memory_store import SegmentMemoryStore
 from ai.openrouter_client import OpenRouterClient
 from ai.planner import PlaybookPlanner
+from ai.proposal_manager import ProposalManager
 from ai.recommendation_policy import RecommendationPolicy
 from ai.reviewer import ReviewerGate
 from ai.tool_payloads import (
@@ -25,6 +33,11 @@ from ai.tool_payloads import (
     render_memory_hint,
 )
 from ai.tool_contract import normalize_tool_result
+from ai.workflow_definitions import (
+    get_workflow_definition,
+    select_workflow_definition,
+    select_workflow_name,
+)
 from source.services.memory_authoring_service import MemoryAuthoringService
 from source.services.segment_memory_service import SegmentMemoryService
 
@@ -170,6 +183,10 @@ class AssistantService:
         user_prompt: str,
         conversation_history: list[dict[str, str]] | None = None,
         session_context: dict[str, Any] | None = None,
+        accepted_analysis_basis: dict[str, Any] | None = None,
+        proposal_basis: dict[str, Any] | None = None,
+        preview_basis: dict[str, Any] | None = None,
+        execution_records: list[dict[str, Any]] | None = None,
         working_memory: dict[str, Any] | None = None,
         event_callback: Any | None = None,
         max_steps: int = 14,
@@ -211,6 +228,20 @@ class AssistantService:
         messages.append({"role": "user", "content": user_prompt})
         tool_outputs: dict[str, dict[str, Any]] = {}
         tool_events: list[dict[str, Any]] = []
+        current_accepted_basis = BasisManager.accepted_basis(
+            accepted_analysis_basis=accepted_analysis_basis,
+            legacy_working_memory=working_memory if isinstance(working_memory, dict) else None,
+        )
+        current_proposal_basis = normalize_proposal_basis(
+            proposal_basis
+            if proposal_basis is not None
+            else (working_memory or {}).get("proposal_basis")
+        )
+        current_preview_basis = normalize_preview_basis(
+            preview_basis
+            if preview_basis is not None
+            else (working_memory or {}).get("preview_basis")
+        )
         memory_state = build_memory_snapshot(
             session_summary=(working_memory or {}).get("session_summary")
             if isinstance(working_memory, dict)
@@ -239,15 +270,21 @@ class AssistantService:
             existing_scenario_ledger=(working_memory or {}).get("scenario_ledger")
             if isinstance(working_memory, dict)
             else None,
-            existing_analysis_basis=(working_memory or {}).get("analysis_basis")
-            if isinstance(working_memory, dict)
-            else None,
+            existing_accepted_analysis_basis=current_accepted_basis,
             existing_scenario_basis_cache=(working_memory or {}).get(
                 "scenario_basis_cache"
             )
             if isinstance(working_memory, dict)
             else None,
         )
+        memory_state["proposal_basis"] = current_proposal_basis
+        memory_state["preview_basis"] = current_preview_basis
+        memory_state["execution_records"] = (
+            [dict(item) for item in execution_records if isinstance(item, dict)]
+            if isinstance(execution_records, list)
+            else []
+        )
+        memory_state["basis_transition_history"] = []
         tool_specs = self._tools.tool_specs
         guardrail_state: dict[str, bool] = {
             "portfolio_shift_unconfirmed": False,
@@ -305,13 +342,33 @@ class AssistantService:
             )
             deterministic_packet["memory_update_proposals"] = validated_proposals
             memory_state["memory_update_proposals"] = validated_proposals
-            analysis_basis = self._bind_analysis_basis_to_packet(
-                memory_state=memory_state,
+            proposal = ProposalManager.build_from_deterministic_packet(
                 deterministic_packet=deterministic_packet,
-                session_context=session_context,
+                accepted_analysis_basis=memory_state.get("accepted_analysis_basis"),
+                basis_cache=memory_state.get("scenario_basis_cache"),
             )
-            if analysis_basis:
-                memory_state["analysis_basis"] = analysis_basis
+            if proposal:
+                memory_state["proposal_basis"] = proposal
+            deterministic_packet["accepted_analysis_basis"] = dict(
+                memory_state.get("accepted_analysis_basis", {})
+            )
+            deterministic_packet["proposal_basis"] = dict(
+                memory_state.get("proposal_basis", {})
+            )
+            presentation = (
+                deterministic_packet.get("presentation")
+                if isinstance(deterministic_packet.get("presentation"), dict)
+                else {}
+            )
+            presentation["basis_confirmation_line"] = BasisManager.label(
+                memory_state.get("accepted_analysis_basis")
+            )
+            if proposal:
+                presentation["proposal_confirmation_line"] = (
+                    "Recommended change pending acceptance: "
+                    f"{proposal.get('scenario_label') or proposal.get('scenario_id') or 'proposed basis'}."
+                )
+            deterministic_packet["presentation"] = presentation
             messages.append(
                 {
                     "role": "system",
@@ -463,6 +520,7 @@ class AssistantService:
                         "content": self._apply_narrative_guardrails(
                             content,
                             guardrail_state,
+                            memory_state.get("execution_records", []),
                         ),
                         "fallback_used": False,
                         "session_id": workflow_state.get("session_id"),
@@ -502,6 +560,7 @@ class AssistantService:
                         "content": self._apply_narrative_guardrails(
                             merged,
                             guardrail_state,
+                            memory_state.get("execution_records", []),
                         ),
                         "fallback_used": False,
                         "session_id": workflow_state.get("session_id"),
@@ -838,100 +897,10 @@ class AssistantService:
                 "tool_get_last_derived_drop_detail",
             }
 
-        playbook = AssistantService._select_playbook(prompt)
-        if playbook == "movement_review":
-            return {
-                "tool_get_data_view_summary",
-                "tool_get_data_view",
-                "tool_compare_data_views",
-                "tool_run_movement_diagnostics",
-                "tool_run_ldf_consistency_diagnostics",
-                "tool_project_late_emergence_benchmark",
-                "tool_get_finding_detail",
-            }
-        if playbook == "scenario_recommendation":
-            return {
-                "tool_run_diagnostics_summary",
-                "tool_iterate_diagnostics_summary",
-                "tool_get_results_summary",
-                "tool_get_data_view_summary",
-                "tool_get_scenario_detail",
-                "tool_get_finding_detail",
-                "tool_explain_reserve_change",
-                "tool_rank_link_ratios",
-                "tool_run_derived_drop_scenario",
-                "tool_run_highest_a2a_drop_scenario",
-                "tool_recalculate",
-            }
-        if playbook == "drop_review":
-            return {
-                "tool_run_drop_review",
-                "tool_get_finding_detail",
-                "tool_get_scenario_detail",
-                "tool_get_last_derived_drop_detail",
-                "tool_explain_reserve_change",
-            }
-        if playbook == "tail_selection":
-            return {
-                "tool_run_tail_review",
-                "tool_evaluate_tail_fit",
-                "tool_get_assumption_context_detail",
-                "tool_get_scenario_detail",
-                "tool_get_finding_detail",
-            }
-        if playbook == "method_suitability_review":
-            return {
-                "tool_run_bf_suitability_review",
-                "tool_get_results_summary",
-                "tool_get_result_for_uwy",
-                "tool_get_finding_detail",
-                "tool_compare_data_views",
-            }
-        if playbook == "data_anomaly_triage":
-            return {
-                "tool_run_anomaly_triage",
-                "tool_run_movement_diagnostics",
-                "tool_run_ldf_consistency_diagnostics",
-                "tool_get_data_view_summary",
-                "tool_get_data_view",
-                "tool_compare_data_views",
-                "tool_get_finding_detail",
-            }
-        if playbook == "quarter_close_review":
-            return {
-                "tool_run_quarter_close_review",
-                "tool_get_quarter_close_pack",
-                "tool_get_assumption_context_detail",
-                "tool_get_results_summary",
-                "tool_get_result_for_uwy",
-                "tool_get_finding_detail",
-                "tool_get_scenario_detail",
-            }
-        if playbook == "reserve_change_explanation":
-            return {
-                "tool_explain_reserve_change",
-                "tool_get_last_derived_drop_detail",
-                "tool_get_data_view_summary",
-                "tool_compare_data_views",
-                "tool_get_results_summary",
-                "tool_get_result_for_uwy",
-            }
-        if playbook == "late_emergence_review":
-            return {
-                "tool_project_late_emergence_benchmark",
-                "tool_get_results_summary",
-                "tool_get_result_for_uwy",
-                "tool_get_assumption_context_detail",
-            }
-        if playbook == "data_exploration":
-            return {
-                "tool_get_data_view_summary",
-                "tool_get_data_view",
-                "tool_compare_data_views",
-                "tool_get_results_summary",
-                "tool_get_result_for_uwy",
-            }
-        return set()
+        definition = get_workflow_definition(AssistantService._select_playbook(prompt))
+        if definition is None:
+            return set()
+        return set(definition.tool_whitelist)
 
     def _execute_tool_call(
         self,
@@ -960,12 +929,23 @@ class AssistantService:
                     return cached, memory_state
 
         tool_result = self._tools.call_tool(function_name, args)
+        execution_record = None
+        if isinstance(tool_result, dict):
+            execution_record = tool_result.pop("execution_record", None)
         tool_outputs[function_name] = tool_result
         next_memory = self._update_memory_state(
             memory_state,
             function_name=function_name,
             tool_result=tool_result,
         )
+        if isinstance(execution_record, dict) and execution_record:
+            existing_records = (
+                list(next_memory.get("execution_records"))
+                if isinstance(next_memory.get("execution_records"), list)
+                else []
+            )
+            existing_records.append(dict(execution_record))
+            next_memory["execution_records"] = existing_records
         tool_event = {
             "name": function_name,
             "arguments": args,
@@ -1057,15 +1037,15 @@ class AssistantService:
     ) -> dict[str, Any]:
         prompt = str(workflow_state.get("current_user_prompt") or "").strip().lower()
         if AssistantService._prompt_requests_baseline_basis(prompt):
-            return AssistantService._baseline_basis_from_memory(
+            return BasisManager.baseline_basis_from_memory(
                 memory_state=memory_state,
                 session_context=None,
             )
 
         scenario_id = str(args.get("scenario_id") or "").strip()
         current_basis = (
-            memory_state.get("analysis_basis")
-            if isinstance(memory_state.get("analysis_basis"), dict)
+            memory_state.get("accepted_analysis_basis")
+            if isinstance(memory_state.get("accepted_analysis_basis"), dict)
             else {}
         )
         basis_cache = (
@@ -1075,11 +1055,11 @@ class AssistantService:
         )
         if scenario_id:
             if scenario_id == "baseline":
-                return AssistantService._baseline_basis_from_memory(
+                return BasisManager.baseline_basis_from_memory(
                     memory_state=memory_state,
                     session_context=None,
                 )
-            resolved_basis = AssistantService._lookup_basis_by_requested_id(
+            resolved_basis = BasisManager.lookup_basis_by_requested_id(
                 requested_id=scenario_id,
                 current_basis=current_basis,
                 basis_cache=basis_cache,
@@ -1087,12 +1067,12 @@ class AssistantService:
             if resolved_basis:
                 return resolved_basis
 
-        analysis_basis = current_basis
-        if analysis_basis:
-            return dict(analysis_basis)
+        accepted_analysis_basis = current_basis
+        if accepted_analysis_basis:
+            return dict(accepted_analysis_basis)
         if has_any_basis_arg:
             return {}
-        return AssistantService._baseline_basis_from_memory(
+        return BasisManager.baseline_basis_from_memory(
             memory_state=memory_state,
             session_context=None,
         )
@@ -1102,7 +1082,8 @@ class AssistantService:
         compact_packet = AssistantService._compact_deterministic_packet(packet)
         return (
             "Deterministic control packet already prepared for this turn. "
-            "Use it as the primary evidence frame for the answer. Do not contradict its review status or recommendation status.\n"
+            "Use it as the primary evidence frame for the answer. Do not contradict its review status or recommendation status. "
+            "Do not say the Analysis Basis changed unless explicit acceptance occurred; distinguish the current accepted basis from any proposed change.\n"
             + json.dumps(compact_packet, ensure_ascii=True)
         )
 
@@ -1130,8 +1111,12 @@ class AssistantService:
         return {
             "plan": {
                 "playbook": plan.get("playbook"),
+                "workflow_name": plan.get("workflow_name"),
                 "segment": plan.get("segment"),
+                "intent_class": plan.get("intent_class"),
                 "minimum_evidence_count": plan.get("minimum_evidence_count"),
+                "basis_behavior": plan.get("basis_behavior", []),
+                "answer_contract": plan.get("answer_contract"),
                 "steps": [
                     {
                         "tool_name": item.get("tool_name"),
@@ -1170,64 +1155,9 @@ class AssistantService:
             "score_breakdown": packet.get("score_breakdown", {}),
             "policy_trace": packet.get("policy_trace", {}),
             "recommended_changes": packet.get("recommended_changes", [])[:3],
+            "accepted_analysis_basis": packet.get("accepted_analysis_basis", {}),
+            "proposal_basis": packet.get("proposal_basis", {}),
         }
-
-    @staticmethod
-    def _bind_analysis_basis_to_packet(
-        *,
-        memory_state: dict[str, Any],
-        deterministic_packet: dict[str, Any],
-        session_context: dict[str, Any] | None,
-    ) -> dict[str, Any]:
-        recommendation = (
-            deterministic_packet.get("recommendation")
-            if isinstance(deterministic_packet.get("recommendation"), dict)
-            else {}
-        )
-        recommended_basis_id = str(
-            recommendation.get("recommended_basis_id") or ""
-        ).strip()
-        recommended_scenario_id = str(
-            recommendation.get("recommended_scenario_id") or ""
-        ).strip()
-        basis_cache = (
-            memory_state.get("scenario_basis_cache")
-            if isinstance(memory_state.get("scenario_basis_cache"), dict)
-            else {}
-        )
-        analysis_basis: dict[str, Any] = {}
-        requested_id = recommended_basis_id or recommended_scenario_id
-        if requested_id:
-            analysis_basis = AssistantService._lookup_basis_by_requested_id(
-                requested_id=requested_id,
-                current_basis=memory_state.get("analysis_basis")
-                if isinstance(memory_state.get("analysis_basis"), dict)
-                else {},
-                basis_cache=basis_cache,
-            )
-        elif recommended_scenario_id in {"", "baseline"}:
-            analysis_basis = AssistantService._baseline_basis_from_memory(
-                memory_state=memory_state,
-                session_context=session_context,
-            )
-        elif isinstance(memory_state.get("analysis_basis"), dict):
-            analysis_basis = dict(memory_state.get("analysis_basis", {}))
-        if not analysis_basis:
-            analysis_basis = AssistantService._baseline_basis_from_memory(
-                memory_state=memory_state,
-                session_context=session_context,
-            )
-        deterministic_packet["analysis_basis"] = analysis_basis
-        presentation = (
-            deterministic_packet.get("presentation")
-            if isinstance(deterministic_packet.get("presentation"), dict)
-            else {}
-        )
-        presentation["basis_confirmation_line"] = (
-            AssistantService._analysis_basis_label(analysis_basis)
-        )
-        deterministic_packet["presentation"] = presentation
-        return analysis_basis
 
     @staticmethod
     def _build_segment_memory_hint(segment_memory: dict[str, Any]) -> str:
@@ -1341,9 +1271,6 @@ class AssistantService:
         next_memory["last_selection"] = last_selection
         if isinstance(memory_state.get("scenario_ledger"), list):
             next_memory["scenario_ledger"] = memory_state.get("scenario_ledger")
-        analysis_basis = memory_state.get("analysis_basis")
-        if isinstance(analysis_basis, dict):
-            next_memory["last_analysis_basis"] = analysis_basis
         recommendation = deterministic_packet.get("recommendation")
         if isinstance(recommendation, dict):
             next_memory["last_recommendation"] = recommendation
@@ -1413,16 +1340,10 @@ class AssistantService:
 
         prompt = str(user_prompt or "").strip().lower()
         prompts = [COMPACT_CONTEXT_PROMPT, COMPACT_PLAYBOOKS_PROMPT]
-        if self._is_recommendation_question(prompt) or self._select_playbook(
-            prompt
-        ) in {
-            "drop_review",
-            "tail_selection",
-            "method_suitability_review",
-            "data_anomaly_triage",
-            "quarter_close_review",
-            "reserve_change_explanation",
-        }:
+        definition = get_workflow_definition(self._select_playbook(prompt))
+        if self._is_recommendation_question(prompt) or (
+            definition is not None and bool(definition.policy_prompt_relevant)
+        ):
             prompts.append(COMPACT_POLICY_PROMPT)
         return prompts
 
@@ -1617,61 +1538,8 @@ class AssistantService:
         prompt = str(user_prompt or "").strip().lower()
         if not prompt:
             return ""
-        playbook = AssistantService._select_playbook(prompt)
-        if playbook == "movement_review":
-            return (
-                "Selected playbook: Movement Review. "
-                "Use the Movement Review workflow from AI_PLAYBOOKS.md. "
-                "Start with data-view summaries and movement-focused evidence, then answer directly."
-            )
-        if playbook == "quarter_close_review":
-            return (
-                "Selected playbook: Quarter-Close Review. "
-                "Use the composite deterministic quarter-close review first, then use drilldown tools only for follow-up evidence."
-            )
-        if playbook == "drop_review":
-            return (
-                "Selected playbook: Drop Review. "
-                "Use the composite drop review first and treat its ranked candidates, continuity notes, and policy trace as the primary evidence base."
-            )
-        if playbook == "scenario_recommendation":
-            return (
-                "Selected playbook: Scenario Recommendation. "
-                "Use the Scenario Recommendation workflow from AI_PLAYBOOKS.md. "
-                "Favor diagnostics plus scenario iteration before recommending changes."
-            )
-        if playbook == "reserve_change_explanation":
-            return (
-                "Selected playbook: Reserve Change Explanation. "
-                "Use attribution against baseline before broad scenario discussion."
-            )
-        if playbook == "late_emergence_review":
-            return (
-                "Selected playbook: Late Emergence Review. "
-                "Use historical continuation evidence before broad recommendations."
-            )
-        if playbook == "method_suitability_review":
-            return (
-                "Selected playbook: Method Suitability Review. "
-                "Use the composite BF suitability review first and treat its UWY-level suitability conclusions as the primary evidence base."
-            )
-        if playbook == "tail_selection":
-            return (
-                "Selected playbook: Tail Selection. "
-                "Use the composite tail review first before drilldown tail-fit testing. "
-                "Proactively comment on sub-1 late selected LDFs, whether the tail smooths them from above, and whether the attachment creates too sharp a cut from the previous selected LDF."
-            )
-        if playbook == "data_anomaly_triage":
-            return (
-                "Selected playbook: Data Anomaly Triage. "
-                "Lead with the composite anomaly triage result before any parameter recommendation."
-            )
-        if playbook == "data_exploration":
-            return (
-                "Selected playbook: Data Exploration. "
-                "Use summary data tools first and only request detailed rows if needed."
-            )
-        return ""
+        definition = get_workflow_definition(AssistantService._select_playbook(prompt))
+        return definition.prompt_hint if definition is not None else ""
 
     @staticmethod
     def _is_recommendation_question(prompt: str) -> bool:
@@ -1697,110 +1565,7 @@ class AssistantService:
 
     @staticmethod
     def _select_playbook(prompt: str) -> str:
-        if any(
-            keyword in prompt
-            for keyword in {
-                "quarter close",
-                "quarter-close",
-                "close pack",
-                "close review",
-                "quarterly review pack",
-            }
-        ):
-            return "quarter_close_review"
-        if AssistantService._is_movement_question(prompt):
-            return "movement_review"
-        if any(
-            keyword in prompt
-            for keyword in {
-                "why did reserve",
-                "why does reserve",
-                "explain reserve change",
-                "driver of reserve",
-                "reserve change",
-                "impact on reserve",
-            }
-        ):
-            return "reserve_change_explanation"
-        if any(
-            keyword in prompt
-            for keyword in {
-                "data quality",
-                "anomaly",
-                "triage",
-                "missing diagonal",
-                "impossible link ratio",
-                "calendar year distortion",
-                "large loss contamination",
-            }
-        ):
-            return "data_anomaly_triage"
-        if any(
-            keyword in prompt
-            for keyword in {
-                "drop review",
-                "drop any ratios",
-                "which ratios should be dropped",
-                "which ratio should be dropped",
-                "should be dropped",
-                "should we drop",
-                "should i drop",
-                "drop ratios",
-            }
-        ):
-            return "drop_review"
-        if any(
-            keyword in prompt
-            for keyword in {
-                "how much more",
-                "still emerge",
-                "late emergence",
-                "still come",
-                "still develop",
-            }
-        ):
-            return "late_emergence_review"
-        if any(
-            keyword in prompt
-            for keyword in {
-                "tail",
-                "weibull",
-                "inverse power",
-                "inverse_power",
-                "exponential",
-                "r2",
-                "fit period",
-                "tail fit",
-            }
-        ):
-            return "tail_selection"
-        if any(
-            keyword in prompt
-            for keyword in {
-                "cl vs bf",
-                "chainladder vs bf",
-                "bornhuetter",
-                "method suitable",
-                "bf better",
-                "chainladder better",
-            }
-        ):
-            return "method_suitability_review"
-        if AssistantService._is_recommendation_question(prompt):
-            return "scenario_recommendation"
-        if any(
-            keyword in prompt
-            for keyword in {
-                "show me",
-                "compare data",
-                "triangle",
-                "data view",
-                "ratio",
-                "table",
-            }
-        ):
-            return "data_exploration"
-        return ""
+        return select_workflow_name(prompt)
 
     @staticmethod
     def _is_movement_question(prompt: str) -> bool:
@@ -1890,17 +1655,7 @@ class AssistantService:
 
     @staticmethod
     def _analysis_basis_label(basis: dict[str, Any] | None) -> str:
-        if not isinstance(basis, dict) or not basis:
-            return "Basis used: current baseline session."
-        basis_type = str(basis.get("basis_type") or "").strip().lower()
-        scenario_id = str(
-            basis.get("candidate_id") or basis.get("scenario_id") or ""
-        ).strip()
-        if scenario_id and scenario_id != "baseline":
-            return f"Basis used: scenario {scenario_id}."
-        if basis_type == "bespoke":
-            return "Basis used: custom conversation basis."
-        return "Basis used: current baseline session."
+        return BasisManager.label(basis)
 
     @staticmethod
     def _resolve_exact_question_basis(
@@ -1909,18 +1664,18 @@ class AssistantService:
         memory_state: dict[str, Any],
         session_context: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        baseline_basis = AssistantService._baseline_basis_from_memory(
+        baseline_basis = BasisManager.baseline_basis_from_memory(
             memory_state=memory_state,
             session_context=session_context,
         )
         if AssistantService._prompt_requests_baseline_basis(prompt):
             return baseline_basis
         current_basis = (
-            memory_state.get("analysis_basis")
-            if isinstance(memory_state.get("analysis_basis"), dict)
+            memory_state.get("accepted_analysis_basis")
+            if isinstance(memory_state.get("accepted_analysis_basis"), dict)
             else {}
         )
-        if current_basis and AssistantService._basis_is_mentioned_in_prompt(
+        if current_basis and BasisManager.basis_is_mentioned_in_prompt(
             prompt=prompt,
             basis=current_basis,
         ):
@@ -1930,14 +1685,18 @@ class AssistantService:
             if isinstance(memory_state.get("scenario_basis_cache"), dict)
             else {}
         )
-        matched_scenario = AssistantService._scenario_id_mentioned_in_prompt(
+        matched_scenario = BasisManager.scenario_id_mentioned_in_prompt(
             prompt=prompt,
             basis_cache=basis_cache,
         )
         if matched_scenario:
-            cached = basis_cache.get(matched_scenario)
-            if isinstance(cached, dict):
-                return dict(cached)
+            resolved_cached = BasisManager.lookup_basis_by_requested_id(
+                requested_id=matched_scenario,
+                current_basis=current_basis,
+                basis_cache=basis_cache,
+            )
+            if resolved_cached:
+                return dict(resolved_cached)
         if current_basis:
             return dict(current_basis)
         return baseline_basis
@@ -1948,26 +1707,10 @@ class AssistantService:
         memory_state: dict[str, Any],
         session_context: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        session_summary = (
-            memory_state.get("session_summary")
-            if isinstance(memory_state.get("session_summary"), dict)
-            else {}
+        return BasisManager.baseline_basis_from_memory(
+            memory_state=memory_state,
+            session_context=session_context,
         )
-        baseline_basis = build_baseline_analysis_basis(session_summary)
-        if baseline_basis:
-            return baseline_basis
-        session_id = None
-        if isinstance(session_context, dict):
-            raw_session_id = session_context.get("session_id")
-            if isinstance(raw_session_id, str) and raw_session_id.strip():
-                session_id = raw_session_id.strip()
-        return {
-            "basis_type": "baseline",
-            "session_id": session_id or "",
-            "scenario_id": "baseline",
-            "is_active_session": True,
-            "parameters": {},
-        }
 
     @staticmethod
     def _prompt_requests_baseline_basis(prompt: str) -> bool:
@@ -1987,59 +1730,18 @@ class AssistantService:
         prompt: str,
         basis_cache: dict[str, Any],
     ) -> str | None:
-        prompt_text = str(prompt or "").strip().lower()
-        if not prompt_text:
-            return None
-        stable_aliases: list[tuple[str, str]] = []
-        candidate_aliases: dict[str, set[str]] = {}
-        for cache_key, cached in basis_cache.items():
-            key = str(cache_key).strip()
-            if not key or key == "baseline":
-                continue
-            aliases = {key}
-            if isinstance(cached, dict):
-                scenario_id = str(cached.get("scenario_id") or "").strip()
-                if scenario_id and scenario_id != "baseline":
-                    aliases.add(scenario_id)
-                candidate_id = str(cached.get("candidate_id") or "").strip().lower()
-                if candidate_id and candidate_id != "baseline":
-                    candidate_aliases.setdefault(candidate_id, set()).add(key)
-            for alias in aliases:
-                stable_aliases.append((alias.lower(), key))
-        for alias, key in sorted(
-            stable_aliases, key=lambda item: len(item[0]), reverse=True
-        ):
-            if alias and alias in prompt_text:
-                return key
-        for alias, keys in sorted(
-            candidate_aliases.items(),
-            key=lambda item: len(item[0]),
-            reverse=True,
-        ):
-            if len(keys) == 1 and alias in prompt_text:
-                return next(iter(keys))
-        return None
+        return BasisManager.scenario_id_mentioned_in_prompt(
+            prompt=prompt,
+            basis_cache=basis_cache,
+        )
 
     @staticmethod
     def _basis_identifier_aliases(basis: dict[str, Any] | None) -> list[str]:
-        if not isinstance(basis, dict):
-            return []
-        aliases: list[str] = []
-        for value in (basis.get("scenario_id"), basis.get("candidate_id")):
-            text = str(value or "").strip()
-            if text and text not in aliases:
-                aliases.append(text)
-        return aliases
+        return BasisManager.identifier_aliases(basis)
 
     @staticmethod
     def _basis_is_mentioned_in_prompt(*, prompt: str, basis: dict[str, Any]) -> bool:
-        prompt_text = str(prompt or "").strip().lower()
-        if not prompt_text:
-            return False
-        return any(
-            alias.lower() in prompt_text
-            for alias in AssistantService._basis_identifier_aliases(basis)
-        )
+        return BasisManager.basis_is_mentioned_in_prompt(prompt=prompt, basis=basis)
 
     @staticmethod
     def _lookup_basis_by_requested_id(
@@ -2048,25 +1750,11 @@ class AssistantService:
         current_basis: dict[str, Any],
         basis_cache: dict[str, Any],
     ) -> dict[str, Any]:
-        target = str(requested_id or "").strip()
-        if not target:
-            return {}
-        if target == "baseline":
-            return {}
-        if current_basis and target in AssistantService._basis_identifier_aliases(
-            current_basis
-        ):
-            return dict(current_basis)
-        cached = basis_cache.get(target)
-        if isinstance(cached, dict) and cached:
-            return dict(cached)
-        for cache_key, item in basis_cache.items():
-            if not isinstance(item, dict):
-                continue
-            aliases = AssistantService._basis_identifier_aliases(item)
-            if target == str(cache_key).strip() or target in aliases:
-                return dict(item)
-        return {}
+        return BasisManager.lookup_basis_by_requested_id(
+            requested_id=requested_id,
+            current_basis=current_basis,
+            basis_cache=basis_cache,
+        )
 
     @staticmethod
     def _basis_for_recommendation_turn(
@@ -2076,17 +1764,17 @@ class AssistantService:
         session_context: dict[str, Any] | None,
     ) -> dict[str, Any] | None:
         if AssistantService._prompt_requests_baseline_basis(prompt):
-            return AssistantService._baseline_basis_from_memory(
+            return BasisManager.baseline_basis_from_memory(
                 memory_state=memory_state,
                 session_context=session_context,
             )
-        analysis_basis = (
-            memory_state.get("analysis_basis")
-            if isinstance(memory_state.get("analysis_basis"), dict)
+        accepted_analysis_basis = (
+            memory_state.get("accepted_analysis_basis")
+            if isinstance(memory_state.get("accepted_analysis_basis"), dict)
             else {}
         )
-        if analysis_basis:
-            return dict(analysis_basis)
+        if accepted_analysis_basis:
+            return dict(accepted_analysis_basis)
         return None
 
     @staticmethod
@@ -2192,19 +1880,11 @@ class AssistantService:
                 reserve_change_summary=current.get("reserve_change_summary"),
                 review_summary=current.get("review_summary"),
                 existing_scenario_ledger=current.get("scenario_ledger"),
-                existing_analysis_basis=current.get("analysis_basis"),
+                existing_accepted_analysis_basis=current.get("accepted_analysis_basis"),
                 existing_scenario_basis_cache=current.get("scenario_basis_cache"),
             )
         elif function_name == "tool_get_assumption_context_detail":
             current["assumption_detail"] = dict(tool_result)
-            basis = tool_result.get("analysis_basis")
-            if isinstance(basis, dict) and basis:
-                current["analysis_basis"] = (
-                    AssistantService._merge_analysis_basis_metadata(
-                        current.get("analysis_basis"),
-                        basis,
-                    )
-                )
         elif function_name in {"tool_get_data_view_summary", "tool_get_data_view"}:
             current["data_view_summary"] = dict(tool_result)
         elif function_name in {"tool_run_diagnostics", "tool_run_diagnostics_summary"}:
@@ -2229,7 +1909,7 @@ class AssistantService:
                 reserve_change_summary=current.get("reserve_change_summary"),
                 review_summary=current.get("review_summary"),
                 existing_scenario_ledger=current.get("scenario_ledger"),
-                existing_analysis_basis=current.get("analysis_basis"),
+                existing_accepted_analysis_basis=current.get("accepted_analysis_basis"),
                 existing_scenario_basis_cache=current.get("scenario_basis_cache"),
             )
         elif function_name in {"tool_get_results_summary", "tool_recalculate"}:
@@ -2250,6 +1930,9 @@ class AssistantService:
                     current = AssistantService._sync_baseline_basis_cache_from_session_summary(
                         current
                     )
+                    current["preview_basis"] = {}
+                elif isinstance(basis, dict) and basis:
+                    current["preview_basis"] = dict(basis)
         elif function_name == "tool_explain_reserve_change":
             current["reserve_change_summary"] = dict(tool_result)
         elif function_name in {
@@ -2270,7 +1953,7 @@ class AssistantService:
                 reserve_change_summary=current.get("reserve_change_summary"),
                 review_summary=dict(tool_result),
                 existing_scenario_ledger=current.get("scenario_ledger"),
-                existing_analysis_basis=current.get("analysis_basis"),
+                existing_accepted_analysis_basis=current.get("accepted_analysis_basis"),
                 existing_scenario_basis_cache=current.get("scenario_basis_cache"),
             )
         elif function_name in {
@@ -2280,41 +1963,25 @@ class AssistantService:
             current["reserve_change_summary"] = dict(tool_result)
         elif function_name == "tool_rank_link_ratios":
             current["data_view_summary"] = dict(tool_result)
-        basis = tool_result.get("analysis_basis")
-        if isinstance(basis, dict) and basis:
-            current["analysis_basis"] = AssistantService._merge_analysis_basis_metadata(
-                current.get("analysis_basis"),
-                basis,
-            )
+        for key in (
+            "accepted_analysis_basis",
+            "proposal_basis",
+            "preview_basis",
+            "execution_records",
+            "basis_transition_history",
+            "memory_update_proposals",
+        ):
+            if key in memory_state and key not in current:
+                value = memory_state.get(key)
+                if isinstance(value, dict):
+                    current[key] = dict(value)
+                elif isinstance(value, list):
+                    current[key] = [
+                        dict(item) if isinstance(item, dict) else item for item in value
+                    ]
+                else:
+                    current[key] = value
         return current
-
-    @staticmethod
-    def _merge_analysis_basis_metadata(
-        existing_basis: object,
-        new_basis: object,
-    ) -> dict[str, Any]:
-        merged = dict(new_basis) if isinstance(new_basis, dict) else {}
-        if not merged:
-            return merged
-        existing = dict(existing_basis) if isinstance(existing_basis, dict) else {}
-        if not existing:
-            return merged
-        same_scenario = bool(
-            str(existing.get("scenario_id") or "").strip()
-            and str(existing.get("scenario_id") or "").strip()
-            == str(merged.get("scenario_id") or "").strip()
-        )
-        same_signature = bool(
-            str(existing.get("scenario_signature") or "").strip()
-            and str(existing.get("scenario_signature") or "").strip()
-            == str(merged.get("scenario_signature") or "").strip()
-        )
-        if not same_scenario and not same_signature:
-            return merged
-        for key in ("candidate_id", "source_tool", "source_review_type"):
-            if not merged.get(key) and existing.get(key):
-                merged[key] = existing.get(key)
-        return merged
 
     @staticmethod
     def _session_summary_with_basis(
@@ -2389,7 +2056,9 @@ class AssistantService:
             if isinstance(current.get("scenario_basis_cache"), dict)
             else {}
         )
-        basis_cache["baseline"] = baseline_basis
+        baseline_key = str(baseline_basis.get("basis_key") or "").strip()
+        if baseline_key:
+            basis_cache[baseline_key] = baseline_basis
         current["scenario_basis_cache"] = basis_cache
         return current
 
@@ -2519,10 +2188,16 @@ class AssistantService:
     def _apply_narrative_guardrails(
         content: str,
         state: dict[str, bool],
+        execution_records: list[dict[str, Any]] | None = None,
     ) -> str:
         guarded = AssistantService._strip_control_blocks(content).strip()
         if not guarded:
             return guarded
+
+        guarded = AssistantService._apply_execution_narrative_guardrails(
+            guarded,
+            execution_records,
+        )
 
         coherence_claim = re.search(
             r"paid\s+and\s+incurred\s+(are|is)\s+(consistent|aligned)",
@@ -2572,6 +2247,44 @@ class AssistantService:
             guarded += "\n\nReference note: each evidence ID points to a specific diagnostic record shown in the analysis trace or evidence panel, including the metric tested and the observed value."
 
         return guarded
+
+    @staticmethod
+    def _apply_execution_narrative_guardrails(
+        content: str,
+        execution_records: list[dict[str, Any]] | None,
+    ) -> str:
+        latest_record = latest_execution_record(execution_records)
+        if not latest_record:
+            return content
+        status = str(latest_record.get("execution_status") or "").strip()
+        if execution_status_is_successful(status):
+            return content
+        success_style_pattern = re.search(
+            r"\b(applied|uses|used|ran successfully|executed successfully|completed successfully|succeeded)\b",
+            content,
+            flags=re.IGNORECASE,
+        )
+        if status == "rejected":
+            return (
+                "Execution note: the latest tool request was rejected, so no success-style scenario change was executed. "
+                "Describe the rejection and any blocking input issue explicitly.\n\n"
+                + content
+            )
+        if success_style_pattern is not None:
+            return (
+                "Execution note: the latest tool run did not execute exactly as requested. "
+                "Base the explanation on the effective executed inputs and explicit adjustments, not the original request wording.\n\n"
+                + content
+            )
+        warnings = latest_record.get("warnings")
+        if isinstance(warnings, list) and warnings:
+            return (
+                "Execution note: the latest tool run required input adjustments. "
+                + "; ".join(str(item) for item in warnings if str(item).strip())
+                + ".\n\n"
+                + content
+            )
+        return content
 
     @staticmethod
     def _strip_control_blocks(content: str) -> str:

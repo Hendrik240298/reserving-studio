@@ -341,5 +341,7 @@ def _apply_review_caveats_to_decision(
         summary=decision.summary,
         rationale=rationale,
         recommended_scenario_id=decision.recommended_scenario_id,
+        recommended_basis_id=decision.recommended_basis_id,
         alternative_scenario_ids=list(decision.alternative_scenario_ids),
+        alternative_basis_ids=list(decision.alternative_basis_ids),
     )

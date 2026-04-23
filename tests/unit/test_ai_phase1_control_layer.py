@@ -197,6 +197,8 @@ def test_playbook_planner_builds_scenario_recommendation_plan() -> None:
 
     assert plan is not None
     assert plan.playbook == "scenario_recommendation"
+    assert plan.intent_class == "scenario_recommendation"
+    assert plan.answer_contract == "recommendation_with_proposal"
     assert [step.tool_name for step in plan.steps] == [
         "tool_run_diagnostics_summary",
         "tool_iterate_diagnostics_summary",
@@ -214,6 +216,8 @@ def test_playbook_planner_builds_movement_review_plan() -> None:
 
     assert plan is not None
     assert plan.playbook == "movement_review"
+    assert plan.answer_contract == "observational_explanation"
+    assert "proposal_disallowed" in set(plan.basis_behavior)
     assert [step.evidence_key for step in plan.steps] == [
         "latest_diagonal_incurred_incremental",
         "incurred_on_premium",
@@ -440,7 +444,7 @@ def test_assistant_runs_deterministic_playbook_before_model_answer() -> None:
     assert result["deterministic_packet"]["presentation"]["conclusion"] == "recommended"
 
 
-def test_assistant_uses_last_recommendation_as_basis_for_next_tail_review() -> None:
+def test_assistant_uses_accepted_basis_for_next_tail_review() -> None:
     responses = [
         {
             "choices": [
@@ -464,7 +468,7 @@ def test_assistant_uses_last_recommendation_as_basis_for_next_tail_review() -> N
         user_prompt="Review the tail assumptions.",
         session_context={"segment": "industrial", "session_id": "s-1"},
         working_memory={
-            "analysis_basis": {
+            "accepted_analysis_basis": {
                 "basis_type": "review_candidate",
                 "scenario_id": "drop_1",
                 "is_active_session": False,
@@ -493,7 +497,37 @@ def test_assistant_uses_last_recommendation_as_basis_for_next_tail_review() -> N
     assert args["parameters"]["drop"] == [["2022", 24]]
 
 
-def test_recalculate_updates_analysis_basis_and_session_summary() -> None:
+def test_deterministic_recommendation_creates_proposal_without_accepting_basis() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Recommendation ready.",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", _FakeClient(responses))
+    setattr(service, "_tools", _DeterministicTools())
+    service._observability_enabled = False
+    service._deterministic_orchestration_enabled = True
+
+    result = service.run_turn(
+        user_prompt="What scenario do you recommend?",
+        session_context={"segment": "industrial", "session_id": "s-1"},
+    )
+
+    memory_snapshot = result["memory_snapshot"]
+    assert memory_snapshot.get("accepted_analysis_basis", {}) == {}
+    assert memory_snapshot["proposal_basis"]["status"] == "pending"
+    assert memory_snapshot["proposal_basis"]["scenario_id"] == "drop_1"
+
+
+def test_recalculate_updates_preview_basis_and_session_summary() -> None:
     service = AssistantService.__new__(AssistantService)
 
     updated = service._update_memory_state(
@@ -542,7 +576,7 @@ def test_recalculate_updates_analysis_basis_and_session_summary() -> None:
         },
     )
 
-    assert updated["analysis_basis"]["parameters"]["bf_apriori"]["2006"] == 0.563
+    assert updated["preview_basis"] == {}
     assert updated["session_summary"]["params"]["drop_store"] == [
         ["2003", 9],
         ["2002", 21],
@@ -598,7 +632,7 @@ def test_preview_recalculate_keeps_session_summary_unchanged() -> None:
         },
     )
 
-    assert updated["analysis_basis"]["parameters"]["drop"] == [["2003", 9]]
+    assert updated["preview_basis"]["parameters"]["drop"] == [["2003", 9]]
     assert updated["session_summary"]["params"]["drop_store"] == []
 
 
@@ -637,6 +671,36 @@ def test_assistant_logs_deterministic_orchestration(caplog) -> None:
         "deterministic.recommendation.completed playbook=scenario_recommendation status=recommended"
         in merged
     )
+
+
+def test_narrative_guardrails_add_execution_note_for_material_adjustment() -> None:
+    guarded = AssistantService._apply_narrative_guardrails(
+        "I applied the requested scenario and used those assumptions in the analysis.",
+        {},
+        [
+            {
+                "execution_status": "partially_executed",
+                "warnings": ["Dropped 1 invalid drop entry."],
+            }
+        ],
+    )
+
+    assert "latest tool run did not execute exactly as requested" in guarded.lower()
+
+
+def test_narrative_guardrails_add_execution_note_for_rejected_request() -> None:
+    guarded = AssistantService._apply_narrative_guardrails(
+        "The scenario ran successfully.",
+        {},
+        [
+            {
+                "execution_status": "rejected",
+                "warnings": ["Request could not be executed."],
+            }
+        ],
+    )
+
+    assert "latest tool request was rejected" in guarded.lower()
 
 
 def test_assistant_suppresses_redundant_summary_tools_after_deterministic_packet() -> (

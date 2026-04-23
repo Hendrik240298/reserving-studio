@@ -201,12 +201,7 @@ class ReviewerGate:
 
     @staticmethod
     def _requires_continuity(plan: ExecutionPlan) -> bool:
-        return str(plan.playbook).strip().lower() in {
-            "drop_review",
-            "tail_selection",
-            "method_suitability_review",
-            "quarter_close_review",
-        }
+        return bool(plan.requires_continuity)
 
     @staticmethod
     def _has_continuity_coverage(evidence_packets: list[dict[str, Any]]) -> bool:

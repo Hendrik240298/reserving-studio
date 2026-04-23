@@ -73,6 +73,7 @@ from source.api.schemas import (
     WorkflowFromDataframesRequest,
     WorkflowInitializationResponse,
 )
+from ai.control_plane_types import basis_key_from_parameters, scenario_label_from_basis_payload
 from source.config_manager import ConfigManager
 from source.reserving import Reserving
 from source.services.assumption_review_service import AssumptionReviewService
@@ -1382,7 +1383,14 @@ class InMemoryReservingBackend:
     ) -> dict[str, Any]:
         canonical = json.dumps(parameters, sort_keys=True, separators=(",", ":"))
         return {
+            "basis_key": basis_key_from_parameters(parameters),
             "basis_type": str(basis_type or "baseline"),
+            "scenario_label": scenario_label_from_basis_payload(
+                {
+                    "basis_type": basis_type,
+                    "scenario_id": scenario_id,
+                }
+            ),
             "session_id": session_id,
             "scenario_id": scenario_id,
             "scenario_signature": hashlib.sha256(canonical.encode("utf-8")).hexdigest()[
