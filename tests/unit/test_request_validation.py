@@ -63,3 +63,35 @@ def test_validate_recalculate_like_arguments_rejects_invalid_fit_period_values()
 
     assert result.execution_status == "rejected"
     assert result.rejection_reason == "Tail fit period contained unsupported values."
+
+
+def test_validate_recalculate_like_arguments_rejects_unknown_average() -> None:
+    result = validate_recalculate_like_arguments(
+        {
+            "session_id": "s-1",
+            "average": "made_up_average",
+            "tail": {"curve": "weibull", "fit_period": [12, 24]},
+            "drop": [],
+            "drop_valuation": [],
+            "selected_ultimate_by_uwy": {},
+        }
+    )
+
+    assert result.execution_status == "rejected"
+    assert result.rejection_reason == "Unsupported average assumption: made_up_average."
+
+
+def test_validate_recalculate_like_arguments_rejects_unknown_tail_curve() -> None:
+    result = validate_recalculate_like_arguments(
+        {
+            "session_id": "s-1",
+            "average": "volume",
+            "tail": {"curve": "made_up_curve", "fit_period": [12, 24]},
+            "drop": [],
+            "drop_valuation": [],
+            "selected_ultimate_by_uwy": {},
+        }
+    )
+
+    assert result.execution_status == "rejected"
+    assert result.rejection_reason == "Unsupported tail curve assumption: made_up_curve."

@@ -159,6 +159,7 @@ class AssumptionDetailRequest(BaseModel):
     start_age: int | None = Field(default=None, ge=0)
     end_age: int | None = Field(default=None, ge=0)
     development_period: int | None = Field(default=None, ge=0)
+    basis_key: str | None = None
     basis_type: str | None = None
     scenario_id: str | None = None
     parameters: dict = Field(default_factory=dict)
@@ -204,6 +205,7 @@ class PolicyTrace(BaseModel):
 
 class ReviewCandidate(BaseModel):
     candidate_id: str
+    basis_key: str | None = None
     scenario_id: str | None = None
     summary: str
     parameters: dict = Field(default_factory=dict)
@@ -219,16 +221,19 @@ class ReviewCandidate(BaseModel):
 class ReviewRecommendation(BaseModel):
     recommendation_class: RecommendationClass = "watch"
     candidate_id: str | None = None
+    basis_key: str | None = None
     scenario_id: str | None = None
     summary: str = ""
     caveats: list[str] = Field(default_factory=list)
     alternatives: list[str] = Field(default_factory=list)
+    alternative_basis_keys: list[str] = Field(default_factory=list)
     alternative_scenario_ids: list[str] = Field(default_factory=list)
 
 
 class DropReviewRequest(BaseModel):
     session_id: str
     candidate_limit: int = Field(default=5, ge=1, le=20)
+    basis_key: str | None = None
     basis_type: str | None = None
     scenario_id: str | None = None
     parameters: dict = Field(default_factory=dict)
@@ -251,6 +256,7 @@ class DropReviewResponse(BaseModel):
 class TailReviewRequest(BaseModel):
     session_id: str
     candidate_limit: int = Field(default=12, ge=1, le=30)
+    basis_key: str | None = None
     basis_type: str | None = None
     scenario_id: str | None = None
     parameters: dict = Field(default_factory=dict)
@@ -272,6 +278,7 @@ class TailReviewResponse(BaseModel):
 
 class BfSuitabilityRequest(BaseModel):
     session_id: str
+    basis_key: str | None = None
     basis_type: str | None = None
     scenario_id: str | None = None
     parameters: dict = Field(default_factory=dict)
@@ -293,6 +300,7 @@ class BfSuitabilityResponse(BaseModel):
 
 class AnomalyTriageRequest(BaseModel):
     session_id: str
+    basis_key: str | None = None
     basis_type: str | None = None
     scenario_id: str | None = None
     parameters: dict = Field(default_factory=dict)
@@ -311,6 +319,7 @@ class AnomalyTriageResponse(BaseModel):
 
 class QuarterCloseReviewRequest(BaseModel):
     session_id: str
+    basis_key: str | None = None
     basis_type: str | None = None
     scenario_id: str | None = None
     parameters: dict = Field(default_factory=dict)
@@ -354,6 +363,7 @@ class DataViewRequest(BaseModel):
     session_id: str
     query: DataViewQuery = Field(default_factory=DataViewQuery)
     include_summary: bool = True
+    basis_key: str | None = None
     basis_type: str | None = None
     scenario_id: str | None = None
     parameters: dict = Field(default_factory=dict)
@@ -396,6 +406,7 @@ class MovementDiagnosticsResponse(BaseModel):
 
 class LdfConsistencyRequest(BaseModel):
     session_id: str
+    basis_key: str | None = None
     basis_type: str | None = None
     scenario_id: str | None = None
     parameters: dict = Field(default_factory=dict)
@@ -412,6 +423,7 @@ class LdfConsistencyResponse(BaseModel):
 class LateEmergenceRequest(BaseModel):
     session_id: str
     uwy: str | None = None
+    basis_key: str | None = None
     basis_type: str | None = None
     scenario_id: str | None = None
     parameters: dict = Field(default_factory=dict)
@@ -427,12 +439,14 @@ class LateEmergenceResponse(BaseModel):
 
 class ResultsRequest(BaseModel):
     session_id: str
+    basis_key: str | None = None
     basis_type: str | None = None
     scenario_id: str | None = None
     parameters: dict = Field(default_factory=dict)
 
 
 class ReserveChangeRequest(RecalculateRequest):
+    basis_key: str | None = None
     basis_type: str | None = None
     scenario_id: str | None = None
     basis_parameters: dict = Field(default_factory=dict)
@@ -449,6 +463,7 @@ class ReserveChangeResponse(BaseModel):
 
 class HighestA2ADropRequest(BaseModel):
     session_id: str
+    basis_key: str | None = None
     basis_type: str | None = None
     scenario_id: str | None = None
     parameters: dict = Field(default_factory=dict)
@@ -476,6 +491,7 @@ class LinkRatioRankRequest(BaseModel):
     limit: int = Field(default=5, ge=1, le=200)
     threshold_operator: ThresholdOperator | None = None
     threshold_value: float | None = None
+    basis_key: str | None = None
     basis_type: str | None = None
     scenario_id: str | None = None
     parameters: dict = Field(default_factory=dict)
@@ -504,6 +520,7 @@ class DerivedDropScenarioRequest(BaseModel):
     session_id: str
     rule: DerivedDropRule = Field(default_factory=DerivedDropRule)
     rules: list[DerivedDropRule] = Field(default_factory=list)
+    basis_key: str | None = None
     basis_type: str | None = None
     scenario_id: str | None = None
     parameters: dict = Field(default_factory=dict)
@@ -524,6 +541,7 @@ class DiagnosticsRequest(BaseModel):
     session_id: str
     diagnostic_profile: str | None = None
     include_recommendations: bool = True
+    basis_key: str | None = None
     basis_type: str | None = None
     scenario_id: str | None = None
     parameters: dict = Field(default_factory=dict)
@@ -533,6 +551,7 @@ class DiagnosticsIterateRequest(BaseModel):
     session_id: str
     max_scenarios: int = Field(default=24, ge=1, le=100)
     include_baseline: bool = True
+    basis_key: str | None = None
     basis_type: str | None = None
     scenario_id: str | None = None
     parameters: dict = Field(default_factory=dict)
@@ -583,6 +602,7 @@ class DiagnosticRecommendation(BaseModel):
 
 class ScenarioEvaluation(BaseModel):
     scenario_id: str
+    basis_key: str | None = None
     score: float
     summary: str
     parameters: dict = Field(default_factory=dict)

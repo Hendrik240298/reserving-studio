@@ -292,8 +292,24 @@ These are useful but should not block the main refactor.
 - broader test overhaul
 - multi-domain expansion beyond reserving
 - durable workflow engine adoption
+- durable audit completeness beyond lightweight local execution/proposal/basis records
 - richer governance/approval model
 - external integrations and operator automation
+- public API completion for chat control-plane state and proposal actions
+
+Audit deferral decision:
+
+- first-class local records should still exist for execution outcomes, proposals, and accepted-basis transitions
+- full audit guarantees can wait, including replayable command/event history, cross-system persistence, external approval integration, and complete `chat_id` lineage on every execution record
+- this means near-term work should prioritize predictable behavior and clear state transitions over audit-grade durability
+
+API completion deferral decision:
+
+- the current in-process Dash flow can use `AIChatService` directly for `Yes` / `No` proposal acceptance
+- public API endpoints should later expose the same control-plane state and actions for external clients and adapters
+- later API work should include response fields for `accepted_analysis_basis`, `proposal_basis`, `preview_basis`, `execution_records`, and `basis_transition_history`
+- later API work should include explicit accept/reject proposal endpoints, driven by `proposal_id`
+- this is architecture/integration work, not a blocker for the current local UI proposal flow
 
 ## 5. Risks during implementation
 

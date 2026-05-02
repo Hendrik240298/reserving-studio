@@ -60,6 +60,13 @@ class RecommendationPolicy:
                 review,
             )
 
+        derived_drop_packet = _find_packet(evidence_packets, "derived_drop_scenario")
+        if isinstance(derived_drop_packet, dict):
+            return _apply_review_caveats_to_decision(
+                _decision_from_derived_drop(derived_drop_packet),
+                review,
+            )
+
         iteration_packet = next(
             (
                 item
@@ -105,16 +112,22 @@ class RecommendationPolicy:
             best.get("governance_tier") or baseline.get("governance_tier") or ""
         ).lower()
         best_scenario_id = _to_optional_str(best.get("scenario_id"))
-        if not best_scenario_id:
+        best_basis_key = _to_optional_str(best.get("basis_key"))
+        if not best_scenario_id or not best_basis_key:
             return RecommendationDecision(
                 status="watch",
-                summary="Scenario comparison did not identify a stable tested best scenario.",
-                rationale=["missing_best_scenario_id"],
+                summary="Scenario comparison did not identify a stable tested best basis.",
+                rationale=["missing_best_scenario_id_or_basis_key"],
             )
         alternatives = [
             str(item.get("scenario_id"))
             for item in top_scenarios[1:3]
             if isinstance(item, dict) and str(item.get("scenario_id", "")).strip()
+        ]
+        alternative_basis_keys = [
+            str(item.get("basis_key"))
+            for item in top_scenarios[1:3]
+            if isinstance(item, dict) and str(item.get("basis_key", "")).strip()
         ]
 
         if improvement > 0.5 and governance_tier == "green" and review.status == "pass":
@@ -122,7 +135,9 @@ class RecommendationPolicy:
                 status="recommended",
                 summary="A tested scenario improved diagnostics materially without triggering governance concerns.",
                 rationale=[f"score_improvement={improvement:.3f}", "governance=green"],
+                recommended_basis_key=best_basis_key,
                 recommended_scenario_id=best_scenario_id,
+                alternative_basis_keys=alternative_basis_keys,
                 alternative_scenario_ids=alternatives,
             )
         if improvement > 0.1:
@@ -134,14 +149,18 @@ class RecommendationPolicy:
                     f"governance={governance_tier or 'unknown'}",
                     *review.caveats,
                 ],
+                recommended_basis_key=best_basis_key,
                 recommended_scenario_id=best_scenario_id,
+                alternative_basis_keys=alternative_basis_keys,
                 alternative_scenario_ids=alternatives,
             )
         return RecommendationDecision(
             status="watch",
             summary="Tested alternatives did not improve enough to support a stronger recommendation.",
             rationale=[f"score_improvement={improvement:.3f}"],
+            recommended_basis_key=best_basis_key,
             recommended_scenario_id=best_scenario_id,
+            alternative_basis_keys=alternative_basis_keys,
             alternative_scenario_ids=alternatives,
         )
 
@@ -157,6 +176,57 @@ def _to_optional_str(value: object) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+def _basis_key_for_candidate(
+    *,
+    summary: dict[str, Any],
+    candidate_id: str | None,
+    scenario_id: str | None,
+) -> str | None:
+    labels = {str(item).strip() for item in (candidate_id, scenario_id) if str(item or "").strip()}
+    if not labels:
+        return None
+    for key in ("top_candidates", "top_ranked"):
+        items = summary.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_labels = {
+                str(item.get("candidate_id") or "").strip(),
+                str(item.get("scenario_id") or "").strip(),
+            }
+            if labels.intersection(item_labels):
+                return _to_optional_str(item.get("basis_key"))
+    return None
+
+
+def _basis_keys_for_labels(
+    *,
+    summary: dict[str, Any],
+    labels: list[str],
+) -> list[str]:
+    wanted = {str(item).strip() for item in labels if str(item or "").strip()}
+    if not wanted:
+        return []
+    keys: list[str] = []
+    for key in ("top_candidates", "top_ranked"):
+        items = summary.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_labels = {
+                str(item.get("candidate_id") or "").strip(),
+                str(item.get("scenario_id") or "").strip(),
+            }
+            basis_key = _to_optional_str(item.get("basis_key"))
+            if basis_key and wanted.intersection(item_labels) and basis_key not in keys:
+                keys.append(basis_key)
+    return keys
 
 
 def _find_packet(
@@ -183,9 +253,11 @@ def _decision_from_quarter_close(packet: dict[str, Any]) -> RecommendationDecisi
         else []
     )
     recommended_id = None
+    recommended_basis_key = None
     recommended_basis_id = None
     if changes and isinstance(changes[0], dict):
         recommended_id = _to_optional_str(changes[0].get("candidate_id"))
+        recommended_basis_key = _to_optional_str(changes[0].get("basis_key"))
         recommended_basis_id = _to_optional_str(changes[0].get("scenario_id"))
     alternatives = [
         str(item.get("candidate_id"))
@@ -196,6 +268,11 @@ def _decision_from_quarter_close(packet: dict[str, Any]) -> RecommendationDecisi
         str(item.get("scenario_id"))
         for item in changes[1:3]
         if isinstance(item, dict) and str(item.get("scenario_id", "")).strip()
+    ]
+    alternative_basis_keys = [
+        str(item.get("basis_key"))
+        for item in changes[1:3]
+        if isinstance(item, dict) and str(item.get("basis_key", "")).strip()
     ]
     rationale = [
         *(
@@ -214,8 +291,10 @@ def _decision_from_quarter_close(packet: dict[str, Any]) -> RecommendationDecisi
         summary=str(recommendation.get("summary", "")).strip()
         or "Quarter-close review completed.",
         rationale=[str(item) for item in rationale if str(item).strip()],
+        recommended_basis_key=recommended_basis_key,
         recommended_scenario_id=recommended_id,
         recommended_basis_id=recommended_basis_id,
+        alternative_basis_keys=alternative_basis_keys,
         alternative_scenario_ids=alternatives,
         alternative_basis_ids=alternative_basis_ids,
     )
@@ -244,6 +323,11 @@ def _decision_from_composite_candidate_review(
     status = status_map.get(recommendation_class, "watch")
     candidate_id = _to_optional_str(recommendation.get("candidate_id"))
     scenario_id = _to_optional_str(recommendation.get("scenario_id"))
+    recommended_basis_key = _basis_key_for_candidate(
+        summary=summary,
+        candidate_id=candidate_id,
+        scenario_id=scenario_id,
+    )
     alternatives = [
         str(item)
         for item in recommendation.get("alternatives", [])
@@ -254,6 +338,10 @@ def _decision_from_composite_candidate_review(
         for item in recommendation.get("alternative_scenario_ids", [])
         if str(item).strip()
     ]
+    alternative_basis_keys = _basis_keys_for_labels(
+        summary=summary,
+        labels=[*alternatives, *alternative_basis_ids],
+    )
     rationale = [
         recommendation_class,
         *(
@@ -267,8 +355,10 @@ def _decision_from_composite_candidate_review(
         summary=str(recommendation.get("summary", "")).strip()
         or f"Composite {review_type} completed.",
         rationale=[str(item) for item in rationale if str(item).strip()],
+        recommended_basis_key=recommended_basis_key,
         recommended_scenario_id=candidate_id,
         recommended_basis_id=scenario_id,
+        alternative_basis_keys=alternative_basis_keys,
         alternative_scenario_ids=alternatives,
         alternative_basis_ids=alternative_basis_ids,
     )
@@ -317,6 +407,30 @@ def _decision_from_anomaly_triage(packet: dict[str, Any]) -> RecommendationDecis
     )
 
 
+def _decision_from_derived_drop(packet: dict[str, Any]) -> RecommendationDecision:
+    summary = packet.get("summary") if isinstance(packet.get("summary"), dict) else {}
+    basis_key = _to_optional_str(summary.get("basis_key"))
+    scenario_id = _to_optional_str(summary.get("scenario_id"))
+    if not basis_key:
+        return RecommendationDecision(
+            status="watch",
+            summary="Derived drop scenario did not produce a stable basis key.",
+            rationale=["missing_derived_drop_basis_key"],
+        )
+    score_delta = _to_float(summary.get("score_delta"))
+    direction = "improved" if score_delta < 0 else "changed"
+    return RecommendationDecision(
+        status="reasonable_alternative",
+        summary=f"A derived drop scenario was tested and {direction} the diagnostic score by {abs(score_delta):.3f}.",
+        rationale=[
+            f"score_delta={score_delta:.3f}",
+            f"drop_count={summary.get('drop_count')}",
+        ],
+        recommended_basis_key=basis_key,
+        recommended_scenario_id=scenario_id,
+    )
+
+
 def _apply_review_caveats_to_decision(
     decision: RecommendationDecision,
     review: ReviewOutcome,
@@ -340,8 +454,10 @@ def _apply_review_caveats_to_decision(
         status=status,
         summary=decision.summary,
         rationale=rationale,
+        recommended_basis_key=decision.recommended_basis_key,
         recommended_scenario_id=decision.recommended_scenario_id,
         recommended_basis_id=decision.recommended_basis_id,
+        alternative_basis_keys=list(decision.alternative_basis_keys),
         alternative_scenario_ids=list(decision.alternative_scenario_ids),
         alternative_basis_ids=list(decision.alternative_basis_ids),
     )

@@ -92,6 +92,10 @@ def build_tool_specs() -> list[dict[str, Any]]:
                         "view": {"type": "string"},
                         "denominator": {"type": ["string", "null"]},
                         "denominator_view": {"type": ["string", "null"]},
+                        "basis_type": {"type": ["string", "null"]},
+                        "basis_key": {"type": ["string", "null"]},
+                        "scenario_id": {"type": ["string", "null"]},
+                        "parameters": {"type": ["object", "null"]},
                     },
                     "required": ["session_id", "metric", "view"],
                 },
@@ -110,6 +114,10 @@ def build_tool_specs() -> list[dict[str, Any]]:
                         "view": {"type": "string"},
                         "denominator": {"type": ["string", "null"]},
                         "denominator_view": {"type": ["string", "null"]},
+                        "basis_type": {"type": ["string", "null"]},
+                        "basis_key": {"type": ["string", "null"]},
+                        "scenario_id": {"type": ["string", "null"]},
+                        "parameters": {"type": ["object", "null"]},
                     },
                     "required": ["session_id", "metric", "view"],
                 },
@@ -128,6 +136,7 @@ def build_tool_specs() -> list[dict[str, Any]]:
                         "end_age": {"type": ["integer", "null"]},
                         "development_period": {"type": ["integer", "null"]},
                         "basis_type": {"type": ["string", "null"]},
+                        "basis_key": {"type": ["string", "null"]},
                         "scenario_id": {"type": ["string", "null"]},
                         "parameters": {"type": ["object", "null"]},
                     },
@@ -188,6 +197,7 @@ def build_tool_specs() -> list[dict[str, Any]]:
                         "diagnostic_profile": {"type": ["string", "null"]},
                         "include_recommendations": {"type": "boolean"},
                         "basis_type": {"type": ["string", "null"]},
+                        "basis_key": {"type": ["string", "null"]},
                         "scenario_id": {"type": ["string", "null"]},
                         "parameters": {"type": ["object", "null"]},
                     },
@@ -210,6 +220,7 @@ def build_tool_specs() -> list[dict[str, Any]]:
                             "maximum": 20,
                         },
                         "basis_type": {"type": ["string", "null"]},
+                        "basis_key": {"type": ["string", "null"]},
                         "scenario_id": {"type": ["string", "null"]},
                         "parameters": {"type": ["object", "null"]},
                     },
@@ -232,6 +243,7 @@ def build_tool_specs() -> list[dict[str, Any]]:
                             "maximum": 30,
                         },
                         "basis_type": {"type": ["string", "null"]},
+                        "basis_key": {"type": ["string", "null"]},
                         "scenario_id": {"type": ["string", "null"]},
                         "parameters": {"type": ["object", "null"]},
                     },
@@ -249,6 +261,7 @@ def build_tool_specs() -> list[dict[str, Any]]:
                     "properties": {
                         "session_id": {"type": "string"},
                         "basis_type": {"type": ["string", "null"]},
+                        "basis_key": {"type": ["string", "null"]},
                         "scenario_id": {"type": ["string", "null"]},
                         "parameters": {"type": ["object", "null"]},
                     },
@@ -266,6 +279,7 @@ def build_tool_specs() -> list[dict[str, Any]]:
                     "properties": {
                         "session_id": {"type": "string"},
                         "basis_type": {"type": ["string", "null"]},
+                        "basis_key": {"type": ["string", "null"]},
                         "scenario_id": {"type": ["string", "null"]},
                         "parameters": {"type": ["object", "null"]},
                     },
@@ -283,6 +297,7 @@ def build_tool_specs() -> list[dict[str, Any]]:
                     "properties": {
                         "session_id": {"type": "string"},
                         "basis_type": {"type": ["string", "null"]},
+                        "basis_key": {"type": ["string", "null"]},
                         "scenario_id": {"type": ["string", "null"]},
                         "parameters": {"type": ["object", "null"]},
                     },
@@ -300,6 +315,7 @@ def build_tool_specs() -> list[dict[str, Any]]:
                     "properties": {
                         "session_id": {"type": "string"},
                         "basis_type": {"type": ["string", "null"]},
+                        "basis_key": {"type": ["string", "null"]},
                         "scenario_id": {"type": ["string", "null"]},
                         "parameters": {"type": ["object", "null"]},
                     },
@@ -323,6 +339,7 @@ def build_tool_specs() -> list[dict[str, Any]]:
                         },
                         "include_baseline": {"type": "boolean"},
                         "basis_type": {"type": ["string", "null"]},
+                        "basis_key": {"type": ["string", "null"]},
                         "scenario_id": {"type": ["string", "null"]},
                         "parameters": {"type": ["object", "null"]},
                     },
@@ -352,6 +369,7 @@ def build_tool_specs() -> list[dict[str, Any]]:
                     "properties": {
                         "session_id": {"type": "string"},
                         "basis_type": {"type": ["string", "null"]},
+                        "basis_key": {"type": ["string", "null"]},
                         "scenario_id": {"type": ["string", "null"]},
                         "parameters": {"type": ["object", "null"]},
                     },
@@ -370,6 +388,7 @@ def build_tool_specs() -> list[dict[str, Any]]:
                         "session_id": {"type": "string"},
                         "uwy": {"type": ["string", "null"]},
                         "basis_type": {"type": ["string", "null"]},
+                        "basis_key": {"type": ["string", "null"]},
                         "scenario_id": {"type": ["string", "null"]},
                         "parameters": {"type": ["object", "null"]},
                     },
@@ -387,6 +406,7 @@ def build_tool_specs() -> list[dict[str, Any]]:
                     "properties": {
                         "session_id": {"type": "string"},
                         "basis_type": {"type": ["string", "null"]},
+                        "basis_key": {"type": ["string", "null"]},
                         "scenario_id": {"type": ["string", "null"]},
                         "basis_parameters": {"type": ["object", "null"]},
                         "average": {"type": "string"},
@@ -464,6 +484,7 @@ def build_tool_specs() -> list[dict[str, Any]]:
                     "properties": {
                         "session_id": {"type": "string"},
                         "basis_type": {"type": ["string", "null"]},
+                        "basis_key": {"type": ["string", "null"]},
                         "scenario_id": {"type": ["string", "null"]},
                         "parameters": {"type": ["object", "null"]},
                         "selection_mode": {"type": "string", "enum": ["max", "min"]},
@@ -492,6 +513,7 @@ def build_tool_specs() -> list[dict[str, Any]]:
                     "properties": {
                         "session_id": {"type": "string"},
                         "basis_type": {"type": ["string", "null"]},
+                        "basis_key": {"type": ["string", "null"]},
                         "scenario_id": {"type": ["string", "null"]},
                         "parameters": {"type": ["object", "null"]},
                         "source": {"type": "string", "enum": ["link_ratios"]},
@@ -553,6 +575,7 @@ def build_tool_specs() -> list[dict[str, Any]]:
                     "properties": {
                         "session_id": {"type": "string"},
                         "basis_type": {"type": ["string", "null"]},
+                        "basis_key": {"type": ["string", "null"]},
                         "scenario_id": {"type": ["string", "null"]},
                         "parameters": {"type": ["object", "null"]},
                     },
@@ -584,6 +607,7 @@ def build_tool_specs() -> list[dict[str, Any]]:
                     "properties": {
                         "session_id": {"type": "string"},
                         "basis_type": {"type": ["string", "null"]},
+                        "basis_key": {"type": ["string", "null"]},
                         "scenario_id": {"type": ["string", "null"]},
                         "parameters": {"type": ["object", "null"]},
                     },
@@ -1029,6 +1053,9 @@ def summarize_derived_drop_payload(payload: dict[str, Any]) -> dict[str, Any]:
     candidate = (
         payload.get("candidate") if isinstance(payload.get("candidate"), dict) else {}
     )
+    parameters = (
+        scenario.get("parameters") if isinstance(scenario.get("parameters"), dict) else {}
+    )
     return {
         "session_id": payload.get("session_id"),
         "rule": payload.get("rule", {}),
@@ -1037,8 +1064,11 @@ def summarize_derived_drop_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "baseline_score": baseline.get("score"),
         "candidate_score": candidate.get("score"),
         "score_delta": scenario.get("score_delta"),
+        "basis_key": basis_key_from_parameters(parameters),
         "scenario_id": scenario.get("scenario_id"),
+        "scenario_label": scenario.get("scenario_id"),
         "summary": scenario.get("summary"),
+        "parameters": parameters,
     }
 
 
@@ -2014,7 +2044,9 @@ def _compact_scenario(item: object) -> dict[str, Any]:
 def _compact_review_candidate(item: object) -> dict[str, Any]:
     if not isinstance(item, dict):
         return {}
+    parameters = item.get("parameters") if isinstance(item.get("parameters"), dict) else {}
     return {
+        "basis_key": basis_key_from_parameters(parameters),
         "candidate_id": item.get("candidate_id"),
         "scenario_id": item.get("scenario_id"),
         "summary": item.get("summary"),
@@ -2024,7 +2056,7 @@ def _compact_review_candidate(item: object) -> dict[str, Any]:
         "score_breakdown": item.get("score_breakdown", {}),
         "policy_trace": item.get("policy_trace", {}),
         "continuity_notes": _top_continuity_notes(item.get("continuity_notes")),
-        "parameters": item.get("parameters", {}),
+        "parameters": parameters,
     }
 
 
@@ -2034,10 +2066,12 @@ def _compact_review_recommendation(item: object) -> dict[str, Any]:
     return {
         "recommendation_class": item.get("recommendation_class"),
         "candidate_id": item.get("candidate_id"),
+        "basis_key": item.get("basis_key"),
         "scenario_id": item.get("scenario_id"),
         "summary": item.get("summary"),
         "caveats": item.get("caveats", []),
         "alternatives": item.get("alternatives", []),
+        "alternative_basis_keys": item.get("alternative_basis_keys", []),
         "alternative_scenario_ids": item.get("alternative_scenario_ids", []),
     }
 

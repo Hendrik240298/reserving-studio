@@ -132,6 +132,13 @@ class BackendReservingTools:
             )
         if name == "tool_evaluate_tail_fit":
             validation = validate_recalculate_like_arguments(arguments)
+            if validation.rejection_reason:
+                return self._finalize_summary(
+                    tool_name=name,
+                    args=arguments,
+                    summary=_rejected_tool_summary(arguments, validation.rejection_reason),
+                    validation=validation,
+                )
             sanitized_arguments = dict(validation.effective_inputs)
             response = self._backend.evaluate_tail_fit(
                 TailEvaluationRequest(**sanitized_arguments)
@@ -252,6 +259,7 @@ class BackendReservingTools:
                 ResultsRequest(
                     session_id=session_id,
                     basis_type=arguments.get("basis_type"),
+                    basis_key=arguments.get("basis_key"),
                     scenario_id=arguments.get("scenario_id"),
                     parameters=arguments.get("parameters", {}),
                 )
@@ -278,6 +286,7 @@ class BackendReservingTools:
                     },
                     include_summary=True,
                     basis_type=arguments.get("basis_type"),
+                    basis_key=arguments.get("basis_key"),
                     scenario_id=arguments.get("scenario_id"),
                     parameters=arguments.get("parameters", {}),
                 )
@@ -375,6 +384,13 @@ class BackendReservingTools:
             )
         if name == "tool_explain_reserve_change":
             validation = validate_recalculate_like_arguments(arguments)
+            if validation.rejection_reason:
+                return self._finalize_summary(
+                    tool_name=name,
+                    args=arguments,
+                    summary=_rejected_tool_summary(arguments, validation.rejection_reason),
+                    validation=validation,
+                )
             sanitized_arguments = dict(validation.effective_inputs)
             response = self._backend.explain_reserve_change(
                 ReserveChangeRequest(**sanitized_arguments)
@@ -396,6 +412,7 @@ class BackendReservingTools:
                 HighestA2ADropRequest(
                     session_id=str(arguments["session_id"]),
                     basis_type=arguments.get("basis_type"),
+                    basis_key=arguments.get("basis_key"),
                     scenario_id=arguments.get("scenario_id"),
                     parameters=arguments.get("parameters", {}),
                 )
@@ -419,6 +436,7 @@ class BackendReservingTools:
                     threshold_operator=arguments.get("threshold_operator"),
                     threshold_value=arguments.get("threshold_value"),
                     basis_type=arguments.get("basis_type"),
+                    basis_key=arguments.get("basis_key"),
                     scenario_id=arguments.get("scenario_id"),
                     parameters=arguments.get("parameters", {}),
                 )
@@ -437,6 +455,7 @@ class BackendReservingTools:
                 DerivedDropScenarioRequest(
                     session_id=str(arguments["session_id"]),
                     basis_type=arguments.get("basis_type"),
+                    basis_key=arguments.get("basis_key"),
                     scenario_id=arguments.get("scenario_id"),
                     parameters=arguments.get("parameters", {}),
                     rule={
@@ -491,6 +510,13 @@ class BackendReservingTools:
             )
         if name == "tool_recalculate":
             validation = validate_recalculate_like_arguments(arguments)
+            if validation.rejection_reason:
+                return self._finalize_summary(
+                    tool_name=name,
+                    args=arguments,
+                    summary=_rejected_tool_summary(arguments, validation.rejection_reason),
+                    validation=validation,
+                )
             sanitized_arguments = dict(validation.effective_inputs)
             sanitized_arguments["persist_to_session"] = False
             response = self._backend.recalculate(
@@ -539,3 +565,10 @@ def _optional_str(value: object) -> str | None:
     text = str(value).strip()
     return text or None
 
+
+def _rejected_tool_summary(arguments: dict[str, Any], reason: str) -> dict[str, Any]:
+    return {
+        "session_id": str(arguments.get("session_id") or "").strip() or None,
+        "rejected": True,
+        "rejection_reason": reason,
+    }

@@ -34,23 +34,21 @@ class ProposalManager:
         if recommendation_status not in {"recommended", "reasonable_alternative"}:
             return {}
 
-        requested_id = str(
-            recommendation.get("recommended_basis_id")
-            or recommendation.get("recommended_scenario_id")
-            or ""
-        ).strip()
-        if not requested_id:
+        recommended_basis_key = str(recommendation.get("recommended_basis_key") or "").strip()
+        if not recommended_basis_key:
             return {}
 
         accepted_basis = BasisManager.accepted_basis(
             accepted_analysis_basis=accepted_analysis_basis
         )
-        resolved_basis = BasisManager.lookup_basis_by_requested_id(
-            requested_id=requested_id,
+        resolved_basis = BasisManager.lookup_basis_by_key(
+            basis_key=recommended_basis_key,
             current_basis=accepted_basis,
             basis_cache=basis_cache if isinstance(basis_cache, dict) else {},
         )
         if not resolved_basis:
+            return {}
+        if not str(resolved_basis.get("basis_key") or "").strip():
             return {}
 
         if (

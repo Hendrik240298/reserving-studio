@@ -69,8 +69,10 @@ class RecommendationDecision:
     status: str
     summary: str
     rationale: list[str] = field(default_factory=list)
+    recommended_basis_key: str | None = None
     recommended_scenario_id: str | None = None
     recommended_basis_id: str | None = None
+    alternative_basis_keys: list[str] = field(default_factory=list)
     alternative_scenario_ids: list[str] = field(default_factory=list)
     alternative_basis_ids: list[str] = field(default_factory=list)
 

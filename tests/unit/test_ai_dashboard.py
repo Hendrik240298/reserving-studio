@@ -111,7 +111,11 @@ def test_render_chat_messages_shows_pending_proposal_below_origin_message() -> N
                 "parameters": {
                     "average": "volume",
                     "drop": [["2022", 24]],
-                    "tail": {"curve": "weibull", "attachment_age": None},
+                    "tail": {
+                        "curve": "weibull",
+                        "attachment_age": 27,
+                        "fit_period": [12, 108],
+                    },
                 },
                 "presented_in_message_id": "msg-1",
             },
@@ -125,7 +129,11 @@ def test_render_chat_messages_shows_pending_proposal_below_origin_message() -> N
         "parameters": {
             "average": "volume",
             "drop": [["2022", 24]],
-            "tail": {"curve": "weibull", "attachment_age": None},
+            "tail": {
+                "curve": "weibull",
+                "attachment_age": 27,
+                "fit_period": [12, 108],
+            },
         },
         "presented_in_message_id": "msg-1",
     }
@@ -139,8 +147,64 @@ def test_render_chat_messages_shows_pending_proposal_below_origin_message() -> N
     assert len(rendered[0].children) == 2
     proposal_card = rendered[0].children[1]
     assert proposal_card.children[0].children == "Recommended Change Pending Acceptance"
-    assert proposal_card.children[-1].children[0].id == "ai-chat-proposal-accept"
-    assert proposal_card.children[-1].children[1].id == "ai-chat-proposal-reject"
+    assert "Use 1 development drop" in proposal_card.children[3].children
+    assert "fitted over 12-108" in proposal_card.children[3].children
+    assert "Fit: 12-108" in proposal_card.children[4].children
+    action_row = proposal_card.children[-2]
+    assert action_row.children[0].id == "ai-chat-proposal-accept"
+    assert action_row.children[1].id == "ai-chat-proposal-reject"
+    assert action_row.children[2].id == "ai-chat-proposal-clarify-toggle"
+    clarification_box = proposal_card.children[-1]
+    assert clarification_box.id == "ai-chat-proposal-clarification-box"
+    assert clarification_box.style["display"] == "none"
+    assert clarification_box.children[1].id == "ai-chat-proposal-clarification-input"
+    assert clarification_box.children[2].id == "ai-chat-proposal-clarification-submit"
+
+
+def test_render_proposal_disambiguates_reused_display_label_with_basis_key() -> None:
+    proposal = {
+        "proposal_id": "proposal-1",
+        "status": "pending",
+        "scenario_label": "drop_combo_1",
+        "basis_key": "58e0070038362d37",
+        "parameters": {"average": "volume", "drop": [["2022", 24]]},
+        "presented_in_message_id": "msg-1",
+    }
+
+    rendered = AIDashboard.__new__(AIDashboard)._render_chat_messages(
+        [
+            {
+                "message_id": "msg-1",
+                "role": "assistant",
+                "content": "I recommend this basis.",
+                "proposal_basis": proposal,
+            }
+        ],
+        proposal,
+    )
+
+    proposal_card = rendered[0].children[1]
+    assert proposal_card.children[1].children == "drop_combo_1 (58e00700)"
+
+
+def test_proposal_clarification_prompt_preserves_explicit_acceptance() -> None:
+    prompt = AIDashboard._proposal_clarification_prompt(
+        clarification="Use the tail change but do not apply the drop yet.",
+        proposal={"scenario_label": "drop_1"},
+    )
+
+    assert "Pending proposal: drop_1" in prompt
+    assert "Use the tail change but do not apply the drop yet." in prompt
+    assert "Do not change the Analysis Basis" in prompt
+    assert "new proposal for explicit Yes/No acceptance" in prompt
+
+
+def test_proposal_clarification_box_style_toggles_visibility() -> None:
+    hidden = AIDashboard._proposal_clarification_box_style(visible=False)
+    visible = AIDashboard._proposal_clarification_box_style(visible=True)
+
+    assert hidden["display"] == "none"
+    assert visible["display"] == "block"
 
 
 def test_render_chat_messages_hides_non_pending_proposal_cards() -> None:
@@ -196,6 +260,21 @@ def test_analysis_basis_rows_show_bound_scenario_and_session_match() -> None:
     assert row_map["Source Tool"] == "tool_run_tail_review"
     assert row_map["Tail Active"] == "yes"
     assert row_map["Tail Mode"] == "attached"
+
+
+def test_analysis_basis_rows_disambiguate_label_with_basis_key() -> None:
+    rows = AIDashboard._analysis_basis_rows(
+        {
+            "basis_type": "review_candidate",
+            "basis_key": "58e0070038362d37",
+            "scenario_label": "drop_combo_1",
+            "parameters": {"average": "volume", "drop": [["2022", 24]]},
+        }
+    )
+
+    row_map = {row["field"]: row["value"] for row in rows}
+    assert row_map["Scenario Label"] == "drop_combo_1 (58e00700)"
+    assert row_map["Basis Key"] == "58e0070038362d37"
 
 
 def test_analysis_basis_rows_label_bespoke_basis_without_baseline_scenario_name() -> (

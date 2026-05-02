@@ -78,8 +78,19 @@ class BasisManager:
         if not normalized:
             return []
         aliases: list[str] = []
+        for value in (normalized.get("basis_key"),):
+            text = str(value or "").strip()
+            if text and text not in aliases:
+                aliases.append(text)
+        return aliases
+
+    @staticmethod
+    def display_aliases(basis: dict[str, Any] | None) -> list[str]:
+        normalized = normalize_accepted_analysis_basis(basis)
+        if not normalized:
+            return []
+        aliases: list[str] = []
         for value in (
-            normalized.get("basis_key"),
             normalized.get("scenario_id"),
             normalized.get("candidate_id"),
             normalized.get("scenario_label"),
@@ -94,15 +105,7 @@ class BasisManager:
         normalized = normalize_accepted_analysis_basis(basis)
         if not normalized:
             return ""
-        for value in (
-            normalized.get("basis_key"),
-            normalized.get("scenario_signature"),
-            normalized.get("scenario_id"),
-        ):
-            text = str(value or "").strip()
-            if text:
-                return text
-        return ""
+        return str(normalized.get("basis_key") or "").strip()
 
     @staticmethod
     def canonicalize_basis_cache(
@@ -119,38 +122,48 @@ class BasisManager:
         return canonical
 
     @staticmethod
-    def lookup_basis_by_requested_id(
+    def lookup_basis_by_key(
         *,
-        requested_id: str,
+        basis_key: str,
         current_basis: dict[str, Any],
         basis_cache: dict[str, Any],
     ) -> AcceptedAnalysisBasis:
-        target = str(requested_id or "").strip()
+        target = str(basis_key or "").strip()
         if not target or target == "baseline":
             return {}
         normalized_current = normalize_accepted_analysis_basis(current_basis)
         if target == BasisManager.canonical_basis_key(normalized_current):
-            return normalized_current
-        if target in BasisManager.identifier_aliases(normalized_current):
             return normalized_current
         canonical_cache = BasisManager.canonicalize_basis_cache(basis_cache)
         cached = canonical_cache.get(target)
         normalized_cached = normalize_accepted_analysis_basis(cached)
         if normalized_cached:
             return normalized_cached
-        for cache_key, item in canonical_cache.items():
-            normalized_item = normalize_accepted_analysis_basis(item)
-            aliases = BasisManager.identifier_aliases(normalized_item)
-            if target == str(cache_key).strip() or target in aliases:
-                return normalized_item
         return {}
+
+    @staticmethod
+    def lookup_basis_by_requested_id(
+        *,
+        requested_id: str,
+        current_basis: dict[str, Any],
+        basis_cache: dict[str, Any],
+    ) -> AcceptedAnalysisBasis:
+        return BasisManager.lookup_basis_by_key(
+            basis_key=requested_id,
+            current_basis=current_basis,
+            basis_cache=basis_cache,
+        )
 
     @staticmethod
     def basis_is_mentioned_in_prompt(*, prompt: str, basis: dict[str, Any]) -> bool:
         prompt_text = str(prompt or "").strip().lower()
         if not prompt_text:
             return False
-        return any(alias.lower() in prompt_text for alias in BasisManager.identifier_aliases(basis))
+        aliases = [
+            *BasisManager.identifier_aliases(basis),
+            *BasisManager.display_aliases(basis),
+        ]
+        return any(alias.lower() in prompt_text for alias in aliases)
 
     @staticmethod
     def scenario_id_mentioned_in_prompt(
@@ -205,12 +218,12 @@ class BasisManager:
             return {}
         args: dict[str, Any] = {}
         basis_type = str(normalized.get("basis_type") or "").strip()
-        scenario_id = str(normalized.get("scenario_id") or "").strip()
+        basis_key = str(normalized.get("basis_key") or "").strip()
         parameters = normalized.get("parameters")
         if basis_type:
             args["basis_type"] = basis_type
-        if scenario_id:
-            args["scenario_id"] = scenario_id
+        if basis_key:
+            args["basis_key"] = basis_key
         if isinstance(parameters, dict) and parameters:
             args["parameters"] = dict(parameters)
         return args

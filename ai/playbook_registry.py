@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ai.control_plane_types import normalize_accepted_analysis_basis
 from ai.plan_models import ExecutionPlan, PlanStep
 from ai.workflow_definitions import get_workflow_definition
 
@@ -63,13 +64,14 @@ def _step_args(
     merged = {"session_id": session_id, **dict(default_args)}
     if not basis_aware or not isinstance(analysis_basis, dict) or not analysis_basis:
         return merged
-    basis_type = analysis_basis.get("basis_type")
-    scenario_id = analysis_basis.get("scenario_id")
-    parameters = analysis_basis.get("parameters")
+    normalized_basis = normalize_accepted_analysis_basis(analysis_basis)
+    basis_type = normalized_basis.get("basis_type")
+    basis_key = normalized_basis.get("basis_key")
+    parameters = normalized_basis.get("parameters")
     if isinstance(basis_type, str) and basis_type.strip():
         merged["basis_type"] = basis_type.strip()
-    if isinstance(scenario_id, str) and scenario_id.strip():
-        merged["scenario_id"] = scenario_id.strip()
+    if isinstance(basis_key, str) and basis_key.strip():
+        merged["basis_key"] = basis_key.strip()
     if isinstance(parameters, dict) and parameters:
         merged["parameters"] = dict(parameters)
     return merged

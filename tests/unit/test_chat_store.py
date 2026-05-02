@@ -90,6 +90,47 @@ ai:
     assert app.state.chat_store._directory == tmp_path / "chats"
 
 
+def test_chat_service_stores_display_content_but_sends_internal_prompt() -> None:
+    captured: dict[str, str] = {}
+
+    class _AssistantStub:
+        def run_turn(self, **kwargs):
+            captured["user_prompt"] = kwargs["user_prompt"]
+            return {
+                "content": "Clarification handled.",
+                "fallback_used": False,
+                "session_id": "s-1",
+                "memory_snapshot": {
+                    "accepted_analysis_basis": {},
+                    "proposal_basis": {},
+                    "scenario_ledger": [],
+                    "basis_transition_history": [],
+                    "deterministic_packet": {},
+                },
+            }
+
+    service = AIChatService(
+        assistant_factory=lambda: _AssistantStub(),
+        store=InMemoryChatStore(),
+    )
+    session = service.create_chat(segment="industrial", reserving_session_id="s-1")
+
+    service.send_message(
+        session.chat_id,
+        "INTERNAL CONTROL WRAPPER",
+        display_content="give me first a comparison",
+    )
+    for _ in range(50):
+        current = service.build_chat_response(session.chat_id)
+        if not current.get("streaming"):
+            break
+        time.sleep(0.01)
+
+    final_response = service.build_chat_response(session.chat_id)
+    assert final_response["messages"][0]["content"] == "give me first a comparison"
+    assert captured["user_prompt"] == "INTERNAL CONTROL WRAPPER"
+
+
 def test_chat_service_accepts_pending_proposal_and_updates_message_state() -> None:
     service = AIChatService(
         assistant_factory=lambda: None,
@@ -292,4 +333,67 @@ def test_chat_service_supersedes_older_pending_proposal_on_new_recommendation() 
     assert (
         new_message["proposal_basis"]["presented_in_message_id"]
         == new_message["message_id"]
+    )
+
+
+def test_chat_service_preserves_basis_transition_history_after_follow_up_turn() -> None:
+    class _AssistantStub:
+        def run_turn(self, **kwargs):
+            return {
+                "content": "Comparison ready.",
+                "fallback_used": False,
+                "session_id": "s-1",
+                "memory_snapshot": {
+                    "accepted_analysis_basis": kwargs["accepted_analysis_basis"],
+                    "proposal_basis": kwargs["proposal_basis"],
+                    "scenario_ledger": [],
+                    "execution_records": kwargs["execution_records"],
+                    "basis_transition_history": kwargs["basis_transition_history"],
+                    "deterministic_packet": {},
+                },
+            }
+
+    store = InMemoryChatStore()
+    service = AIChatService(
+        assistant_factory=lambda: _AssistantStub(),
+        store=store,
+    )
+    session = service.create_chat(segment="industrial", reserving_session_id="s-1")
+    store.update_memory(
+        session.chat_id,
+        working_memory={},
+        accepted_analysis_basis={
+            "basis_type": "review_candidate",
+            "scenario_id": "drop_1",
+            "parameters": {"drop": [["2022", 24]]},
+        },
+        proposal_basis={},
+        scenario_ledger=[],
+        execution_records=[],
+        basis_transition_history=[
+            {
+                "transition_id": "transition-1",
+                "chat_id": session.chat_id,
+                "from_basis_key": None,
+                "to_basis_key": "basis-1",
+                "transition_type": "proposal_accepted",
+                "origin_proposal_id": "proposal-1",
+                "created_at": "2026-05-02T00:00:00Z",
+            }
+        ],
+        deterministic_packet={},
+    )
+
+    service.start_message(session.chat_id, "Compare this basis to baseline")
+    for _ in range(50):
+        current = service.build_chat_response(session.chat_id)
+        if not current.get("streaming"):
+            break
+        time.sleep(0.01)
+
+    final_response = service.build_chat_response(session.chat_id)
+    assert len(final_response["basis_transition_history"]) == 1
+    assert (
+        final_response["basis_transition_history"][0]["transition_type"]
+        == "proposal_accepted"
     )

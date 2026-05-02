@@ -8,6 +8,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from ai.basis_manager import BasisManager
+from ai.proposal_manager import ProposalManager
 from ai.tool_payloads import build_memory_snapshot
 
 
@@ -81,6 +82,51 @@ def test_lookup_basis_by_requested_id_prefers_basis_key() -> None:
 
     assert resolved["basis_key"] == "basis-123"
     assert resolved["scenario_id"] == "review_drop_sig_a"
+
+
+def test_lookup_basis_by_requested_id_rejects_display_aliases() -> None:
+    basis = {
+        "basis_key": "basis-123",
+        "basis_type": "review_candidate",
+        "scenario_id": "review_drop_sig_a",
+        "candidate_id": "drop_3",
+        "parameters": {"drop": [["2002", 39]]},
+    }
+
+    for requested_id in ("review_drop_sig_a", "drop_3"):
+        resolved = BasisManager.lookup_basis_by_requested_id(
+            requested_id=requested_id,
+            current_basis={},
+            basis_cache={"basis-123": basis},
+        )
+
+        assert resolved == {}
+
+
+def test_proposal_creation_requires_recommended_basis_key() -> None:
+    proposal = ProposalManager.build_from_deterministic_packet(
+        deterministic_packet={
+            "plan": {
+                "playbook": "scenario_recommendation",
+                "basis_behavior": ["proposal_possible"],
+            },
+            "recommendation": {
+                "status": "recommended",
+                "recommended_scenario_id": "drop_3",
+            },
+        },
+        accepted_analysis_basis={},
+        basis_cache={
+            "basis-123": {
+                "basis_key": "basis-123",
+                "basis_type": "review_candidate",
+                "scenario_id": "drop_3",
+                "parameters": {"drop": [["2002", 39]]},
+            }
+        },
+    )
+
+    assert proposal == {}
 
 
 def test_scenario_reference_in_prompt_returns_basis_key_for_unique_label() -> None:

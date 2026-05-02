@@ -8,6 +8,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from ai.assistant_service import AssistantService
+from ai.control_plane_types import basis_key_from_parameters
 
 
 class _FakeClient:
@@ -471,6 +472,72 @@ def test_exact_factor_question_prefetches_assumption_detail() -> None:
     assert tool_names[0] == "tool_get_assumption_context_detail"
 
 
+def test_exact_factor_question_does_not_create_deterministic_proposal() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ok",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", _FakeClient(responses))
+    fake_tools = _FakeTools()
+    setattr(service, "_tools", fake_tools)
+    service._observability_enabled = False
+    service._deterministic_orchestration_enabled = True
+
+    result = service.run_turn(
+        user_prompt="Show me the fitted tail LDFs from 27 to 45.",
+        session_context={"segment": "seg", "session_id": "s-1"},
+    )
+
+    assert result["memory_snapshot"].get("proposal_basis") == {}
+    assert result["memory_snapshot"].get("deterministic_packet", {}) == {}
+    assert [name for name, _ in fake_tools.calls] == [
+        "tool_get_assumption_context_detail"
+    ]
+
+
+def test_exact_tail_setting_question_does_not_create_tail_proposal() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ok",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", _FakeClient(responses))
+    fake_tools = _FakeTools()
+    setattr(service, "_tools", fake_tools)
+    service._observability_enabled = False
+    service._deterministic_orchestration_enabled = True
+
+    result = service.run_turn(
+        user_prompt="Which exact Weibull setting have you used?",
+        session_context={"segment": "seg", "session_id": "s-1"},
+    )
+
+    assert result["memory_snapshot"].get("proposal_basis") == {}
+    assert result["memory_snapshot"].get("deterministic_packet", {}) == {}
+    assert [name for name, _ in fake_tools.calls] == [
+        "tool_get_assumption_context_detail"
+    ]
+
+
 def test_exact_vector_comparison_prefetches_assumption_detail() -> None:
     responses = [
         {
@@ -554,12 +621,13 @@ def test_exact_follow_up_uses_bound_recommended_scenario_basis() -> None:
     assert result["content"] == "ok"
     tool_name, args = fake_tools.calls[0]
     assert tool_name == "tool_get_assumption_context_detail"
-    assert args["scenario_id"] == "drop_combo_1"
     assert args["basis_type"] == "review_candidate"
     assert args["parameters"]["tail"]["attachment_age"] == 27
+    assert args["basis_key"] == basis_key_from_parameters(args["parameters"])
+    assert "scenario_id" not in args
 
 
-def test_partial_scenario_basis_args_are_backfilled_from_cache() -> None:
+def test_partial_scenario_label_args_are_not_backfilled_from_cache() -> None:
     responses = [
         {
             "choices": [
@@ -630,8 +698,9 @@ def test_partial_scenario_basis_args_are_backfilled_from_cache() -> None:
     tool_name, args = fake_tools.calls[-1]
     assert tool_name == "tool_get_assumption_context_detail"
     assert args["scenario_id"] == "tail_weibull_27_12_108"
-    assert args["basis_type"] == "review_candidate"
-    assert args["parameters"]["tail"]["attachment_age"] == 27
+    assert "basis_type" not in args
+    assert "basis_key" not in args
+    assert "parameters" not in args
 
 
 def test_exact_follow_up_can_switch_back_to_baseline() -> None:
@@ -699,9 +768,10 @@ def test_exact_follow_up_can_switch_back_to_baseline() -> None:
     assert result["content"] == "ok"
     tool_name, args = fake_tools.calls[0]
     assert tool_name == "tool_get_assumption_context_detail"
-    assert args["scenario_id"] == "baseline"
     assert args["basis_type"] == "baseline"
     assert args["parameters"]["tail"]["attachment_age"] == 30
+    assert args["basis_key"] == basis_key_from_parameters(args["parameters"])
+    assert "scenario_id" not in args
 
 
 def test_basis_aware_tool_call_inherits_current_conversation_basis() -> None:
@@ -772,9 +842,96 @@ def test_basis_aware_tool_call_inherits_current_conversation_basis() -> None:
     assert result["content"] == "ok"
     tool_name, args = fake_tools.calls[0]
     assert tool_name == "tool_run_derived_drop_scenario"
-    assert args["scenario_id"] == "drop_combo_1"
     assert args["basis_type"] == "review_candidate"
     assert args["parameters"]["drop"] == [["2003", 9], ["2002", 21]]
+    assert args["basis_key"] == basis_key_from_parameters(args["parameters"])
+    assert "scenario_id" not in args
+
+
+def test_compare_current_basis_to_baseline_compiles_accepted_candidate() -> None:
+    accepted_parameters = {
+        "average": "volume",
+        "drop": [["2003", 9], ["2002", 21], ["2002", 39]],
+        "drop_valuation": [],
+        "tail": {
+            "curve": "weibull",
+            "attachment_age": 27,
+            "projection_period": 0,
+            "fit_period": [12, 108],
+        },
+        "bf_apriori": {"2005": 0.5988},
+        "final_ultimate": "chainladder",
+        "selected_ultimate_by_uwy": {"2005": "bornhuetter_ferguson"},
+    }
+    baseline_parameters = {
+        "average": "volume",
+        "drop": [],
+        "drop_valuation": [],
+        "tail": {
+            "curve": "weibull",
+            "attachment_age": None,
+            "projection_period": 0,
+            "fit_period": [],
+        },
+        "bf_apriori": {},
+        "final_ultimate": "chainladder",
+        "selected_ultimate_by_uwy": {},
+    }
+
+    args = AssistantService._compile_compare_current_basis_to_baseline_args(
+        args={"session_id": "s-1", "scenario_id": "drop_combo_1"},
+        memory_state={
+            "accepted_analysis_basis": {
+                "basis_type": "review_candidate",
+                "scenario_id": "drop_combo_1",
+                "parameters": accepted_parameters,
+            },
+            "session_summary": {
+                "session_id": "s-1",
+                "params": {
+                    "average": "volume",
+                    "drop_store": [],
+                    "tail_curve": "weibull",
+                    "tail_attachment_age": None,
+                    "tail_projection_months": 0,
+                    "tail_fit_period_selection": [],
+                    "bf_apriori_by_uwy": {},
+                    "selected_ultimate_by_uwy": {},
+                },
+            },
+        },
+        workflow_state={"current_user_prompt": "Compare this basis to baseline."},
+    )
+
+    assert args["basis_type"] == "baseline"
+    assert args["basis_key"] == basis_key_from_parameters(baseline_parameters)
+    assert args["basis_parameters"] == baseline_parameters
+    assert args["drop"] == accepted_parameters["drop"]
+    assert args["tail"] == accepted_parameters["tail"]
+    assert "scenario_id" not in args
+    assert "parameters" not in args
+
+
+def test_narrative_guardrail_corrects_pending_proposal_when_none_exists() -> None:
+    guarded = AssistantService._apply_narrative_guardrails(
+        "Main explanation.\n\n**Proposal Status:**\nThe proposal derived_drop is pending. Would you like to accept this basis?",
+        {},
+        [],
+        {
+            "proposal": {"exists": False, "status": "accepted"},
+            "basis": {
+                "accepted_basis": {
+                    "basis_key": "0b9c05883645ebc2",
+                    "scenario_label": "derived_drop_max_global",
+                }
+            },
+        },
+    )
+
+    assert "derived_drop is pending" not in guarded.lower()
+    assert "would you like to accept" not in guarded.lower()
+    assert "no pending basis proposal" in guarded
+    assert "derived_drop_max_global" in guarded
 
 
 def test_exact_follow_up_prefers_current_basis_over_recycled_display_label() -> None:
@@ -854,8 +1011,9 @@ def test_exact_follow_up_prefers_current_basis_over_recycled_display_label() -> 
     assert result["content"] == "ok"
     tool_name, args = fake_tools.calls[0]
     assert tool_name == "tool_get_assumption_context_detail"
-    assert args["scenario_id"] == "review_drop_sig_current"
     assert args["parameters"]["drop"] == [["2001", 60], ["2002", 39]]
+    assert args["basis_key"] == basis_key_from_parameters(args["parameters"])
+    assert "scenario_id" not in args
 
 
 def test_exact_follow_up_marks_inactive_tail_as_reference_only_in_prompt() -> None:

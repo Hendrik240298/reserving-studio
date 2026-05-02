@@ -95,6 +95,13 @@ class ReservingApiTools:
             )
         if name == "tool_evaluate_tail_fit":
             validation = validate_recalculate_like_arguments(arguments)
+            if validation.rejection_reason:
+                return self._finalize_summary(
+                    tool_name=name,
+                    args=arguments,
+                    summary=_rejected_tool_summary(arguments, validation.rejection_reason),
+                    validation=validation,
+                )
             sanitized_arguments = dict(validation.effective_inputs)
             payload = self.request_json(
                 "POST",
@@ -123,6 +130,7 @@ class ReservingApiTools:
                         arguments.get("include_recommendations", True)
                     ),
                     "basis_type": arguments.get("basis_type"),
+                    "basis_key": arguments.get("basis_key"),
                     "scenario_id": arguments.get("scenario_id"),
                     "parameters": arguments.get("parameters", {}),
                 },
@@ -143,6 +151,7 @@ class ReservingApiTools:
                     "session_id": arguments["session_id"],
                     "candidate_limit": int(arguments.get("candidate_limit", 5)),
                     "basis_type": arguments.get("basis_type"),
+                    "basis_key": arguments.get("basis_key"),
                     "scenario_id": arguments.get("scenario_id"),
                     "parameters": arguments.get("parameters", {}),
                 },
@@ -163,6 +172,7 @@ class ReservingApiTools:
                     "session_id": arguments["session_id"],
                     "candidate_limit": int(arguments.get("candidate_limit", 12)),
                     "basis_type": arguments.get("basis_type"),
+                    "basis_key": arguments.get("basis_key"),
                     "scenario_id": arguments.get("scenario_id"),
                     "parameters": arguments.get("parameters", {}),
                 },
@@ -182,6 +192,7 @@ class ReservingApiTools:
                 {
                     "session_id": arguments["session_id"],
                     "basis_type": arguments.get("basis_type"),
+                    "basis_key": arguments.get("basis_key"),
                     "scenario_id": arguments.get("scenario_id"),
                     "parameters": arguments.get("parameters", {}),
                 },
@@ -201,6 +212,7 @@ class ReservingApiTools:
                 {
                     "session_id": arguments["session_id"],
                     "basis_type": arguments.get("basis_type"),
+                    "basis_key": arguments.get("basis_key"),
                     "scenario_id": arguments.get("scenario_id"),
                     "parameters": arguments.get("parameters", {}),
                 },
@@ -220,6 +232,7 @@ class ReservingApiTools:
                 {
                     "session_id": arguments["session_id"],
                     "basis_type": arguments.get("basis_type"),
+                    "basis_key": arguments.get("basis_key"),
                     "scenario_id": arguments.get("scenario_id"),
                     "parameters": arguments.get("parameters", {}),
                 },
@@ -255,6 +268,7 @@ class ReservingApiTools:
                     "max_scenarios": int(arguments.get("max_scenarios", 24)),
                     "include_baseline": bool(arguments.get("include_baseline", True)),
                     "basis_type": arguments.get("basis_type"),
+                    "basis_key": arguments.get("basis_key"),
                     "scenario_id": arguments.get("scenario_id"),
                     "parameters": arguments.get("parameters", {}),
                 },
@@ -275,6 +289,7 @@ class ReservingApiTools:
                 {
                     "session_id": session_id,
                     "basis_type": arguments.get("basis_type"),
+                    "basis_key": arguments.get("basis_key"),
                     "scenario_id": arguments.get("scenario_id"),
                     "parameters": arguments.get("parameters", {}),
                 },
@@ -300,6 +315,7 @@ class ReservingApiTools:
                     },
                     "include_summary": True,
                     "basis_type": arguments.get("basis_type"),
+                    "basis_key": arguments.get("basis_key"),
                     "scenario_id": arguments.get("scenario_id"),
                     "parameters": arguments.get("parameters", {}),
                 },
@@ -327,6 +343,7 @@ class ReservingApiTools:
                     "end_age": arguments.get("end_age"),
                     "development_period": arguments.get("development_period"),
                     "basis_type": arguments.get("basis_type"),
+                    "basis_key": arguments.get("basis_key"),
                     "scenario_id": arguments.get("scenario_id"),
                     "parameters": arguments.get("parameters", {}),
                 },
@@ -386,6 +403,7 @@ class ReservingApiTools:
                 {
                     "session_id": arguments["session_id"],
                     "basis_type": arguments.get("basis_type"),
+                    "basis_key": arguments.get("basis_key"),
                     "scenario_id": arguments.get("scenario_id"),
                     "parameters": arguments.get("parameters", {}),
                 },
@@ -406,6 +424,7 @@ class ReservingApiTools:
                     "session_id": arguments["session_id"],
                     "uwy": arguments.get("uwy"),
                     "basis_type": arguments.get("basis_type"),
+                    "basis_key": arguments.get("basis_key"),
                     "scenario_id": arguments.get("scenario_id"),
                     "parameters": arguments.get("parameters", {}),
                 },
@@ -420,6 +439,13 @@ class ReservingApiTools:
             )
         if name == "tool_explain_reserve_change":
             validation = validate_recalculate_like_arguments(arguments)
+            if validation.rejection_reason:
+                return self._finalize_summary(
+                    tool_name=name,
+                    args=arguments,
+                    summary=_rejected_tool_summary(arguments, validation.rejection_reason),
+                    validation=validation,
+                )
             sanitized_arguments = dict(validation.effective_inputs)
             payload = self.request_json(
                 "POST",
@@ -444,6 +470,7 @@ class ReservingApiTools:
                 {
                     "session_id": arguments["session_id"],
                     "basis_type": arguments.get("basis_type"),
+                    "basis_key": arguments.get("basis_key"),
                     "scenario_id": arguments.get("scenario_id"),
                     "parameters": arguments.get("parameters", {}),
                 },
@@ -463,6 +490,7 @@ class ReservingApiTools:
                 {
                     "session_id": arguments["session_id"],
                     "basis_type": arguments.get("basis_type"),
+                    "basis_key": arguments.get("basis_key"),
                     "scenario_id": arguments.get("scenario_id"),
                     "parameters": arguments.get("parameters", {}),
                     "selection_mode": arguments.get("selection_mode", "max"),
@@ -487,6 +515,7 @@ class ReservingApiTools:
                 {
                     "session_id": arguments["session_id"],
                     "basis_type": arguments.get("basis_type"),
+                    "basis_key": arguments.get("basis_key"),
                     "scenario_id": arguments.get("scenario_id"),
                     "parameters": arguments.get("parameters", {}),
                     "rule": {
@@ -540,6 +569,13 @@ class ReservingApiTools:
             )
         if name == "tool_recalculate":
             validation = validate_recalculate_like_arguments(arguments)
+            if validation.rejection_reason:
+                return self._finalize_summary(
+                    tool_name=name,
+                    args=arguments,
+                    summary=_rejected_tool_summary(arguments, validation.rejection_reason),
+                    validation=validation,
+                )
             sanitized_arguments = dict(validation.effective_inputs)
             sanitized_arguments["persist_to_session"] = False
             payload = self.request_json(
@@ -650,6 +686,12 @@ def _optional_str(value: object) -> str | None:
     return text or None
 
 
+def _rejected_tool_summary(arguments: dict[str, Any], reason: str) -> dict[str, Any]:
+    return {
+        "session_id": str(arguments.get("session_id") or "").strip() or None,
+        "rejected": True,
+        "rejection_reason": reason,
+    }
 
 
 def _json_default(value: Any) -> Any:

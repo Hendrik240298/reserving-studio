@@ -319,6 +319,7 @@ class InMemoryReservingBackend:
                     analysis_basis=self._build_analysis_basis_payload(
                         session_id=context.session_id,
                         basis_type="bespoke",
+                        basis_key=None,
                         scenario_id=None,
                         parameters=recalculate_params,
                         is_active_session=recalculate_params
@@ -393,6 +394,7 @@ class InMemoryReservingBackend:
                 analysis_basis=self._build_analysis_basis_payload(
                     session_id=context.session_id,
                     basis_type="bespoke",
+                    basis_key=None,
                     scenario_id=None,
                     parameters=recalculate_params,
                     is_active_session=True,
@@ -426,6 +428,7 @@ class InMemoryReservingBackend:
             basis_params, analysis_basis = self._resolve_request_basis_params(
                 context=context,
                 basis_type=payload.basis_type,
+                basis_key=payload.basis_key,
                 scenario_id=payload.scenario_id,
                 parameters=payload.parameters,
                 original_params=original_params,
@@ -527,6 +530,7 @@ class InMemoryReservingBackend:
             baseline_params, analysis_basis = self._resolve_request_basis_params(
                 context=context,
                 basis_type=payload.basis_type,
+                basis_key=payload.basis_key,
                 scenario_id=payload.scenario_id,
                 parameters=payload.parameters,
                 original_params=original_params,
@@ -653,6 +657,7 @@ class InMemoryReservingBackend:
             basis_params, analysis_basis = self._resolve_request_basis_params(
                 context=context,
                 basis_type=payload.basis_type,
+                basis_key=payload.basis_key,
                 scenario_id=payload.scenario_id,
                 parameters=payload.parameters,
                 original_params=original_params,
@@ -679,12 +684,22 @@ class InMemoryReservingBackend:
             context = self._get_context_by_session_id(payload.session_id)
             if context is None:
                 raise LookupError(f"Session not found: {payload.session_id}")
+            original_params = self._params_from_store(context)
+            _, analysis_basis = self._resolve_request_basis_params(
+                context=context,
+                basis_type=payload.basis_type,
+                basis_key=payload.basis_key,
+                scenario_id=payload.scenario_id,
+                parameters=payload.parameters,
+                original_params=original_params,
+                default_basis_type="baseline",
+            )
             service = DataViewService(context.reserving)
             query = self._service_query(payload.query)
             frame = service.get_data_view(query)
             return DataViewResponse(
                 session_id=context.session_id,
-                analysis_basis={},
+                analysis_basis=analysis_basis,
                 query=payload.query.model_dump(mode="json"),
                 data=serialize_dataframe(frame),
                 summary=service.summarize_view(query)
@@ -737,6 +752,7 @@ class InMemoryReservingBackend:
             basis_params, analysis_basis = self._resolve_request_basis_params(
                 context=context,
                 basis_type=payload.basis_type,
+                basis_key=payload.basis_key,
                 scenario_id=payload.scenario_id,
                 parameters=payload.parameters,
                 original_params=original_params,
@@ -768,6 +784,7 @@ class InMemoryReservingBackend:
             basis_params, analysis_basis = self._resolve_request_basis_params(
                 context=context,
                 basis_type=payload.basis_type,
+                basis_key=payload.basis_key,
                 scenario_id=payload.scenario_id,
                 parameters=payload.parameters,
                 original_params=original_params,
@@ -800,6 +817,7 @@ class InMemoryReservingBackend:
             baseline_params, _ = self._resolve_request_basis_params(
                 context=context,
                 basis_type=payload.basis_type,
+                basis_key=payload.basis_key,
                 scenario_id=payload.scenario_id,
                 parameters=payload.basis_parameters,
                 original_params=original_params,
@@ -808,6 +826,7 @@ class InMemoryReservingBackend:
             candidate_params = self._clone_params(payload.model_dump(mode="json"))
             candidate_params.pop("session_id", None)
             candidate_params.pop("basis_type", None)
+            candidate_params.pop("basis_key", None)
             candidate_params.pop("scenario_id", None)
             candidate_params.pop("basis_parameters", None)
 
@@ -899,6 +918,7 @@ class InMemoryReservingBackend:
             DerivedDropScenarioRequest(
                 session_id=payload.session_id,
                 basis_type=payload.basis_type,
+                basis_key=payload.basis_key,
                 scenario_id=payload.scenario_id,
                 parameters=payload.parameters,
                 rule={
@@ -931,6 +951,7 @@ class InMemoryReservingBackend:
             basis_params, _ = self._resolve_request_basis_params(
                 context=context,
                 basis_type=payload.basis_type,
+                basis_key=payload.basis_key,
                 scenario_id=payload.scenario_id,
                 parameters=payload.parameters,
                 original_params=original_params,
@@ -972,6 +993,7 @@ class InMemoryReservingBackend:
             baseline_params, _ = self._resolve_request_basis_params(
                 context=context,
                 basis_type=payload.basis_type,
+                basis_key=payload.basis_key,
                 scenario_id=payload.scenario_id,
                 parameters=payload.parameters,
                 original_params=original_params,
@@ -1333,6 +1355,7 @@ class InMemoryReservingBackend:
         return self._resolve_request_basis_params(
             context=context,
             basis_type=payload.basis_type,
+            basis_key=payload.basis_key,
             scenario_id=payload.scenario_id,
             parameters=payload.parameters,
             original_params=original_params,
@@ -1344,22 +1367,38 @@ class InMemoryReservingBackend:
         *,
         context: SessionContext,
         basis_type: object,
+        basis_key: object,
         scenario_id: object,
         parameters: object,
         original_params: dict[str, Any],
         default_basis_type: str,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
+        resolved_basis_key = str(basis_key or "").strip() or None
         resolved_scenario_id = str(scenario_id or "").strip() or None
         if isinstance(parameters, dict) and parameters:
             params = self._clone_params(parameters)
+            computed_basis_key = basis_key_from_parameters(params)
+            if (
+                resolved_basis_key
+                and resolved_basis_key != "baseline"
+                and computed_basis_key
+                and resolved_basis_key != computed_basis_key
+            ):
+                raise ValueError(
+                    "basis_key must match the explicit parameters for this request"
+                )
             return params, self._build_analysis_basis_payload(
                 session_id=context.session_id,
                 basis_type=str(basis_type or default_basis_type),
+                basis_key=resolved_basis_key,
                 scenario_id=resolved_scenario_id,
                 parameters=params,
                 is_active_session=params == self._clone_params(original_params),
             )
-        if resolved_scenario_id and resolved_scenario_id != "baseline":
+        if (
+            (resolved_basis_key and resolved_basis_key != "baseline")
+            or (resolved_scenario_id and resolved_scenario_id != "baseline")
+        ):
             raise ValueError(
                 "Scenario-bound analysis requires explicit parameters for this request"
             )
@@ -1367,6 +1406,7 @@ class InMemoryReservingBackend:
         return params, self._build_analysis_basis_payload(
             session_id=context.session_id,
             basis_type=str(basis_type or default_basis_type),
+            basis_key=resolved_basis_key,
             scenario_id=resolved_scenario_id or "baseline",
             parameters=params,
             is_active_session=True,
@@ -1377,13 +1417,17 @@ class InMemoryReservingBackend:
         *,
         session_id: str,
         basis_type: str,
+        basis_key: str | None,
         scenario_id: str | None,
         parameters: dict[str, Any],
         is_active_session: bool,
     ) -> dict[str, Any]:
         canonical = json.dumps(parameters, sort_keys=True, separators=(",", ":"))
+        computed_basis_key = basis_key_from_parameters(parameters)
         return {
-            "basis_key": basis_key_from_parameters(parameters),
+            "basis_key": basis_key
+            if basis_key not in {None, "baseline"}
+            else computed_basis_key,
             "basis_type": str(basis_type or "baseline"),
             "scenario_label": scenario_label_from_basis_payload(
                 {
@@ -1409,6 +1453,7 @@ class InMemoryReservingBackend:
             baseline_params, analysis_basis = self._resolve_request_basis_params(
                 context=context,
                 basis_type=payload.basis_type,
+                basis_key=payload.basis_key,
                 scenario_id=payload.scenario_id,
                 parameters=payload.parameters,
                 original_params=original_params,
@@ -1446,6 +1491,7 @@ class InMemoryReservingBackend:
             baseline_params, analysis_basis = self._resolve_request_basis_params(
                 context=context,
                 basis_type=payload.basis_type,
+                basis_key=payload.basis_key,
                 scenario_id=payload.scenario_id,
                 parameters=payload.parameters,
                 original_params=original_params,
@@ -1486,6 +1532,7 @@ class InMemoryReservingBackend:
             baseline_params, analysis_basis = self._resolve_request_basis_params(
                 context=context,
                 basis_type=payload.basis_type,
+                basis_key=payload.basis_key,
                 scenario_id=payload.scenario_id,
                 parameters=payload.parameters,
                 original_params=original_params,
@@ -1525,6 +1572,7 @@ class InMemoryReservingBackend:
             baseline_params, analysis_basis = self._resolve_request_basis_params(
                 context=context,
                 basis_type=payload.basis_type,
+                basis_key=payload.basis_key,
                 scenario_id=payload.scenario_id,
                 parameters=payload.parameters,
                 original_params=original_params,
@@ -1560,6 +1608,7 @@ class InMemoryReservingBackend:
             basis_params, analysis_basis = self._resolve_request_basis_params(
                 context=context,
                 basis_type=payload.basis_type,
+                basis_key=payload.basis_key,
                 scenario_id=payload.scenario_id,
                 parameters=payload.parameters,
                 original_params=original_params,

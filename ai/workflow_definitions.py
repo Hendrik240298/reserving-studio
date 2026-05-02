@@ -83,6 +83,32 @@ def _recommendation_question(prompt: str) -> bool:
     return any(keyword in prompt for keyword in recommendation_keywords)
 
 
+def _reserve_change_question(prompt: str) -> bool:
+    if "baseline" not in prompt:
+        return False
+    compare_terms = {
+        "compare this basis",
+        "compare the basis",
+        "compare current basis",
+        "compare accepted basis",
+        "compare analysis basis",
+        "this basis to baseline",
+        "basis to baseline",
+    }
+    return any(term in prompt for term in compare_terms)
+
+
+def _additional_drop_request(prompt: str) -> bool:
+    drop_terms = {"drop", "drops", "dropped"}
+    add_terms = {"add", "additional", "append", "more", "another"}
+    impact_terms = {"impact", "positive", "highest", "largest", "most", "outlier"}
+    return (
+        any(term in prompt for term in drop_terms)
+        and any(term in prompt for term in add_terms)
+        and any(term in prompt for term in impact_terms)
+    )
+
+
 WORKFLOW_DEFINITIONS: tuple[WorkflowDefinition, ...] = (
     WorkflowDefinition(
         workflow_name="quarter_close_review",
@@ -199,6 +225,40 @@ WORKFLOW_DEFINITIONS: tuple[WorkflowDefinition, ...] = (
         ),
         policy_prompt_relevant=True,
         requires_continuity=True,
+    ),
+    WorkflowDefinition(
+        workflow_name="derived_drop_expansion",
+        intent_class="scenario_recommendation",
+        goal="Build and review an expanded drop scenario from deterministic link-ratio rules.",
+        required_capabilities=("derived_drop_scenario",),
+        required_evidence=("derived_drop_scenario",),
+        minimum_evidence_count=1,
+        stopping_rule_template="Stop after the derived drop scenario is built from the current accepted basis.",
+        basis_behavior=("use_accepted_basis", "proposal_possible"),
+        answer_contract="recommendation_with_proposal",
+        steps=(
+            WorkflowStepDefinition(
+                tool_name="tool_run_derived_drop_scenario",
+                evidence_key="derived_drop_scenario",
+                default_args={
+                    "source": "link_ratios",
+                    "selection_mode": "max",
+                    "scope": "global",
+                    "limit": 3,
+                    "include_existing_drops": True,
+                },
+                basis_aware=True,
+            ),
+        ),
+        prompt_hint="Selected playbook: Derived Drop Expansion. Build the proposed drop list from the derived-drop tool result; do not substitute scenario-iteration labels or unrelated drop lists.",
+        tool_whitelist=(
+            "tool_run_derived_drop_scenario",
+            "tool_get_last_derived_drop_detail",
+            "tool_explain_reserve_change",
+            "tool_get_assumption_context_detail",
+        ),
+        selection_mode="additional_drop_request",
+        policy_prompt_relevant=True,
     ),
     WorkflowDefinition(
         workflow_name="movement_review",
@@ -343,6 +403,7 @@ WORKFLOW_DEFINITIONS: tuple[WorkflowDefinition, ...] = (
             "reserve change",
             "impact on reserve",
         ),
+        selection_mode="reserve_change_question",
         policy_prompt_relevant=True,
     ),
     WorkflowDefinition(
@@ -519,6 +580,10 @@ def select_workflow_definition(prompt: str) -> WorkflowDefinition | None:
         return None
     for definition in WORKFLOW_DEFINITIONS:
         if definition.selection_mode == "movement_question" and _movement_question(prompt_text):
+            return definition
+        if definition.selection_mode == "reserve_change_question" and _reserve_change_question(prompt_text):
+            return definition
+        if definition.selection_mode == "additional_drop_request" and _additional_drop_request(prompt_text):
             return definition
         if definition.selection_mode == "recommendation_question" and _recommendation_question(prompt_text):
             return definition

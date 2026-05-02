@@ -90,6 +90,7 @@ def _extract_composite_review(evidence_packets: list[dict[str, Any]]) -> dict[st
         "tail_review",
         "bf_suitability_review",
         "anomaly_triage",
+        "derived_drop_scenario",
     ]
     for key in preferred_keys:
         for packet in evidence_packets:

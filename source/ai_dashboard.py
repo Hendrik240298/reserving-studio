@@ -411,6 +411,19 @@ class AIDashboard:
             )
 
         @self.app.callback(
+            Output("ai-chat-proposal-clarification-box", "style"),
+            Input("ai-chat-proposal-clarify-toggle", "n_clicks"),
+            prevent_initial_call=True,
+        )
+        def _show_proposal_clarification(n_clicks):
+            try:
+                if int(n_clicks or 0) <= 0:
+                    return no_update
+            except (TypeError, ValueError):
+                return no_update
+            return self._proposal_clarification_box_style(visible=True)
+
+        @self.app.callback(
             Output("ai-chat-history-store", "data", allow_duplicate=True),
             Output("ai-chat-analysis-basis-store", "data", allow_duplicate=True),
             Output("ai-chat-proposal-basis-store", "data", allow_duplicate=True),
@@ -503,6 +516,179 @@ class AIDashboard:
                 else no_update,
                 self._analysis_basis_rows(normalized_analysis_basis),
                 status,
+            )
+
+        @self.app.callback(
+            Output("ai-chat-history-store", "data", allow_duplicate=True),
+            Output("ai-chat-tool-events-store", "data", allow_duplicate=True),
+            Output("ai-chat-scenario-ledger-store", "data", allow_duplicate=True),
+            Output("ai-chat-analysis-basis-store", "data", allow_duplicate=True),
+            Output("ai-chat-proposal-basis-store", "data", allow_duplicate=True),
+            Output("ai-memory-proposals-store", "data", allow_duplicate=True),
+            Output("ai-chat-transcript", "children", allow_duplicate=True),
+            Output("ai-chat-proposal-clarification-input", "value"),
+            Output("ai-chat-status", "children", allow_duplicate=True),
+            Output("ai-analysis-trace", "data", allow_duplicate=True),
+            Output("ai-chat-evidence-trace", "data", allow_duplicate=True),
+            Output("ai-scenario-ledger", "data", allow_duplicate=True),
+            Output("ai-analysis-basis", "data", allow_duplicate=True),
+            Output("ai-chat-poll", "disabled", allow_duplicate=True),
+            Input("ai-chat-proposal-clarification-submit", "n_clicks"),
+            State("ai-chat-proposal-clarification-input", "value"),
+            State("ai-chat-proposal-basis-store", "data"),
+            prevent_initial_call=True,
+        )
+        def _submit_proposal_clarification(n_clicks, clarification, proposal_basis):
+            try:
+                if int(n_clicks or 0) <= 0:
+                    return (
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                    )
+            except (TypeError, ValueError):
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                )
+            clarification_text = str(clarification or "").strip()
+            if not clarification_text:
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    "Add a clarification before submitting.",
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                )
+            if self._chat_service is None or not self._chat_id:
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    "AI chat backend is not configured.",
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    True,
+                )
+            prompt = self._proposal_clarification_prompt(
+                clarification=clarification_text,
+                proposal=proposal_basis if isinstance(proposal_basis, dict) else {},
+            )
+            try:
+                response = self._chat_service.send_message(
+                    self._chat_id,
+                    prompt,
+                    display_content=clarification_text,
+                )
+            except Exception as error:
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    clarification_text,
+                    f"Proposal clarification failed: {error}",
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    True,
+                )
+            messages = response.get("messages")
+            tool_events = response.get("tool_events")
+            execution_records = response.get("execution_records")
+            scenario_ledger = response.get("scenario_ledger")
+            analysis_basis = response.get("accepted_analysis_basis")
+            next_proposal_basis = response.get("proposal_basis")
+            normalized_tool_events = (
+                [dict(item) for item in tool_events if isinstance(item, dict)]
+                if isinstance(tool_events, list)
+                else []
+            )
+            normalized_execution_records = (
+                [dict(item) for item in execution_records if isinstance(item, dict)]
+                if isinstance(execution_records, list)
+                else []
+            )
+            normalized_scenario_ledger = (
+                [dict(item) for item in scenario_ledger if isinstance(item, dict)]
+                if isinstance(scenario_ledger, list)
+                else []
+            )
+            normalized_analysis_basis = (
+                dict(analysis_basis) if isinstance(analysis_basis, dict) else {}
+            )
+            normalized_next_proposal_basis = (
+                dict(next_proposal_basis) if isinstance(next_proposal_basis, dict) else {}
+            )
+            proposals = response.get("memory_update_proposals")
+            normalized_proposals = (
+                [dict(item) for item in proposals if isinstance(item, dict)]
+                if isinstance(proposals, list)
+                else []
+            )
+            status = "Proposal clarification submitted. Waiting for revised answer."
+            return (
+                [dict(item) for item in messages if isinstance(item, dict)]
+                if isinstance(messages, list)
+                else no_update,
+                normalized_tool_events,
+                normalized_scenario_ledger,
+                normalized_analysis_basis,
+                normalized_next_proposal_basis,
+                normalized_proposals,
+                self._render_chat_messages(messages, normalized_next_proposal_basis)
+                if isinstance(messages, list)
+                else no_update,
+                "",
+                status,
+                self._execution_record_rows(normalized_execution_records),
+                self._chat_evidence_rows(normalized_tool_events),
+                self._scenario_ledger_rows(normalized_scenario_ledger),
+                self._analysis_basis_rows(normalized_analysis_basis),
+                not bool(response.get("streaming")),
             )
 
         @self.app.callback(
@@ -1731,6 +1917,35 @@ class AIDashboard:
                 return ""
         return ""
 
+    @staticmethod
+    def _proposal_clarification_prompt(
+        *,
+        clarification: object,
+        proposal: dict[str, Any],
+    ) -> str:
+        clarification_text = str(clarification or "").strip()
+        scenario_label = AIDashboard._basis_display_label(
+            proposal,
+            fallback="the pending proposal",
+        )
+        return (
+            "The user did not accept or reject the pending proposal. "
+            f"Pending proposal: {scenario_label}. "
+            "User clarification: "
+            f"{clarification_text}\n\n"
+            "Re-evaluate or revise the recommendation using deterministic evidence where needed. "
+            "Do not change the Analysis Basis. If you recommend a revised basis, store it as a new proposal for explicit Yes/No acceptance."
+        )
+
+    @staticmethod
+    def _proposal_clarification_box_style(*, visible: bool) -> dict[str, Any]:
+        return {
+            "display": "block" if visible else "none",
+            "marginTop": "10px",
+            "paddingTop": "10px",
+            "borderTop": f"1px solid {COLOR_BORDER}",
+        }
+
     def _render_chat_messages(
         self,
         history: list[dict[str, Any]],
@@ -1874,6 +2089,19 @@ class AIDashboard:
         return rendered
 
     @staticmethod
+    def _basis_display_label(basis: dict[str, Any], *, fallback: str) -> str:
+        label = str(
+            basis.get("scenario_label")
+            or basis.get("candidate_id")
+            or basis.get("scenario_id")
+            or fallback
+        ).strip()
+        basis_key = str(basis.get("basis_key") or "").strip()
+        if basis_key and label:
+            return f"{label} ({basis_key[:8]})"
+        return label
+
+    @staticmethod
     def _proposal_parameter_summary(proposal: dict[str, Any]) -> str:
         parameters = (
             proposal.get("parameters")
@@ -1882,11 +2110,43 @@ class AIDashboard:
         )
         tail = parameters.get("tail") if isinstance(parameters.get("tail"), dict) else {}
         drops = parameters.get("drop") if isinstance(parameters.get("drop"), list) else []
+        fit_period = tail.get("fit_period") if isinstance(tail.get("fit_period"), list) else []
+        fit_text = f" | Fit: {fit_period[0]}-{fit_period[-1]}" if fit_period else ""
         return (
             f"Average: {parameters.get('average', '')} | "
             f"Drops: {len(drops)} | "
             f"Tail: {tail.get('curve', '')} @ {tail.get('attachment_age', 'n/a')}"
+            f"{fit_text}"
         )
+
+    @staticmethod
+    def _proposal_change_description(proposal: dict[str, Any]) -> str:
+        parameters = (
+            proposal.get("parameters")
+            if isinstance(proposal.get("parameters"), dict)
+            else {}
+        )
+        tail = parameters.get("tail") if isinstance(parameters.get("tail"), dict) else {}
+        drops = parameters.get("drop") if isinstance(parameters.get("drop"), list) else []
+        parts: list[str] = []
+        if drops:
+            parts.append(f"Use {len(drops)} development drop{'s' if len(drops) != 1 else ''}")
+        attachment_age = tail.get("attachment_age")
+        curve = str(tail.get("curve") or "").strip()
+        fit_period = tail.get("fit_period") if isinstance(tail.get("fit_period"), list) else []
+        if attachment_age is not None:
+            tail_text = f"attach {curve or 'tail'} tail at {attachment_age}"
+            if fit_period:
+                tail_text += f" fitted over {fit_period[0]}-{fit_period[-1]}"
+            parts.append(tail_text)
+        elif curve:
+            parts.append(f"keep {curve} tail reference-only")
+        final_method = str(parameters.get("final_ultimate") or "").strip()
+        if final_method:
+            parts.append(f"final method {final_method.replace('_', ' ')}")
+        if not parts:
+            return "Review and optionally accept this proposed analysis basis."
+        return "Change: " + "; ".join(parts) + "."
 
     @classmethod
     def _render_message_proposal(
@@ -1903,12 +2163,7 @@ class AIDashboard:
         current_id = str(current_proposal.get("proposal_id") or "").strip()
         if not proposal_id or proposal_id != current_id:
             return None
-        scenario_label = str(
-            proposal.get("scenario_label")
-            or proposal.get("candidate_id")
-            or proposal.get("scenario_id")
-            or "proposed basis"
-        )
+        scenario_label = cls._basis_display_label(proposal, fallback="proposed basis")
         caveats = (
             [str(item) for item in proposal.get("caveats", []) if str(item).strip()][:3]
             if isinstance(proposal.get("caveats"), list)
@@ -1926,6 +2181,10 @@ class AIDashboard:
             html.Div(
                 f"Strength: {proposal.get('recommendation_strength') or 'recommended'}",
                 style={"fontSize": "13px", "color": COLOR_MUTED},
+            ),
+            html.Div(
+                cls._proposal_change_description(proposal),
+                style={"fontSize": "13px", "color": COLOR_TEXT, "lineHeight": "1.5"},
             ),
             html.Div(
                 cls._proposal_parameter_summary(proposal),
@@ -1954,8 +2213,53 @@ class AIDashboard:
                         n_clicks=0,
                         style=cls._secondary_button_style(),
                     ),
+                    html.Button(
+                        "Something else",
+                        id="ai-chat-proposal-clarify-toggle",
+                        n_clicks=0,
+                        style=cls._secondary_button_style(),
+                    ),
                 ],
                 style={"display": "flex", "gap": "10px", "marginTop": "4px"},
+            )
+        )
+        children.append(
+            html.Div(
+                [
+                    html.Div(
+                        "What would you like to change or clarify?",
+                        style={
+                            "fontSize": "12px",
+                            "fontWeight": 700,
+                            "color": COLOR_MUTED,
+                            "marginBottom": "6px",
+                        },
+                    ),
+                    dcc.Textarea(
+                        id="ai-chat-proposal-clarification-input",
+                        placeholder="Example: keep the tail but do not add the proposed drop yet...",
+                        style={
+                            "width": "100%",
+                            "minHeight": "70px",
+                            "border": f"1px solid {COLOR_BORDER}",
+                            "borderRadius": RADIUS_MD,
+                            "padding": "10px",
+                            "fontFamily": FONT_FAMILY,
+                            "fontSize": "13px",
+                            "resize": "vertical",
+                            "boxSizing": "border-box",
+                            "color": COLOR_TEXT,
+                        },
+                    ),
+                    html.Button(
+                        "Submit clarification",
+                        id="ai-chat-proposal-clarification-submit",
+                        n_clicks=0,
+                        style={**cls._primary_button_style(), "marginTop": "8px"},
+                    ),
+                ],
+                id="ai-chat-proposal-clarification-box",
+                style=cls._proposal_clarification_box_style(visible=False),
             )
         )
         return html.Div(
@@ -2322,6 +2626,8 @@ class AIDashboard:
             scenario_label = "custom parameter basis"
         elif not scenario_label:
             scenario_label = "unnamed scenario basis"
+        if basis_key:
+            scenario_label = f"{scenario_label} ({basis_key[:8]})"
         rows = [
             {
                 "field": "Meaning",

@@ -11,6 +11,7 @@ if str(REPO_ROOT) not in sys.path:
 from ai.assistant_service import AssistantService
 from ai.chat_service import AIChatService
 from ai.chat_store import InMemoryChatStore
+from ai.control_plane_types import basis_key_from_parameters
 from ai.planner import PlaybookPlanner
 from ai.reviewer import ReviewerGate
 from source.config_manager import ConfigManager
@@ -98,6 +99,22 @@ class _DeterministicTools:
                 "scenario_count": 2,
                 "top_scenarios": [
                     {
+                        "basis_key": basis_key_from_parameters(
+                            {
+                                "average": "volume",
+                                "drop": [["2022", 24]],
+                                "drop_valuation": [],
+                                "tail": {
+                                    "curve": "weibull",
+                                    "attachment_age": None,
+                                    "projection_period": 0,
+                                    "fit_period": [],
+                                },
+                                "bf_apriori": {},
+                                "final_ultimate": "chainladder",
+                                "selected_ultimate_by_uwy": {},
+                            }
+                        ),
                         "scenario_id": "drop_1",
                         "score": 1.0,
                         "summary": "Apply one tested drop.",
@@ -118,6 +135,22 @@ class _DeterministicTools:
                         },
                     },
                     {
+                        "basis_key": basis_key_from_parameters(
+                            {
+                                "average": "volume",
+                                "drop": [["2021", 24]],
+                                "drop_valuation": [],
+                                "tail": {
+                                    "curve": "weibull",
+                                    "attachment_age": None,
+                                    "projection_period": 0,
+                                    "fit_period": [],
+                                },
+                                "bf_apriori": {},
+                                "final_ultimate": "chainladder",
+                                "selected_ultimate_by_uwy": {},
+                            }
+                        ),
                         "scenario_id": "drop_2",
                         "score": 1.7,
                         "summary": "Alternative tested drop.",
@@ -145,6 +178,7 @@ class _DeterministicTools:
                 "session_id": "s-1",
                 "analysis_basis": {
                     "basis_type": args.get("basis_type", "review_candidate"),
+                    "basis_key": args.get("basis_key"),
                     "scenario_id": args.get("scenario_id"),
                     "is_active_session": False,
                     "parameters": args.get("parameters", {}),
@@ -177,6 +211,52 @@ class _DeterministicTools:
                     "recommendation_class": "recommend",
                     "summary": "Adopt tested tail.",
                 },
+            }
+        if function_name == "tool_run_derived_drop_scenario":
+            base_parameters = dict(args.get("parameters") or {})
+            base_drops = [list(item) for item in base_parameters.get("drop", [])]
+            drop = [["2002", 39], ["2001", 60], ["2004", 3]]
+            parameters = {
+                **base_parameters,
+                "average": base_parameters.get("average", "volume"),
+                "drop": [*base_drops, *drop],
+                "drop_valuation": base_parameters.get("drop_valuation", []),
+                "tail": base_parameters.get(
+                    "tail",
+                    {
+                        "curve": "weibull",
+                        "attachment_age": 27,
+                        "projection_period": 0,
+                        "fit_period": [12, 108],
+                    },
+                ),
+                "bf_apriori": base_parameters.get("bf_apriori", {}),
+                "final_ultimate": base_parameters.get(
+                    "final_ultimate",
+                    "chainladder",
+                ),
+                "selected_ultimate_by_uwy": base_parameters.get(
+                    "selected_ultimate_by_uwy",
+                    {},
+                ),
+            }
+            basis_key = basis_key_from_parameters(parameters)
+            return {
+                "session_id": "s-1",
+                "rule": {"selection_mode": "max", "limit": args.get("limit")},
+                "drop_count": len(drop),
+                "selected_rows": [
+                    {"origin": origin, "development_period": age}
+                    for origin, age in drop
+                ],
+                "baseline_score": 2.0,
+                "candidate_score": 1.1,
+                "score_delta": -0.9,
+                "basis_key": basis_key,
+                "scenario_id": "drop_combo_1",
+                "scenario_label": "drop_combo_1",
+                "summary": "Added the highest-impact additional drops.",
+                "parameters": parameters,
             }
         if function_name == "tool_get_results_summary":
             return {
@@ -226,6 +306,34 @@ def test_playbook_planner_builds_movement_review_plan() -> None:
     ]
 
 
+def test_playbook_planner_routes_current_basis_baseline_comparison_without_proposal() -> None:
+    planner = PlaybookPlanner()
+
+    plan = planner.plan(
+        user_prompt="Compare this basis to baseline.",
+        session_context={"segment": "industrial", "session_id": "s-1"},
+    )
+
+    assert plan is not None
+    assert plan.playbook == "reserve_change_explanation"
+    assert plan.answer_contract == "observational_explanation"
+    assert "proposal_disallowed" in set(plan.basis_behavior)
+
+
+def test_playbook_planner_routes_additional_drop_request_to_derived_drop() -> None:
+    planner = PlaybookPlanner()
+
+    plan = planner.plan(
+        user_prompt="Please add three additional drops with the most positive impact.",
+        session_context={"segment": "industrial", "session_id": "s-1"},
+    )
+
+    assert plan is not None
+    assert plan.playbook == "derived_drop_expansion"
+    assert plan.steps[0].tool_name == "tool_run_derived_drop_scenario"
+    assert plan.steps[0].args["limit"] == 3
+
+
 def test_playbook_planner_binds_analysis_basis_into_tail_review_plan() -> None:
     planner = PlaybookPlanner()
 
@@ -241,7 +349,10 @@ def test_playbook_planner_binds_analysis_basis_into_tail_review_plan() -> None:
 
     assert plan is not None
     assert plan.playbook == "tail_selection"
-    assert plan.steps[0].args["scenario_id"] == "drop_1"
+    assert plan.steps[0].args["basis_key"] == basis_key_from_parameters(
+        {"drop": [["2022", 24]]}
+    )
+    assert "scenario_id" not in plan.steps[0].args
     assert plan.steps[0].args["parameters"]["drop"] == [["2022", 24]]
 
 
@@ -261,7 +372,10 @@ def test_playbook_planner_binds_analysis_basis_into_results_summary_step() -> No
     assert plan is not None
     result_step = plan.steps[2]
     assert result_step.tool_name == "tool_get_results_summary"
-    assert result_step.args["scenario_id"] == "drop_1"
+    assert result_step.args["basis_key"] == basis_key_from_parameters(
+        {"drop": [["2022", 24]]}
+    )
+    assert "scenario_id" not in result_step.args
     assert result_step.args["parameters"]["drop"] == [["2022", 24]]
 
 
@@ -442,6 +556,13 @@ def test_assistant_runs_deterministic_playbook_before_model_answer() -> None:
     assert packet.get("plan", {}).get("playbook") == "scenario_recommendation"
     assert packet.get("recommendation", {}).get("status") == "recommended"
     assert result["deterministic_packet"]["presentation"]["conclusion"] == "recommended"
+    narration_packet = result["narration_packet"]
+    assert narration_packet["answer_contract"] == "recommendation_with_proposal"
+    assert "proposal_status" in narration_packet["required_answer_sections"]
+    assert narration_packet["basis"]["basis_changed"] is False
+    assert service._client.last_messages is not None
+    assert "deterministic narration packet" in service._client.last_messages[-1]["content"]
+    assert "required_answer_sections" in service._client.last_messages[-1]["content"]
 
 
 def test_assistant_uses_accepted_basis_for_next_tail_review() -> None:
@@ -470,6 +591,22 @@ def test_assistant_uses_accepted_basis_for_next_tail_review() -> None:
         working_memory={
             "accepted_analysis_basis": {
                 "basis_type": "review_candidate",
+                "basis_key": basis_key_from_parameters(
+                    {
+                        "average": "volume",
+                        "drop": [["2022", 24]],
+                        "drop_valuation": [],
+                        "tail": {
+                            "curve": "weibull",
+                            "attachment_age": None,
+                            "projection_period": 0,
+                            "fit_period": [],
+                        },
+                        "bf_apriori": {},
+                        "final_ultimate": "chainladder",
+                        "selected_ultimate_by_uwy": {},
+                    }
+                ),
                 "scenario_id": "drop_1",
                 "is_active_session": False,
                 "parameters": {
@@ -493,8 +630,64 @@ def test_assistant_uses_accepted_basis_for_next_tail_review() -> None:
     assert result["content"] == "Tail recommendation ready."
     tool_name, args = tools.calls[0]
     assert tool_name == "tool_run_tail_review"
-    assert args["scenario_id"] == "drop_1"
+    assert args["basis_key"] == basis_key_from_parameters(
+        {
+            "average": "volume",
+            "drop": [["2022", 24]],
+            "drop_valuation": [],
+            "tail": {
+                "curve": "weibull",
+                "attachment_age": None,
+                "projection_period": 0,
+                "fit_period": [],
+            },
+            "bf_apriori": {},
+            "final_ultimate": "chainladder",
+            "selected_ultimate_by_uwy": {},
+        }
+    )
+    assert "scenario_id" not in args
     assert args["parameters"]["drop"] == [["2022", 24]]
+
+
+def test_tool_basis_resolution_does_not_execute_from_scenario_label() -> None:
+    resolved = AssistantService._resolve_tool_call_basis(
+        args={"scenario_id": "drop_1"},
+        memory_state={
+            "scenario_basis_cache": {
+                "basis-123": {
+                    "basis_key": "basis-123",
+                    "basis_type": "review_candidate",
+                    "scenario_id": "drop_1",
+                    "parameters": {"drop": [["2022", 24]]},
+                }
+            }
+        },
+        workflow_state={"current_user_prompt": "Use drop_1"},
+        has_any_basis_arg=True,
+    )
+
+    assert resolved == {}
+
+
+def test_pending_proposal_deterministic_packet_suppresses_follow_up_tools() -> None:
+    service = AssistantService.__new__(AssistantService)
+    service._observability_enabled = False
+
+    filtered = service._filter_tool_specs_for_turn(
+        tool_specs=[
+            {"type": "function", "function": {"name": "tool_run_derived_drop_scenario"}},
+            {"type": "function", "function": {"name": "tool_get_results_summary"}},
+        ],
+        deterministic_packet={
+            "plan": {"answer_contract": "recommendation_with_proposal"},
+            "proposal_basis": {"status": "pending", "proposal_id": "proposal-1"},
+        },
+        user_prompt="Please add three additional drops.",
+        exact_data_required=False,
+    )
+
+    assert filtered == []
 
 
 def test_deterministic_recommendation_creates_proposal_without_accepting_basis() -> None:
@@ -525,6 +718,72 @@ def test_deterministic_recommendation_creates_proposal_without_accepting_basis()
     assert memory_snapshot.get("accepted_analysis_basis", {}) == {}
     assert memory_snapshot["proposal_basis"]["status"] == "pending"
     assert memory_snapshot["proposal_basis"]["scenario_id"] == "drop_1"
+    assert result["narration_packet"]["proposal"]["exists"] is True
+    assert "proposal_changed_basis" in result["narration_packet"]["blocked_claims"]
+
+
+def test_derived_drop_expansion_creates_proposal_from_derived_result() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Expanded drop recommendation ready.",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+    service = AssistantService.__new__(AssistantService)
+    tools = _DeterministicTools()
+    setattr(service, "_client", _FakeClient(responses))
+    setattr(service, "_tools", tools)
+    service._observability_enabled = False
+    service._deterministic_orchestration_enabled = True
+
+    accepted_parameters = {
+        "average": "volume",
+        "drop": [["2003", 9], ["2002", 21]],
+        "drop_valuation": [],
+        "tail": {
+            "curve": "weibull",
+            "attachment_age": 27,
+            "projection_period": 0,
+            "fit_period": [12, 108],
+        },
+        "bf_apriori": {},
+        "final_ultimate": "chainladder",
+        "selected_ultimate_by_uwy": {},
+    }
+
+    result = service.run_turn(
+        user_prompt="I think just two drops are too few. Could you please add three additional drops with the most positive impact?",
+        session_context={"segment": "industrial", "session_id": "s-1"},
+        accepted_analysis_basis={
+            "basis_type": "review_candidate",
+            "scenario_id": "drop_combo_1",
+            "parameters": accepted_parameters,
+        },
+    )
+
+    assert result["content"] == "Expanded drop recommendation ready."
+    assert [name for name, _ in tools.calls][:1] == ["tool_run_derived_drop_scenario"]
+    tool_args = tools.calls[0][1]
+    assert tool_args["limit"] == 3
+    assert tool_args["include_existing_drops"] is True
+    proposal = result["memory_snapshot"]["proposal_basis"]
+    assert proposal["status"] == "pending"
+    assert proposal["source_tool"] == "tool_run_derived_drop_scenario"
+    assert proposal["parameters"]["drop"] == [
+        ["2003", 9],
+        ["2002", 21],
+        ["2002", 39],
+        ["2001", 60],
+        ["2004", 3],
+    ]
+    assert proposal["basis_key"] == basis_key_from_parameters(proposal["parameters"])
+    assert result["deterministic_packet"]["recommendation"]["recommended_basis_key"] == proposal["basis_key"]
 
 
 def test_recalculate_updates_preview_basis_and_session_summary() -> None:
@@ -743,7 +1002,7 @@ def test_assistant_suppresses_redundant_summary_tools_after_deterministic_packet
         for spec in client.tool_payloads[0]
         if isinstance(spec, dict)
     }
-    assert "tool_get_data_view_summary" in offered_names
+    assert offered_names == set()
     assert "tool_run_diagnostics_summary" not in offered_names
     assert "tool_iterate_diagnostics_summary" not in offered_names
     assert "tool_get_results_summary" not in offered_names

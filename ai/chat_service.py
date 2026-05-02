@@ -40,13 +40,30 @@ class AIChatService:
     def get_chat(self, chat_id: str) -> ChatSession | None:
         return self._store.get_chat(chat_id)
 
-    def send_message(self, chat_id: str, content: str) -> dict[str, Any]:
-        return self.start_message(chat_id, content)
+    def send_message(
+        self,
+        chat_id: str,
+        content: str,
+        *,
+        display_content: str | None = None,
+    ) -> dict[str, Any]:
+        return self.start_message(chat_id, content, display_content=display_content)
 
-    def start_message(self, chat_id: str, content: str) -> dict[str, Any]:
+    def start_message(
+        self,
+        chat_id: str,
+        content: str,
+        *,
+        display_content: str | None = None,
+    ) -> dict[str, Any]:
         prompt = str(content or "").strip()
         if not prompt:
             raise ValueError("Message content must not be empty")
+        visible_prompt = str(
+            display_content if display_content is not None else content
+        ).strip()
+        if not visible_prompt:
+            visible_prompt = prompt
 
         session = self._store.get_chat(chat_id)
         if session is None:
@@ -54,7 +71,7 @@ class AIChatService:
         if bool(session.metadata.get("streaming")):
             raise ValueError("Another assistant response is still in progress")
 
-        self._store.append_message(chat_id, {"role": "user", "content": prompt})
+        self._store.append_message(chat_id, {"role": "user", "content": visible_prompt})
         updated_session, message_id = self._store.start_assistant_message(chat_id)
         worker = threading.Thread(
             target=self._run_message,
@@ -90,6 +107,7 @@ class AIChatService:
                 proposal_basis=session.proposal_basis,
                 preview_basis=session.preview_basis,
                 execution_records=session.execution_records,
+                basis_transition_history=session.basis_transition_history,
                 working_memory={
                     **dict(session.working_memory),
                     "scenario_ledger": [dict(item) for item in session.scenario_ledger],
@@ -382,6 +400,7 @@ class AIChatService:
                 dict(item) for item in refreshed.basis_transition_history
             ],
             "deterministic_packet": dict(refreshed.deterministic_packet),
+            "narration_packet": self._narration_packet(refreshed),
             "memory_update_proposals": [
                 dict(item)
                 for item in refreshed.working_memory.get("memory_update_proposals", [])
@@ -407,6 +426,15 @@ class AIChatService:
             if str(item.get("role", "")).lower() == "assistant":
                 return bool(item.get("fallback_used", False))
         return False
+
+    @staticmethod
+    def _narration_packet(session: ChatSession) -> dict[str, Any]:
+        packet = session.working_memory.get("narration_packet")
+        if isinstance(packet, dict) and packet:
+            return dict(packet)
+        deterministic_packet = session.deterministic_packet
+        nested = deterministic_packet.get("narration_packet")
+        return dict(nested) if isinstance(nested, dict) else {}
 
     @staticmethod
     def _conversation_history(session: ChatSession) -> list[dict[str, str]]:

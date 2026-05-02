@@ -64,6 +64,11 @@ def validate_recalculate_like_arguments(
     average = sanitized.get("average")
     if average is not None:
         normalized_average = _normalize_average_or_volume(average)
+        if normalized_average is None:
+            return build_rejected_request_validation(
+                requested,
+                reason=f"Unsupported average assumption: {average}.",
+            )
         if normalized_average != str(average).strip().lower():
             non_material_adjustments.append(
                 f"Normalized average '{average}' to '{normalized_average}'."
@@ -76,6 +81,11 @@ def validate_recalculate_like_arguments(
         curve = tail_copy.get("curve")
         if curve is not None:
             normalized_curve = _normalize_tail_curve_or_default(curve)
+            if normalized_curve is None:
+                return build_rejected_request_validation(
+                    requested,
+                    reason=f"Unsupported tail curve assumption: {curve}.",
+                )
             if normalized_curve != str(curve).strip().lower():
                 non_material_adjustments.append(
                     f"Normalized tail curve '{curve}' to '{normalized_curve}'."
@@ -153,7 +163,7 @@ def _classify_execution_status(
     return "executed_exactly"
 
 
-def _normalize_average_or_volume(value: object) -> str:
+def _normalize_average_or_volume(value: object) -> str | None:
     normalized = str(value).strip().lower()
     aliases = {
         "volume": "volume",
@@ -168,10 +178,10 @@ def _normalize_average_or_volume(value: object) -> str:
         "simple_average": "simple",
         "arithmetic": "simple",
     }
-    return aliases.get(normalized, "volume")
+    return aliases.get(normalized)
 
 
-def _normalize_tail_curve_or_default(value: object) -> str:
+def _normalize_tail_curve_or_default(value: object) -> str | None:
     normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {
         "exponential": "exponential",
@@ -184,7 +194,7 @@ def _normalize_tail_curve_or_default(value: object) -> str:
         "inverse_power_curve": "inverse_power",
         "weibull": "weibull",
     }
-    return aliases.get(normalized, "weibull")
+    return aliases.get(normalized)
 
 
 def _normalize_selected_method(value: object) -> str | None:
