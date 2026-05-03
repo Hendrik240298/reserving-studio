@@ -210,6 +210,8 @@ class AIChatService:
                 replace_content=str(result.get("content", "")),
                 streaming=False,
                 fallback_used=bool(result.get("fallback_used", False)),
+                fallback_reason=str(result.get("fallback_reason") or ""),
+                fallback_detail=str(result.get("fallback_detail") or ""),
                 status="Done",
             )
         except Exception as error:
@@ -387,6 +389,14 @@ class AIChatService:
             "reserving_session_id": refreshed.reserving_session_id,
             "assistant_message": self._latest_assistant_message(refreshed),
             "fallback_used": self._latest_fallback_used(refreshed),
+            "fallback_reason": self._latest_fallback_field(
+                refreshed,
+                "fallback_reason",
+            ),
+            "fallback_detail": self._latest_fallback_field(
+                refreshed,
+                "fallback_detail",
+            ),
             "tool_events": [dict(item) for item in refreshed.tool_events],
             "messages": [dict(item) for item in refreshed.messages],
             "working_memory": dict(refreshed.working_memory),
@@ -426,6 +436,13 @@ class AIChatService:
             if str(item.get("role", "")).lower() == "assistant":
                 return bool(item.get("fallback_used", False))
         return False
+
+    @staticmethod
+    def _latest_fallback_field(session: ChatSession, field: str) -> str:
+        for item in reversed(session.messages):
+            if str(item.get("role", "")).lower() == "assistant":
+                return str(item.get(field) or "")
+        return ""
 
     @staticmethod
     def _narration_packet(session: ChatSession) -> dict[str, Any]:

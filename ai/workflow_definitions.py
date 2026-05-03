@@ -84,9 +84,23 @@ def _recommendation_question(prompt: str) -> bool:
 
 
 def _reserve_change_question(prompt: str) -> bool:
-    if "baseline" not in prompt:
+    baseline_terms = {
+        "baseline",
+        "base line",
+        "beginning",
+        "start of chat",
+        "start of the chat",
+        "before all the modifications",
+        "before the modifications",
+        "before modifications",
+        "before we changed",
+        "original scenario",
+        "original basis",
+    }
+    if not any(term in prompt for term in baseline_terms):
         return False
     compare_terms = {
+        "comparison",
         "compare this basis",
         "compare the basis",
         "compare current basis",
@@ -94,6 +108,13 @@ def _reserve_change_question(prompt: str) -> bool:
         "compare analysis basis",
         "this basis to baseline",
         "basis to baseline",
+        "analysis basis and",
+        "analysis basis to",
+        "ibnr comparison",
+        "reserve comparison",
+        "scenario before",
+        "before all the modifications",
+        "before the modifications",
     }
     return any(term in prompt for term in compare_terms)
 
@@ -221,6 +242,8 @@ WORKFLOW_DEFINITIONS: tuple[WorkflowDefinition, ...] = (
             "should be dropped",
             "should we drop",
             "should i drop",
+            "drop",
+            "drops",
             "drop ratios",
         ),
         policy_prompt_relevant=True,
@@ -575,27 +598,60 @@ def get_workflow_definition(workflow_name: str) -> WorkflowDefinition | None:
 
 
 def select_workflow_definition(prompt: str) -> WorkflowDefinition | None:
+    definitions = select_workflow_definitions(prompt)
+    return definitions[0] if definitions else None
+
+
+def select_workflow_definitions(prompt: str) -> tuple[WorkflowDefinition, ...]:
     prompt_text = str(prompt or "").strip().lower()
     if not prompt_text:
-        return None
-    for definition in WORKFLOW_DEFINITIONS:
-        if definition.selection_mode == "movement_question" and _movement_question(prompt_text):
-            return definition
-        if definition.selection_mode == "reserve_change_question" and _reserve_change_question(prompt_text):
-            return definition
-        if definition.selection_mode == "additional_drop_request" and _additional_drop_request(prompt_text):
-            return definition
-        if definition.selection_mode == "recommendation_question" and _recommendation_question(prompt_text):
-            return definition
-        if definition.selection_keywords and any(
-            keyword in prompt_text for keyword in definition.selection_keywords
+        return ()
+    matches = tuple(
+        definition
+        for definition in WORKFLOW_DEFINITIONS
+        if _definition_matches_prompt(definition, prompt_text)
+    )
+    priority = tuple(
+        definition
+        for definition in matches
+        if definition.selection_mode
+        in {"movement_question", "reserve_change_question", "additional_drop_request"}
+    )
+    if priority:
+        return (priority[0],)
+    specific = tuple(
+        definition
+        for definition in matches
+        if definition.workflow_name not in {"scenario_recommendation", "data_exploration"}
+    )
+    if len(specific) > 1:
+        return specific
+    if specific:
+        return (specific[0],)
+    return matches[:1]
+
+
+def _definition_matches_prompt(
+    definition: WorkflowDefinition,
+    prompt_text: str,
+) -> bool:
+    if definition.selection_mode == "movement_question":
+        return _movement_question(prompt_text)
+    if definition.selection_mode == "reserve_change_question":
+        return _reserve_change_question(prompt_text)
+    if definition.selection_mode == "additional_drop_request":
+        return _additional_drop_request(prompt_text)
+    if definition.selection_mode == "recommendation_question":
+        return _recommendation_question(prompt_text)
+    if definition.selection_keywords and any(
+        keyword in prompt_text for keyword in definition.selection_keywords
+    ):
+        if definition.selection_requires_any and not any(
+            keyword in prompt_text for keyword in definition.selection_requires_any
         ):
-            if definition.selection_requires_any and not any(
-                keyword in prompt_text for keyword in definition.selection_requires_any
-            ):
-                continue
-            return definition
-    return None
+            return False
+        return True
+    return False
 
 
 def select_workflow_name(prompt: str) -> str:

@@ -65,6 +65,56 @@ def test_file_chat_store_persists_completed_chat_turn(tmp_path: Path) -> None:
     assert reloaded_session.accepted_analysis_basis["scenario_id"] == "drop_1"
 
 
+def test_file_chat_store_persists_fallback_reason(tmp_path: Path) -> None:
+    class _AssistantStub:
+        def run_turn(self, **_kwargs):
+            return {
+                "content": "Deterministic summary ready.",
+                "fallback_used": True,
+                "fallback_reason": "empty_model_content",
+                "fallback_detail": "model returned blank narration",
+                "session_id": "s-1",
+                "memory_snapshot": {
+                    "accepted_analysis_basis": {},
+                    "proposal_basis": {},
+                    "scenario_ledger": [],
+                    "basis_transition_history": [],
+                    "deterministic_packet": {},
+                },
+            }
+
+    store = FileChatStore(tmp_path / "chats")
+    service = AIChatService(
+        assistant_factory=lambda: _AssistantStub(),
+        store=store,
+    )
+    session = service.create_chat(segment="industrial", reserving_session_id="s-1")
+
+    service.start_message(session.chat_id, "Run a drop review")
+    for _ in range(50):
+        current = service.build_chat_response(session.chat_id)
+        if not current.get("streaming"):
+            break
+        time.sleep(0.01)
+
+    final_response = service.build_chat_response(session.chat_id)
+    assert final_response["fallback_used"] is True
+    assert final_response["fallback_reason"] == "empty_model_content"
+    assert final_response["fallback_detail"] == "model returned blank narration"
+
+    persisted_path = tmp_path / "chats" / f"{session.chat_id}.json"
+    payload = json.loads(persisted_path.read_text(encoding="utf-8"))
+    assistant_message = payload["messages"][-1]
+    assert assistant_message["fallback_used"] is True
+    assert assistant_message["fallback_reason"] == "empty_model_content"
+    assert assistant_message["fallback_detail"] == "model returned blank narration"
+
+    reloaded_store = FileChatStore(tmp_path / "chats")
+    reloaded_session = reloaded_store.get_chat(session.chat_id)
+    assert reloaded_session is not None
+    assert reloaded_session.messages[-1]["fallback_reason"] == "empty_model_content"
+
+
 def test_create_app_uses_file_chat_store_when_enabled(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yml"
     config_path.write_text(

@@ -18,6 +18,7 @@ def build_deterministic_packet(
         if isinstance(recommendation.get("alternative_scenario_ids"), list)
         else []
     )
+    composite_reviews = _extract_composite_reviews(evidence_packets)
     composite_review = _extract_composite_review(evidence_packets)
     continuity_notes = _extract_continuity_notes(composite_review)
     score_breakdown = _extract_score_breakdown(composite_review)
@@ -31,6 +32,7 @@ def build_deterministic_packet(
         "recommendation": dict(recommendation),
         "evidence_packets": [dict(item) for item in evidence_packets],
         "composite_review": composite_review,
+        "composite_reviews": composite_reviews,
         "continuity_notes": continuity_notes,
         "score_breakdown": score_breakdown,
         "policy_trace": policy_trace,
@@ -84,6 +86,11 @@ def _next_best_question(
 
 
 def _extract_composite_review(evidence_packets: list[dict[str, Any]]) -> dict[str, Any]:
+    reviews = _extract_composite_reviews(evidence_packets)
+    return reviews[0] if reviews else {}
+
+
+def _extract_composite_reviews(evidence_packets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     preferred_keys = [
         "quarter_close_review",
         "drop_review",
@@ -91,21 +98,28 @@ def _extract_composite_review(evidence_packets: list[dict[str, Any]]) -> dict[st
         "bf_suitability_review",
         "anomaly_triage",
         "derived_drop_scenario",
+        "combined_drop_recalculation",
+        "bf_recalculation",
     ]
+    reviews: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for key in preferred_keys:
         for packet in evidence_packets:
             if str(packet.get("evidence_key", "")).strip() != key:
                 continue
+            if key in seen:
+                continue
+            seen.add(key)
             summary = (
                 packet.get("summary") if isinstance(packet.get("summary"), dict) else {}
             )
-            return {
+            reviews.append({
                 "evidence_key": key,
                 "summary": summary,
                 "provenance": packet.get("provenance", {}),
                 "governance": packet.get("governance", {}),
-            }
-    return {}
+            })
+    return reviews
 
 
 def _extract_continuity_notes(composite_review: dict[str, Any]) -> list[dict[str, Any]]:

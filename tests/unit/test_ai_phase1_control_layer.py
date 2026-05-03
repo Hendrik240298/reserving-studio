@@ -258,11 +258,47 @@ class _DeterministicTools:
                 "summary": "Added the highest-impact additional drops.",
                 "parameters": parameters,
             }
+        if function_name == "tool_recalculate":
+            parameters = {
+                "average": args.get("average", "volume"),
+                "drop": args.get("drop", []),
+                "drop_valuation": args.get("drop_valuation", []),
+                "tail": args.get(
+                    "tail",
+                    {
+                        "curve": "weibull",
+                        "attachment_age": None,
+                        "projection_period": 0,
+                        "fit_period": [],
+                    },
+                ),
+                "bf_apriori": args.get("bf_apriori", {}),
+                "final_ultimate": args.get("final_ultimate", "chainladder"),
+                "selected_ultimate_by_uwy": args.get("selected_ultimate_by_uwy", {}),
+            }
+            return {
+                "session_id": "s-1",
+                "analysis_basis": {
+                    "basis_key": basis_key_from_parameters(parameters),
+                    "basis_type": "bespoke",
+                    "is_active_session": False,
+                    "parameters": parameters,
+                },
+                "results_table_rows": [],
+                "duration_ms": 12,
+            }
         if function_name == "tool_get_results_summary":
             return {
                 "session_id": "s-1",
                 "result_row_count": 4,
                 "top_rows": [{"uwy": "2022", "selected_method": "chainladder"}],
+                "latest_rows": [
+                    {"uwy": "2002", "selected_method": "chainladder"},
+                    {"uwy": "2003", "selected_method": "chainladder"},
+                    {"uwy": "2004", "selected_method": "chainladder"},
+                    {"uwy": "2005", "selected_method": "chainladder"},
+                    {"uwy": "2006", "selected_method": "chainladder"},
+                ],
             }
         return {"session_id": "s-1"}
 
@@ -784,6 +820,309 @@ def test_derived_drop_expansion_creates_proposal_from_derived_result() -> None:
     ]
     assert proposal["basis_key"] == basis_key_from_parameters(proposal["parameters"])
     assert result["deterministic_packet"]["recommendation"]["recommended_basis_key"] == proposal["basis_key"]
+
+
+def test_prior_drop_review_followup_combines_requested_top_drops() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Combined drop recommendation ready.",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+    service = AssistantService.__new__(AssistantService)
+    tools = _DeterministicTools()
+    setattr(service, "_client", _FakeClient(responses))
+    setattr(service, "_tools", tools)
+    service._observability_enabled = False
+    service._deterministic_orchestration_enabled = True
+
+    base_parameters = {
+        "average": "volume",
+        "drop": [],
+        "drop_valuation": [],
+        "tail": {
+            "curve": "weibull",
+            "attachment_age": None,
+            "projection_period": 0,
+            "fit_period": [],
+        },
+        "bf_apriori": {},
+        "final_ultimate": "chainladder",
+        "selected_ultimate_by_uwy": {},
+    }
+    result = service.run_turn(
+        user_prompt="Use all your three drops.",
+        session_context={"segment": "industrial", "session_id": "s-1"},
+        working_memory={
+            "review_summary": {
+                "session_id": "s-1",
+                "review_type": "drop_review",
+                "analysis_basis": {
+                    "basis_type": "baseline",
+                    "parameters": base_parameters,
+                },
+                "top_candidates": [
+                    {
+                        "candidate_id": "drop_1",
+                        "parameters": {**base_parameters, "drop": [["2002", 39]]},
+                    },
+                    {
+                        "candidate_id": "drop_2",
+                        "parameters": {**base_parameters, "drop": [["2001", 60]]},
+                    },
+                    {
+                        "candidate_id": "drop_3",
+                        "parameters": {**base_parameters, "drop": [["2001", 12]]},
+                    },
+                ],
+            }
+        },
+    )
+
+    assert result["content"] == "Combined drop recommendation ready."
+    assert [name for name, _ in tools.calls][:1] == ["tool_recalculate"]
+    assert tools.calls[0][1]["drop"] == [["2002", 39], ["2001", 60], ["2001", 12]]
+    proposal = result["memory_snapshot"]["proposal_basis"]
+    assert proposal["status"] == "pending"
+    assert proposal["source_tool"] == "tool_recalculate"
+    assert proposal["source_review_type"] == "combined_drop_recalculation"
+    assert proposal["parameters"]["drop"] == [
+        ["2002", 39],
+        ["2001", 60],
+        ["2001", 12],
+    ]
+    assert result["deterministic_packet"]["recommendation"]["recommended_basis_key"] == proposal["basis_key"]
+
+
+def test_explicit_bf_request_preserves_current_drop_and_tail_basis() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "BF overview ready.",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+    service = AssistantService.__new__(AssistantService)
+    tools = _DeterministicTools()
+    setattr(service, "_client", _FakeClient(responses))
+    setattr(service, "_tools", tools)
+    service._observability_enabled = False
+    service._deterministic_orchestration_enabled = True
+
+    accepted_parameters = {
+        "average": "volume",
+        "drop": [["2002", 39]],
+        "drop_valuation": [],
+        "tail": {
+            "curve": "weibull",
+            "attachment_age": 27,
+            "projection_period": 0,
+            "fit_period": [12, 108],
+        },
+        "bf_apriori": {},
+        "final_ultimate": "chainladder",
+        "selected_ultimate_by_uwy": {},
+    }
+
+    result = service.run_turn(
+        user_prompt="lets test bf with a priori 60% lr for the three newest ay and chainladder else",
+        session_context={"segment": "industrial", "session_id": "s-1"},
+        accepted_analysis_basis={
+            "basis_type": "review_candidate",
+            "scenario_id": "tail_weibull_27_12_108",
+            "parameters": accepted_parameters,
+        },
+    )
+
+    assert result["content"] == "BF overview ready."
+    assert [name for name, _args in tools.calls][:2] == [
+        "tool_get_results_summary",
+        "tool_recalculate",
+    ]
+    recalc_args = tools.calls[1][1]
+    assert recalc_args["drop"] == [["2002", 39]]
+    assert recalc_args["tail"] == accepted_parameters["tail"]
+    assert recalc_args["bf_apriori"] == {
+        "2004": 0.6,
+        "2005": 0.6,
+        "2006": 0.6,
+    }
+    assert recalc_args["selected_ultimate_by_uwy"] == {
+        "2004": "bornhuetter_ferguson",
+        "2005": "bornhuetter_ferguson",
+        "2006": "bornhuetter_ferguson",
+    }
+    assert result["memory_snapshot"]["proposal_basis"]["parameters"]["drop"] == [["2002", 39]]
+
+
+def test_model_recalculate_partial_override_uses_current_basis_without_stale_selector() -> None:
+    accepted_parameters = {
+        "average": "volume",
+        "drop": [["2002", 39]],
+        "drop_valuation": [],
+        "tail": {
+            "curve": "weibull",
+            "attachment_age": 27,
+            "projection_period": 0,
+            "fit_period": [12, 108],
+        },
+        "bf_apriori": {},
+        "final_ultimate": "chainladder",
+        "selected_ultimate_by_uwy": {},
+    }
+
+    compiled = AssistantService._apply_default_analysis_basis_args(
+        function_name="tool_recalculate",
+        args={
+            "session_id": "s-1",
+            "basis_type": "review_candidate",
+            "basis_key": "stale-basis-key",
+            "bf_apriori": {"2006": 0.6},
+            "selected_ultimate_by_uwy": {"2006": "bornhuetter_ferguson"},
+        },
+        memory_state={
+            "accepted_analysis_basis": {
+                "basis_type": "review_candidate",
+                "basis_key": basis_key_from_parameters(accepted_parameters),
+                "parameters": accepted_parameters,
+            },
+            "scenario_basis_cache": {},
+        },
+        workflow_state={"current_user_prompt": "test bf 60% for 2006"},
+    )
+
+    assert "basis_type" not in compiled
+    assert "basis_key" not in compiled
+    assert "scenario_id" not in compiled
+    assert compiled["drop"] == [["2002", 39]]
+    assert compiled["tail"] == accepted_parameters["tail"]
+    assert compiled["bf_apriori"] == {"2006": 0.6}
+    assert compiled["selected_ultimate_by_uwy"] == {
+        "2006": "bornhuetter_ferguson"
+    }
+
+
+def test_explicit_baseline_results_call_drops_current_basis_parameters() -> None:
+    current_parameters = {
+        "average": "volume",
+        "drop": [["2002", 39], ["2003", 9], ["2002", 21]],
+        "drop_valuation": [],
+        "tail": {
+            "curve": "weibull",
+            "attachment_age": 27,
+            "projection_period": 0,
+            "fit_period": [12, 108],
+        },
+        "bf_apriori": {"2004": 0.6, "2005": 0.6, "2006": 0.6},
+        "final_ultimate": "chainladder",
+        "selected_ultimate_by_uwy": {
+            "2004": "bornhuetter_ferguson",
+            "2005": "bornhuetter_ferguson",
+            "2006": "bornhuetter_ferguson",
+        },
+    }
+
+    compiled = AssistantService._apply_default_analysis_basis_args(
+        function_name="tool_get_results_summary",
+        args={
+            "session_id": "s-1",
+            "basis_type": "baseline",
+            "basis_key": basis_key_from_parameters(current_parameters),
+            "parameters": current_parameters,
+        },
+        memory_state={
+            "session_summary": {
+                "session_id": "s-1",
+                "segment": "industrial",
+                "params": {
+                    "average": "volume",
+                    "drop_store": [],
+                    "tail_curve": "weibull",
+                    "tail_attachment_age": None,
+                    "tail_projection_months": 0,
+                    "tail_fit_period_selection": [],
+                    "bf_apriori_by_uwy": {},
+                    "selected_ultimate_by_uwy": {},
+                },
+            },
+            "accepted_analysis_basis": {
+                "basis_type": "bespoke",
+                "parameters": current_parameters,
+            },
+        },
+        workflow_state={
+            "current_user_prompt": "IBNR comparison between analysis basis and base line at the beginning"
+        },
+    )
+
+    assert compiled["basis_type"] == "baseline"
+    assert compiled["basis_key"] == basis_key_from_parameters(compiled["parameters"])
+    assert compiled["parameters"]["drop"] == []
+    assert compiled["parameters"]["tail"]["attachment_age"] is None
+    assert compiled["parameters"]["bf_apriori"] == {}
+
+
+def test_reserve_change_compare_uses_current_candidate_and_original_baseline() -> None:
+    current_parameters = {
+        "average": "volume",
+        "drop": [["2002", 39]],
+        "drop_valuation": [],
+        "tail": {
+            "curve": "weibull",
+            "attachment_age": 27,
+            "projection_period": 0,
+            "fit_period": [12, 108],
+        },
+        "bf_apriori": {"2006": 0.6},
+        "final_ultimate": "chainladder",
+        "selected_ultimate_by_uwy": {"2006": "bornhuetter_ferguson"},
+    }
+
+    compiled = AssistantService._apply_default_analysis_basis_args(
+        function_name="tool_explain_reserve_change",
+        args={"session_id": "s-1"},
+        memory_state={
+            "session_summary": {
+                "session_id": "s-1",
+                "segment": "industrial",
+                "params": {
+                    "average": "volume",
+                    "drop_store": [],
+                    "tail_curve": "weibull",
+                    "tail_attachment_age": None,
+                    "tail_projection_months": 0,
+                    "tail_fit_period_selection": [],
+                    "bf_apriori_by_uwy": {},
+                    "selected_ultimate_by_uwy": {},
+                },
+            },
+            "accepted_analysis_basis": {
+                "basis_type": "bespoke",
+                "parameters": current_parameters,
+            },
+        },
+        workflow_state={
+            "current_user_prompt": "compare analysis basis to the scenario before all the modifications"
+        },
+    )
+
+    assert compiled["drop"] == [["2002", 39]]
+    assert compiled["tail"]["attachment_age"] == 27
+    assert compiled["bf_apriori"] == {"2006": 0.6}
+    assert compiled["basis_type"] == "baseline"
+    assert compiled["basis_parameters"]["drop"] == []
+    assert compiled["basis_parameters"]["tail"]["attachment_age"] is None
 
 
 def test_recalculate_updates_preview_basis_and_session_summary() -> None:

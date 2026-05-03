@@ -875,6 +875,16 @@ def summarize_results_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "analysis_basis": payload.get("analysis_basis", {}),
         "result_row_count": len(rows) if isinstance(rows, list) else 0,
         "top_rows": compact_rows,
+        "latest_rows": [
+            {
+                "uwy": item.get("uwy"),
+                "ultimate_display": item.get("ultimate_display"),
+                "ibnr_display": item.get("ibnr_display"),
+                "selected_method": item.get("selected_method"),
+            }
+            for item in (rows[-5:] if isinstance(rows, list) else [])
+            if isinstance(item, dict)
+        ],
         "last_updated": results.get("last_updated"),
     }
 
@@ -894,6 +904,16 @@ def summarize_recalculate_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "selected_method": item.get("selected_method"),
             }
             for item in (rows[:5] if isinstance(rows, list) else [])
+            if isinstance(item, dict)
+        ],
+        "latest_rows": [
+            {
+                "uwy": item.get("uwy"),
+                "ultimate_display": item.get("ultimate_display"),
+                "ibnr_display": item.get("ibnr_display"),
+                "selected_method": item.get("selected_method"),
+            }
+            for item in (rows[-5:] if isinstance(rows, list) else [])
             if isinstance(item, dict)
         ],
         "input_adjustments": payload.get("input_adjustments", []),

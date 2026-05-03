@@ -170,22 +170,29 @@ def render_narration_fallback(narration_packet: dict[str, Any]) -> str:
     recommendation = _dict(narration_packet.get("recommendation"))
     proposal = _dict(narration_packet.get("proposal"))
     execution = _dict(narration_packet.get("execution"))
+    supporting = _dict(narration_packet.get("supporting_evidence"))
     caveats = _string_list(narration_packet.get("caveats"))
-    sections = [
-        str(basis.get("current_basis_label") or "Basis used: current baseline session."),
-        f"Reviewed: {reviewed.get('scope') or 'deterministic workflow'}.",
-    ]
+    sections = [str(basis.get("current_basis_label") or "Basis used: current baseline session.")]
+    sections.append(
+        "### What was reviewed\n"
+        + str(reviewed.get("scope") or "A deterministic reserving workflow was run.").rstrip(".")
+        + "."
+    )
     status = str(recommendation.get("status") or "watch")
     summary = str(recommendation.get("summary") or "No stronger recommendation was produced.")
-    sections.append(f"Recommendation: {status}. {summary}")
+    sections.append(f"### Conclusion\n**{status}**. {summary}")
+    review_lines = _fallback_review_lines(supporting)
+    if review_lines:
+        sections.append("### Evidence Highlights\n" + "\n".join(f"- {line}." for line in review_lines))
     if caveats:
-        sections.append("Caveats: " + "; ".join(caveats[:5]) + ".")
+        sections.append("### Caveats\n" + "\n".join(f"- {item}." for item in caveats[:5]))
     else:
-        sections.append("Caveats: none material from the deterministic packet.")
+        sections.append("### Caveats\n- None material from the deterministic packet.")
     if proposal.get("exists"):
         label = str(proposal.get("label") or "proposed basis")
         sections.append(
-            f"Proposal: {label} is pending explicit Yes/No acceptance. Analysis Basis is unchanged."
+            "### Proposal Status\n"
+            f"{label} is pending explicit Yes/No acceptance. The Analysis Basis is unchanged until accepted."
         )
     execution_status = str(execution.get("status") or "")
     if execution_status and execution_status not in {
@@ -193,10 +200,56 @@ def render_narration_fallback(narration_packet: dict[str, Any]) -> str:
         "executed_with_non_material_normalization",
     }:
         sections.append(
-            "Execution note: latest execution status is "
+            "### Execution Note\nLatest execution status is "
             f"{execution_status}; use effective inputs and warnings, not success-style wording."
         )
     return "\n\n".join(section for section in sections if section.strip())
+
+
+def _fallback_review_lines(supporting: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    for review in _list_of_dicts(supporting.get("reviews")):
+        label = str(review.get("review_type") or review.get("evidence_key") or "review").strip()
+        finding_count = review.get("finding_count")
+        if finding_count is not None:
+            lines.append(f"{label}: {finding_count} finding(s) identified")
+        if review.get("pause_recommendation") is not None:
+            pause_label = "pause recommendations" if bool(review.get("pause_recommendation")) else "recommendations may continue"
+            lines.append(f"{label}: {pause_label}")
+        recommendation = _dict(review.get("recommendation"))
+        candidate = str(
+            recommendation.get("candidate_id")
+            or recommendation.get("scenario_id")
+            or recommendation.get("summary")
+            or "no candidate"
+        ).strip()
+        recommendation_class = str(
+            recommendation.get("recommendation_class")
+            or recommendation.get("status")
+            or "watch"
+        ).strip()
+        if label and candidate:
+            lines.append(f"{label}: {candidate} ({recommendation_class})")
+        candidates = _list_of_dicts(review.get("top_candidates"))
+        if candidates:
+            ranked = []
+            for item in candidates[:3]:
+                item_label = str(item.get("candidate_id") or item.get("summary") or "candidate").strip()
+                score = item.get("score")
+                if score is None:
+                    ranked.append(item_label)
+                else:
+                    ranked.append(f"{item_label}, score {score}")
+            if ranked:
+                lines.append(f"top ranked {label}: " + ", ".join(ranked))
+        findings = _list_of_dicts(review.get("top_findings"))
+        for item in findings[:3]:
+            message = str(item.get("message") or item.get("code") or "finding").strip()
+            severity = str(item.get("severity") or "").strip()
+            prefix = f"[{severity}] " if severity else ""
+            if message:
+                lines.append(f"{label}: {prefix}{message}")
+    return lines
 
 
 def _execution_payload(
@@ -241,6 +294,7 @@ def _review_scope(
     labels = {
         "quarter_close_review": "Quarter-close review",
         "data_anomaly_triage": "Data anomaly triage",
+        "multi_review": "Multi-workflow review",
         "drop_review": "Drop review",
         "movement_review": "Movement review",
         "late_emergence_review": "Late emergence review",
@@ -298,13 +352,34 @@ def _recommended_label(
 def _supporting_evidence(packet: dict[str, Any]) -> dict[str, Any]:
     composite_review = _dict(packet.get("composite_review"))
     composite_summary = _dict(composite_review.get("summary"))
+    composite_reviews = _list_of_dicts(packet.get("composite_reviews"))
+    if not composite_reviews and composite_review:
+        composite_reviews = [composite_review]
     return {
+        "reviews": [_compact_supporting_review(item) for item in composite_reviews[:4]],
         "top_candidates": _list_of_dicts(composite_summary.get("top_candidates"))[:3],
         "top_ranked": _list_of_dicts(composite_summary.get("top_ranked"))[:3],
         "recommended_changes": _list_of_dicts(packet.get("recommended_changes"))[:3],
         "score_breakdown": _dict(packet.get("score_breakdown")),
         "policy_trace": _dict(packet.get("policy_trace")),
         "continuity_notes": _list_of_dicts(packet.get("continuity_notes"))[:3],
+    }
+
+
+def _compact_supporting_review(review: dict[str, Any]) -> dict[str, Any]:
+    summary = _dict(review.get("summary"))
+    recommendation = _dict(summary.get("recommendation"))
+    return {
+        "evidence_key": review.get("evidence_key"),
+        "review_type": summary.get("review_type"),
+        "recommendation": recommendation,
+        "top_candidates": _list_of_dicts(summary.get("top_candidates"))[:3],
+        "top_ranked": _list_of_dicts(summary.get("top_ranked"))[:3],
+        "top_findings": _list_of_dicts(summary.get("top_findings"))[:3],
+        "finding_count": summary.get("finding_count"),
+        "pause_recommendation": summary.get("pause_recommendation"),
+        "continuity_notes": _list_of_dicts(summary.get("continuity_notes"))[:3],
+        "policy_trace": _dict(summary.get("policy_trace")),
     }
 
 

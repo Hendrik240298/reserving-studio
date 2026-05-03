@@ -112,6 +112,8 @@ class InMemoryChatStore:
         replace_content: str | None = None,
         streaming: bool | None = None,
         fallback_used: bool | None = None,
+        fallback_reason: str | None = None,
+        fallback_detail: str | None = None,
         status: str | None = None,
     ) -> ChatSession:
         with self._lock:
@@ -127,6 +129,18 @@ class InMemoryChatStore:
                     item["streaming"] = bool(streaming)
                 if fallback_used is not None:
                     item["fallback_used"] = bool(fallback_used)
+                if fallback_reason is not None:
+                    reason = str(fallback_reason).strip()
+                    if reason:
+                        item["fallback_reason"] = reason
+                    else:
+                        item.pop("fallback_reason", None)
+                if fallback_detail is not None:
+                    detail = str(fallback_detail).strip()
+                    if detail:
+                        item["fallback_detail"] = detail
+                    else:
+                        item.pop("fallback_detail", None)
                 break
             if streaming is not None:
                 session.metadata["streaming"] = bool(streaming)
@@ -336,6 +350,8 @@ class FileChatStore(InMemoryChatStore):
         replace_content: str | None = None,
         streaming: bool | None = None,
         fallback_used: bool | None = None,
+        fallback_reason: str | None = None,
+        fallback_detail: str | None = None,
         status: str | None = None,
     ) -> ChatSession:
         with self._lock:
@@ -346,6 +362,8 @@ class FileChatStore(InMemoryChatStore):
                 replace_content=replace_content,
                 streaming=streaming,
                 fallback_used=fallback_used,
+                fallback_reason=fallback_reason,
+                fallback_detail=fallback_detail,
                 status=status,
             )
             if self._should_persist_assistant_update(
@@ -353,6 +371,7 @@ class FileChatStore(InMemoryChatStore):
                 replace_content=replace_content,
                 streaming=streaming,
                 fallback_used=fallback_used,
+                fallback_reason=fallback_reason,
             ):
                 self._persist_session_unlocked(session)
             return session
@@ -418,12 +437,15 @@ class FileChatStore(InMemoryChatStore):
         replace_content: str | None,
         streaming: bool | None,
         fallback_used: bool | None,
+        fallback_reason: str | None,
     ) -> bool:
         if replace_content is not None:
             return True
         if streaming is False:
             return True
         if fallback_used is not None:
+            return True
+        if fallback_reason is not None:
             return True
         if append_content:
             return False

@@ -27,6 +27,15 @@ class RecommendationPolicy:
             )
 
         drop_review_packet = _find_packet(evidence_packets, "drop_review")
+        tail_review_packet = _find_packet(evidence_packets, "tail_review")
+        if isinstance(drop_review_packet, dict) and isinstance(tail_review_packet, dict):
+            return _apply_review_caveats_to_decision(
+                _decision_from_multiple_candidate_reviews(
+                    [drop_review_packet, tail_review_packet]
+                ),
+                review,
+            )
+
         if isinstance(drop_review_packet, dict):
             return _apply_review_caveats_to_decision(
                 _decision_from_composite_candidate_review(
@@ -36,7 +45,6 @@ class RecommendationPolicy:
                 review,
             )
 
-        tail_review_packet = _find_packet(evidence_packets, "tail_review")
         if isinstance(tail_review_packet, dict):
             return _apply_review_caveats_to_decision(
                 _decision_from_composite_candidate_review(
@@ -64,6 +72,20 @@ class RecommendationPolicy:
         if isinstance(derived_drop_packet, dict):
             return _apply_review_caveats_to_decision(
                 _decision_from_derived_drop(derived_drop_packet),
+                review,
+            )
+
+        combined_drop_packet = _find_packet(evidence_packets, "combined_drop_recalculation")
+        if isinstance(combined_drop_packet, dict):
+            return _apply_review_caveats_to_decision(
+                _decision_from_combined_drop_recalculation(combined_drop_packet),
+                review,
+            )
+
+        bf_recalculation_packet = _find_packet(evidence_packets, "bf_recalculation")
+        if isinstance(bf_recalculation_packet, dict):
+            return _apply_review_caveats_to_decision(
+                _decision_from_bf_recalculation(bf_recalculation_packet),
                 review,
             )
 
@@ -364,6 +386,41 @@ def _decision_from_composite_candidate_review(
     )
 
 
+def _decision_from_multiple_candidate_reviews(
+    packets: list[dict[str, Any]],
+) -> RecommendationDecision:
+    labels: list[str] = []
+    rationale: list[str] = []
+    for packet in packets:
+        summary = packet.get("summary") if isinstance(packet.get("summary"), dict) else {}
+        review_type = str(
+            summary.get("review_type") or packet.get("evidence_key") or "review"
+        ).strip()
+        recommendation = (
+            summary.get("recommendation")
+            if isinstance(summary.get("recommendation"), dict)
+            else {}
+        )
+        recommendation_class = str(
+            recommendation.get("recommendation_class")
+            or recommendation.get("status")
+            or "watch"
+        ).strip()
+        label = str(
+            recommendation.get("candidate_id")
+            or recommendation.get("scenario_id")
+            or recommendation.get("summary")
+            or "no candidate"
+        ).strip()
+        labels.append(f"{review_type}: {label}")
+        rationale.append(f"{review_type}={recommendation_class or 'watch'}")
+    return RecommendationDecision(
+        status="reviewed",
+        summary="Drop and tail reviews completed; use the separate per-review recommendations rather than a single combined basis proposal.",
+        rationale=[*labels, *rationale],
+    )
+
+
 def _decision_from_bf_review(packet: dict[str, Any]) -> RecommendationDecision:
     summary = packet.get("summary") if isinstance(packet.get("summary"), dict) else {}
     overall_class = str(summary.get("overall_class", "inconclusive")).strip().lower()
@@ -428,6 +485,75 @@ def _decision_from_derived_drop(packet: dict[str, Any]) -> RecommendationDecisio
         ],
         recommended_basis_key=basis_key,
         recommended_scenario_id=scenario_id,
+    )
+
+
+def _decision_from_combined_drop_recalculation(
+    packet: dict[str, Any],
+) -> RecommendationDecision:
+    summary = packet.get("summary") if isinstance(packet.get("summary"), dict) else {}
+    analysis_basis = (
+        summary.get("analysis_basis")
+        if isinstance(summary.get("analysis_basis"), dict)
+        else {}
+    )
+    recommendation = (
+        summary.get("recommendation")
+        if isinstance(summary.get("recommendation"), dict)
+        else {}
+    )
+    basis_key = _to_optional_str(recommendation.get("basis_key")) or _to_optional_str(
+        analysis_basis.get("basis_key")
+    )
+    scenario_id = _to_optional_str(recommendation.get("scenario_id")) or _to_optional_str(
+        analysis_basis.get("scenario_id")
+    )
+    if not basis_key:
+        return RecommendationDecision(
+            status="watch",
+            summary="Combined drop recalculation did not produce a stable basis key.",
+            rationale=["missing_combined_drop_basis_key"],
+        )
+    return RecommendationDecision(
+        status="reasonable_alternative",
+        summary=str(recommendation.get("summary") or "").strip()
+        or "Combined prior drop candidates were recalculated as one tested basis.",
+        rationale=["combined_prior_drop_candidates"],
+        recommended_basis_key=basis_key,
+        recommended_scenario_id=_to_optional_str(recommendation.get("candidate_id")),
+        recommended_basis_id=scenario_id,
+    )
+
+
+def _decision_from_bf_recalculation(
+    packet: dict[str, Any],
+) -> RecommendationDecision:
+    summary = packet.get("summary") if isinstance(packet.get("summary"), dict) else {}
+    analysis_basis = (
+        summary.get("analysis_basis")
+        if isinstance(summary.get("analysis_basis"), dict)
+        else {}
+    )
+    basis_key = _to_optional_str(analysis_basis.get("basis_key"))
+    if not basis_key:
+        return RecommendationDecision(
+            status="watch",
+            summary="BF recalculation did not produce a stable basis key.",
+            rationale=["missing_bf_basis_key"],
+        )
+    parameters = (
+        analysis_basis.get("parameters")
+        if isinstance(analysis_basis.get("parameters"), dict)
+        else {}
+    )
+    selected = parameters.get("selected_ultimate_by_uwy")
+    selected_count = len(selected) if isinstance(selected, dict) else 0
+    return RecommendationDecision(
+        status="reasonable_alternative",
+        summary=f"BF was applied incrementally to {selected_count} selected underwriting year(s), preserving the existing drop and tail settings.",
+        rationale=["bf_incremental_recalculation"],
+        recommended_basis_key=basis_key,
+        recommended_scenario_id="bf_incremental_recalculation",
     )
 
 

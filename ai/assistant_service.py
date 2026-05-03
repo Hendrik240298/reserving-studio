@@ -13,6 +13,7 @@ from ai.backend_tools import BackendReservingTools
 from ai.basis_manager import BasisManager
 from ai.context_loader import load_segment_note
 from ai.control_plane_types import (
+    basis_key_from_parameters,
     normalize_accepted_analysis_basis,
     normalize_preview_basis,
     normalize_proposal_basis,
@@ -26,6 +27,7 @@ from ai.narration import (
     render_narration_fallback,
 )
 from ai.openrouter_client import OpenRouterClient
+from ai.plan_models import ExecutionPlan, PlanStep
 from ai.planner import PlaybookPlanner
 from ai.proposal_manager import ProposalManager
 from ai.recommendation_policy import RecommendationPolicy
@@ -40,8 +42,7 @@ from ai.tool_payloads import (
 )
 from ai.tool_contract import normalize_tool_result
 from ai.workflow_definitions import (
-    get_workflow_definition,
-    select_workflow_definition,
+    select_workflow_definitions,
     select_workflow_name,
 )
 from source.services.memory_authoring_service import MemoryAuthoringService
@@ -296,7 +297,29 @@ class AssistantService:
             if isinstance(basis_transition_history, list)
             else []
         )
+        pending_proposal_response = self._pending_proposal_acceptance_response(
+            user_prompt=user_prompt,
+            proposal_basis=current_proposal_basis,
+            accepted_analysis_basis=current_accepted_basis,
+        )
+        if pending_proposal_response:
+            self._emit_streamed_content(event_callback, pending_proposal_response)
+            return {
+                "content": pending_proposal_response,
+                "fallback_used": False,
+                "session_id": session_context.get("session_id")
+                if isinstance(session_context, dict)
+                else None,
+                "tool_events": tool_events,
+                "memory_snapshot": memory_state,
+                "deterministic_packet": memory_state.get("deterministic_packet", {}),
+                "narration_packet": memory_state.get("narration_packet", {}),
+                "memory_update_proposals": memory_state.get(
+                    "memory_update_proposals", []
+                ),
+            }
         tool_specs = self._tools.tool_specs
+        known_tool_names = self._tool_names(tool_specs)
         guardrail_state: dict[str, bool] = {
             "portfolio_shift_unconfirmed": False,
             "paid_incurred_conflict": False,
@@ -410,6 +433,7 @@ class AssistantService:
                 user_prompt=str(workflow_state.get("current_user_prompt") or ""),
                 exact_data_required=bool(workflow_state.get("exact_data_required")),
             )
+            available_tool_names = self._tool_names(available_tool_specs)
             if self._observability_enabled:
                 tool_schema_chars = 0
                 if available_tool_specs:
@@ -445,6 +469,8 @@ class AssistantService:
                     return {
                         "content": fallback,
                         "fallback_used": True,
+                        "fallback_reason": "provider_error_after_deterministic_packet",
+                        "fallback_detail": str(error).strip(),
                         "session_id": workflow_state.get("session_id"),
                         "tool_events": tool_events,
                         "memory_snapshot": memory_state,
@@ -469,6 +495,8 @@ class AssistantService:
                         return {
                             "content": fallback,
                             "fallback_used": True,
+                            "fallback_reason": "provider_error_after_tool_execution",
+                            "fallback_detail": str(error).strip(),
                             "session_id": session_id,
                             "tool_events": tool_events,
                             "memory_snapshot": memory_state,
@@ -494,6 +522,8 @@ class AssistantService:
                             "retry to generate narrative commentary." + suffix
                         ),
                         "fallback_used": True,
+                        "fallback_reason": "provider_error_after_tool_execution",
+                        "fallback_detail": str(error).strip(),
                         "session_id": session_id,
                         "tool_events": tool_events,
                         "memory_snapshot": memory_state,
@@ -521,6 +551,8 @@ class AssistantService:
                 return {
                     "content": friendly + provider_error,
                     "fallback_used": True,
+                    "fallback_reason": "provider_error_before_analysis",
+                    "fallback_detail": str(error).strip(),
                     "session_id": workflow_state.get("session_id"),
                     "tool_events": tool_events,
                     "memory_snapshot": memory_state,
@@ -541,6 +573,16 @@ class AssistantService:
             if not tool_calls:
                 content = choice.get("content")
                 if isinstance(content, str):
+                    if not content.strip():
+                        fallback_result = self._narration_fallback_result(
+                            memory_state=memory_state,
+                            workflow_state=workflow_state,
+                            tool_events=tool_events,
+                            event_callback=event_callback,
+                            reason="empty_model_content",
+                        )
+                        if fallback_result is not None:
+                            return fallback_result
                     self._emit_streamed_content(event_callback, content)
                     if self._should_block_for_missing_exact_data(workflow_state):
                         blocked = self._exact_data_guardrail_message()
@@ -586,6 +628,16 @@ class AssistantService:
                         if isinstance(part, dict)
                     ]
                     merged = "\n".join(part for part in parts if part)
+                    if not merged.strip():
+                        fallback_result = self._narration_fallback_result(
+                            memory_state=memory_state,
+                            workflow_state=workflow_state,
+                            tool_events=tool_events,
+                            event_callback=event_callback,
+                            reason="empty_model_content",
+                        )
+                        if fallback_result is not None:
+                            return fallback_result
                     self._emit_streamed_content(event_callback, merged)
                     if self._should_block_for_missing_exact_data(workflow_state):
                         blocked = self._exact_data_guardrail_message()
@@ -624,6 +676,15 @@ class AssistantService:
                             "memory_update_proposals", []
                         ),
                     }
+                fallback_result = self._narration_fallback_result(
+                    memory_state=memory_state,
+                    workflow_state=workflow_state,
+                    tool_events=tool_events,
+                    event_callback=event_callback,
+                    reason="non_text_model_content",
+                )
+                if fallback_result is not None:
+                    return fallback_result
                 return {
                     "content": "No response content was produced by the model.",
                     "fallback_used": False,
@@ -663,6 +724,46 @@ class AssistantService:
                         function_name,
                         self._short_json(args),
                     )
+                if known_tool_names and (
+                    function_name not in known_tool_names
+                    or function_name not in available_tool_names
+                ):
+                    logger.warning(
+                        "Model requested unavailable tool: %s", function_name
+                    )
+                    fallback_result = self._narration_fallback_result(
+                        memory_state=memory_state,
+                        workflow_state=workflow_state,
+                        tool_events=tool_events,
+                        event_callback=event_callback,
+                        reason="unavailable_tool_requested",
+                        detail=function_name,
+                    )
+                    if fallback_result is not None:
+                        return fallback_result
+                    friendly = (
+                        "The assistant requested an unavailable analysis tool before it could complete the answer. "
+                        "No unsupported tool was executed; please retry the request."
+                    )
+                    self._emit_streamed_content(event_callback, friendly)
+                    return {
+                        "content": friendly,
+                        "fallback_used": True,
+                        "fallback_reason": "unavailable_tool_requested",
+                        "fallback_detail": function_name,
+                        "session_id": workflow_state.get("session_id"),
+                        "tool_events": tool_events,
+                        "memory_snapshot": memory_state,
+                        "deterministic_packet": memory_state.get(
+                            "deterministic_packet", {}
+                        ),
+                        "narration_packet": memory_state.get(
+                            "narration_packet", {}
+                        ),
+                        "memory_update_proposals": memory_state.get(
+                            "memory_update_proposals", []
+                        ),
+                    }
                 self._emit_event(
                     event_callback,
                     "status",
@@ -713,6 +814,7 @@ class AssistantService:
                 "Please retry with a narrower question."
             ),
             "fallback_used": True,
+            "fallback_reason": "tool_step_limit_reached",
             "session_id": workflow_state.get("session_id"),
             "tool_events": tool_events,
             "memory_snapshot": memory_state,
@@ -745,12 +847,33 @@ class AssistantService:
             memory_state=memory_state,
             session_context=session_context,
         )
-        plan = planner.plan(
+        combined_drop_context = self._build_prior_drop_combination_context(
             user_prompt=user_prompt,
             session_context=session_context,
-            segment_memory=segment_memory,
-            analysis_basis=planning_basis,
+            memory_state=memory_state,
         )
+        bf_recalculation_context = self._build_bf_recalculation_context(
+            user_prompt=user_prompt,
+            session_context=session_context,
+            memory_state=memory_state,
+            planning_basis=planning_basis,
+        )
+        plan = (
+            combined_drop_context.get("plan")
+            if isinstance(combined_drop_context.get("plan"), ExecutionPlan)
+            else None
+        )
+        if plan is None and isinstance(
+            bf_recalculation_context.get("plan"), ExecutionPlan
+        ):
+            plan = bf_recalculation_context["plan"]
+        if plan is None:
+            plan = planner.plan(
+                user_prompt=user_prompt,
+                session_context=session_context,
+                segment_memory=segment_memory,
+                analysis_basis=planning_basis,
+            )
         if plan is None:
             return None
         if self._observability_enabled:
@@ -770,6 +893,15 @@ class AssistantService:
         )
         envelopes: list[dict[str, Any]] = []
         for step in plan.steps:
+            step_args = step.args
+            if (
+                bf_recalculation_context
+                and step.evidence_key == "bf_recalculation"
+            ):
+                step_args = self._build_bf_recalculation_args(
+                    context=bf_recalculation_context,
+                    memory_state=memory_state,
+                )
             if self._observability_enabled:
                 logger.info(
                     "[OBS] deterministic.step.execute playbook=%s tool=%s evidence_key=%s",
@@ -779,7 +911,7 @@ class AssistantService:
                 )
             tool_result, updated_memory = self._execute_tool_call(
                 function_name=step.tool_name,
-                args=step.args,
+                args=step_args,
                 tool_outputs=tool_outputs,
                 tool_events=tool_events,
                 memory_state=memory_state,
@@ -787,12 +919,42 @@ class AssistantService:
                 guardrail_state=guardrail_state,
                 event_callback=event_callback,
             )
+            if (
+                combined_drop_context
+                and step.evidence_key == "combined_drop_recalculation"
+            ):
+                tool_result = self._enrich_combined_drop_recalculation_result(
+                    tool_result=tool_result,
+                    context=combined_drop_context,
+                )
+                tool_outputs[step.tool_name] = tool_result
+                if tool_events:
+                    tool_events[-1]["result_summary"] = tool_result
+                updated_memory = self._update_memory_state(
+                    updated_memory,
+                    function_name=step.tool_name,
+                    tool_result=tool_result,
+                )
+            if bf_recalculation_context and step.evidence_key == "bf_recalculation":
+                tool_result = self._enrich_bf_recalculation_result(
+                    tool_result=tool_result,
+                    context=bf_recalculation_context,
+                    args=step_args,
+                )
+                tool_outputs[step.tool_name] = tool_result
+                if tool_events:
+                    tool_events[-1]["result_summary"] = tool_result
+                updated_memory = self._update_memory_state(
+                    updated_memory,
+                    function_name=step.tool_name,
+                    tool_result=tool_result,
+                )
             memory_state.clear()
             memory_state.update(updated_memory)
             envelopes.append(
                 normalize_tool_result(
                     tool_name=step.tool_name,
-                    args=step.args,
+                    args=step_args,
                     result=tool_result,
                     segment=plan.segment,
                     evidence_key=step.evidence_key,
@@ -841,6 +1003,499 @@ class AssistantService:
             evidence_packets=envelopes,
             memory_update_proposals=memory_update_proposals,
         )
+
+    @staticmethod
+    def _build_prior_drop_combination_context(
+        *,
+        user_prompt: str,
+        session_context: dict[str, Any] | None,
+        memory_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        prompt = str(user_prompt or "").strip().lower()
+        if not AssistantService._prompt_requests_prior_drop_combination(prompt):
+            return {}
+        review_summary = (
+            memory_state.get("review_summary")
+            if isinstance(memory_state.get("review_summary"), dict)
+            else {}
+        )
+        if str(review_summary.get("review_type") or "").strip() != "drop_review":
+            return {}
+        candidates = review_summary.get("top_candidates")
+        if not isinstance(candidates, list) or not candidates:
+            return {}
+        candidate_count = AssistantService._requested_drop_candidate_count(
+            prompt=prompt,
+            available_count=len(candidates),
+        )
+        selected_candidates = [
+            dict(item)
+            for item in candidates[:candidate_count]
+            if isinstance(item, dict)
+        ]
+        if not selected_candidates:
+            return {}
+
+        base = (
+            review_summary.get("analysis_basis")
+            if isinstance(review_summary.get("analysis_basis"), dict)
+            else {}
+        )
+        base_parameters = (
+            dict(base.get("parameters"))
+            if isinstance(base.get("parameters"), dict)
+            else {}
+        )
+        parameters = AssistantService._combine_drop_candidate_parameters(
+            base_parameters=base_parameters,
+            candidates=selected_candidates,
+        )
+        if not parameters.get("drop"):
+            return {}
+        session_id = ""
+        segment = None
+        if isinstance(session_context, dict):
+            session_id = str(session_context.get("session_id") or "").strip()
+            segment = session_context.get("segment")
+        if not session_id:
+            session_id = str(review_summary.get("session_id") or "").strip()
+        if not session_id:
+            return {}
+
+        candidate_id = f"combined_top_{len(selected_candidates)}_drop_candidates"
+        args = {
+            "session_id": session_id,
+            **parameters,
+        }
+        plan = ExecutionPlan(
+            playbook="prior_drop_combination",
+            workflow_name="prior_drop_combination",
+            goal="Recalculate the requested combination of prior drop-review candidates.",
+            segment=str(segment).strip() if isinstance(segment, str) and segment.strip() else None,
+            session_id=session_id,
+            intent_class="scenario_recommendation",
+            required_capabilities=["recalculate"],
+            steps=[
+                PlanStep(
+                    tool_name="tool_recalculate",
+                    args=args,
+                    evidence_key="combined_drop_recalculation",
+                    basis_aware=True,
+                )
+            ],
+            required_evidence=["combined_drop_recalculation"],
+            minimum_evidence_count=1,
+            stopping_rule="Stop after the combined drop candidate basis is recalculated.",
+            basis_behavior=["use_accepted_basis", "proposal_possible"],
+            answer_contract="recommendation_with_proposal",
+            requires_continuity=False,
+        )
+        return {
+            "plan": plan,
+            "candidate_id": candidate_id,
+            "scenario_id": candidate_id,
+            "selected_candidates": selected_candidates,
+            "parameters": parameters,
+            "session_id": session_id,
+        }
+
+    @staticmethod
+    def _prompt_requests_prior_drop_combination(prompt: str) -> bool:
+        if "drop" not in prompt and "drops" not in prompt:
+            return False
+        reference_terms = {
+            "all",
+            "these",
+            "those",
+            "your",
+            "recommended",
+            "recommendations",
+            "top",
+            "first",
+            "include",
+            "use",
+            "want",
+        }
+        if not any(term in prompt for term in reference_terms):
+            return False
+        count_terms = {
+            "two",
+            "three",
+            "four",
+            "five",
+            "2",
+            "3",
+            "4",
+            "5",
+        }
+        return "all" in prompt or "these" in prompt or "those" in prompt or any(
+            term in prompt for term in count_terms
+        )
+
+    @staticmethod
+    def _requested_drop_candidate_count(*, prompt: str, available_count: int) -> int:
+        count_words = {
+            "one": 1,
+            "two": 2,
+            "three": 3,
+            "four": 4,
+            "five": 5,
+        }
+        for word, value in count_words.items():
+            if word in prompt:
+                return max(1, min(value, available_count))
+        number_match = re.search(r"\b([1-9])\b", prompt)
+        if number_match is not None:
+            return max(1, min(int(number_match.group(1)), available_count))
+        if "all" in prompt:
+            return available_count
+        return min(3, available_count)
+
+    @staticmethod
+    def _combine_drop_candidate_parameters(
+        *,
+        base_parameters: dict[str, Any],
+        candidates: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        parameters = {
+            "average": base_parameters.get("average", "volume"),
+            "drop": [
+                list(item)
+                for item in base_parameters.get("drop", [])
+                if isinstance(item, list | tuple) and len(item) >= 2
+            ],
+            "drop_valuation": base_parameters.get("drop_valuation", []),
+            "tail": base_parameters.get(
+                "tail",
+                {
+                    "curve": "weibull",
+                    "attachment_age": None,
+                    "projection_period": 0,
+                    "fit_period": [],
+                },
+            ),
+            "bf_apriori": base_parameters.get("bf_apriori", {}),
+            "final_ultimate": base_parameters.get("final_ultimate", "chainladder"),
+            "selected_ultimate_by_uwy": base_parameters.get(
+                "selected_ultimate_by_uwy", {}
+            ),
+        }
+        seen = {tuple(item[:2]) for item in parameters["drop"]}
+        for candidate in candidates:
+            candidate_parameters = (
+                candidate.get("parameters")
+                if isinstance(candidate.get("parameters"), dict)
+                else {}
+            )
+            drops = candidate_parameters.get("drop")
+            if not isinstance(drops, list):
+                continue
+            for drop in drops:
+                if not isinstance(drop, list | tuple) or len(drop) < 2:
+                    continue
+                normalized = [str(drop[0]), int(drop[1])]
+                identity = tuple(normalized)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                parameters["drop"].append(normalized)
+        return parameters
+
+    @staticmethod
+    def _enrich_combined_drop_recalculation_result(
+        *,
+        tool_result: dict[str, Any],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        enriched = dict(tool_result)
+        parameters = (
+            dict(context.get("parameters"))
+            if isinstance(context.get("parameters"), dict)
+            else {}
+        )
+        candidate_id = str(context.get("candidate_id") or "combined_drop_candidates")
+        scenario_id = str(context.get("scenario_id") or candidate_id)
+        basis = build_analysis_basis(
+            session_id=str(context.get("session_id") or enriched.get("session_id") or ""),
+            basis_type="review_candidate",
+            parameters=parameters,
+            scenario_id=scenario_id,
+            candidate_id=candidate_id,
+            source_tool="tool_recalculate",
+            source_review_type="combined_drop_recalculation",
+            is_active_session=False,
+        )
+        enriched["analysis_basis"] = basis
+        enriched["review_type"] = "combined_drop_recalculation"
+        enriched["selected_drops"] = parameters.get("drop", [])
+        enriched["top_candidates"] = [
+            dict(item)
+            for item in context.get("selected_candidates", [])
+            if isinstance(item, dict)
+        ]
+        enriched["recommendation"] = {
+            "recommendation_class": "reasonable_alternative",
+            "candidate_id": candidate_id,
+            "basis_key": basis.get("basis_key"),
+            "scenario_id": scenario_id,
+            "summary": (
+                f"Use the top {len(enriched['top_candidates'])} drop-review candidates together."
+            ),
+            "recommended_changes": [
+                {
+                    "candidate_id": candidate_id,
+                    "basis_key": basis.get("basis_key"),
+                    "scenario_id": scenario_id,
+                    "parameters": parameters,
+                }
+            ],
+        }
+        enriched.setdefault("continuity_notes", [])
+        enriched.setdefault("policy_trace", {})
+        return enriched
+
+    @staticmethod
+    def _build_bf_recalculation_context(
+        *,
+        user_prompt: str,
+        session_context: dict[str, Any] | None,
+        memory_state: dict[str, Any],
+        planning_basis: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        prompt = str(user_prompt or "").strip().lower()
+        if not AssistantService._prompt_requests_bf_recalculation(prompt):
+            return {}
+        base_basis = AssistantService._basis_for_bf_recalculation(
+            prompt=prompt,
+            memory_state=memory_state,
+            planning_basis=planning_basis,
+        )
+        base_parameters = (
+            dict(base_basis.get("parameters"))
+            if isinstance(base_basis.get("parameters"), dict)
+            else {}
+        )
+        if not base_parameters:
+            return {}
+        session_id = ""
+        segment = None
+        if isinstance(session_context, dict):
+            session_id = str(session_context.get("session_id") or "").strip()
+            segment = session_context.get("segment")
+        if not session_id:
+            session_id = str(base_basis.get("session_id") or "").strip()
+        if not session_id:
+            return {}
+        results_args = {"session_id": session_id}
+        basis_args = AssistantService._assumption_detail_basis_args(base_basis)
+        results_args.update(basis_args)
+        plan = ExecutionPlan(
+            playbook="bf_recalculation",
+            workflow_name="bf_recalculation",
+            goal="Apply explicit BF settings incrementally to the current analysis basis.",
+            segment=str(segment).strip() if isinstance(segment, str) and segment.strip() else None,
+            session_id=session_id,
+            intent_class="scenario_recommendation",
+            required_capabilities=["results_summary", "recalculate"],
+            steps=[
+                PlanStep(
+                    tool_name="tool_get_results_summary",
+                    args=results_args,
+                    evidence_key="bf_base_results",
+                    basis_aware=True,
+                ),
+                PlanStep(
+                    tool_name="tool_recalculate",
+                    args={"session_id": session_id},
+                    evidence_key="bf_recalculation",
+                    basis_aware=True,
+                ),
+            ],
+            required_evidence=["bf_base_results", "bf_recalculation"],
+            minimum_evidence_count=2,
+            stopping_rule="Stop after applying the explicit BF overrides to the selected basis.",
+            basis_behavior=["use_accepted_basis", "proposal_possible"],
+            answer_contract="recommendation_with_proposal",
+            requires_continuity=False,
+        )
+        return {
+            "plan": plan,
+            "prompt": prompt,
+            "base_basis": base_basis,
+            "base_parameters": base_parameters,
+            "session_id": session_id,
+            "apriori": AssistantService._parse_bf_apriori(prompt),
+            "newest_count": AssistantService._parse_newest_ay_count(prompt),
+        }
+
+    @staticmethod
+    def _prompt_requests_bf_recalculation(prompt: str) -> bool:
+        if "bf" not in prompt and "bornhuetter" not in prompt:
+            return False
+        explicit_terms = {
+            "apriori",
+            "a priori",
+            "lr",
+            "loss ratio",
+            "newest",
+            "newer",
+            "chainladder else",
+            "chainladder for",
+            "apply",
+            "test",
+        }
+        return any(term in prompt for term in explicit_terms)
+
+    @staticmethod
+    def _basis_for_bf_recalculation(
+        *,
+        prompt: str,
+        memory_state: dict[str, Any],
+        planning_basis: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        correction_terms = {
+            "why have you changed",
+            "changed the drops",
+            "changed the tail",
+            "setting we had",
+            "settings we had",
+            "with the setting we had",
+        }
+        if any(term in prompt for term in correction_terms):
+            previous_basis = AssistantService._previous_accepted_basis(memory_state)
+            if previous_basis:
+                return previous_basis
+        return dict(planning_basis) if isinstance(planning_basis, dict) else {}
+
+    @staticmethod
+    def _previous_accepted_basis(memory_state: dict[str, Any]) -> dict[str, Any]:
+        transitions = (
+            memory_state.get("basis_transition_history")
+            if isinstance(memory_state.get("basis_transition_history"), list)
+            else []
+        )
+        if not transitions:
+            return {}
+        last_transition = transitions[-1] if isinstance(transitions[-1], dict) else {}
+        previous_key = str(last_transition.get("from_basis_key") or "").strip()
+        if not previous_key:
+            return {}
+        current_basis = (
+            memory_state.get("accepted_analysis_basis")
+            if isinstance(memory_state.get("accepted_analysis_basis"), dict)
+            else {}
+        )
+        basis_cache = (
+            memory_state.get("scenario_basis_cache")
+            if isinstance(memory_state.get("scenario_basis_cache"), dict)
+            else {}
+        )
+        return BasisManager.lookup_basis_by_key(
+            basis_key=previous_key,
+            current_basis=current_basis,
+            basis_cache=basis_cache,
+        )
+
+    @staticmethod
+    def _parse_bf_apriori(prompt: str) -> float:
+        percent_match = re.search(r"(\d+(?:\.\d+)?)\s*%", prompt)
+        if percent_match is not None:
+            return float(percent_match.group(1)) / 100.0
+        decimal_match = re.search(r"(?:apriori|a priori|lr|loss ratio)\D*(0\.\d+|1\.0|1)", prompt)
+        if decimal_match is not None:
+            return float(decimal_match.group(1))
+        return 0.6
+
+    @staticmethod
+    def _parse_newest_ay_count(prompt: str) -> int:
+        count_words = {
+            "one": 1,
+            "two": 2,
+            "three": 3,
+            "four": 4,
+            "five": 5,
+        }
+        for word, value in count_words.items():
+            if f"{word} newest" in prompt or f"{word} newer" in prompt:
+                return value
+        number_match = re.search(r"\b([1-9])\s+(?:newest|newer|latest)", prompt)
+        if number_match is not None:
+            return int(number_match.group(1))
+        return 3
+
+    @staticmethod
+    def _build_bf_recalculation_args(
+        *,
+        context: dict[str, Any],
+        memory_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        parameters = dict(context.get("base_parameters", {}))
+        years = AssistantService._newest_uwys_from_results_summary(
+            memory_state.get("results_summary"),
+            count=int(context.get("newest_count") or 3),
+        )
+        apriori = float(context.get("apriori") or 0.6)
+        bf_apriori = dict(parameters.get("bf_apriori", {}))
+        selected_ultimate_by_uwy = dict(parameters.get("selected_ultimate_by_uwy", {}))
+        for year in years:
+            bf_apriori[str(year)] = apriori
+            selected_ultimate_by_uwy[str(year)] = "bornhuetter_ferguson"
+        parameters["bf_apriori"] = bf_apriori
+        parameters["selected_ultimate_by_uwy"] = selected_ultimate_by_uwy
+        parameters["final_ultimate"] = parameters.get("final_ultimate", "chainladder")
+        return {
+            "session_id": str(context.get("session_id") or ""),
+            **parameters,
+        }
+
+    @staticmethod
+    def _newest_uwys_from_results_summary(
+        results_summary: object,
+        *,
+        count: int,
+    ) -> list[str]:
+        if not isinstance(results_summary, dict):
+            return []
+        rows = []
+        latest_rows = results_summary.get("latest_rows")
+        if isinstance(latest_rows, list) and latest_rows:
+            rows.extend(item for item in latest_rows if isinstance(item, dict))
+        else:
+            top_rows = results_summary.get("top_rows")
+            if isinstance(top_rows, list):
+                rows.extend(item for item in top_rows if isinstance(item, dict))
+        years = sorted(
+            {str(item.get("uwy") or "").strip() for item in rows if str(item.get("uwy") or "").strip()},
+            key=lambda value: int(value) if value.isdigit() else value,
+        )
+        return years[-max(1, count):]
+
+    @staticmethod
+    def _enrich_bf_recalculation_result(
+        *,
+        tool_result: dict[str, Any],
+        context: dict[str, Any],
+        args: dict[str, Any],
+    ) -> dict[str, Any]:
+        enriched = dict(tool_result)
+        parameters = {
+            key: value
+            for key, value in dict(args).items()
+            if key != "session_id"
+        }
+        basis = build_analysis_basis(
+            session_id=str(context.get("session_id") or enriched.get("session_id") or ""),
+            basis_type="bespoke",
+            parameters=parameters,
+            scenario_id="bf_incremental_recalculation",
+            candidate_id="bf_incremental_recalculation",
+            source_tool="tool_recalculate",
+            source_review_type="bf_recalculation",
+            is_active_session=False,
+        )
+        enriched["analysis_basis"] = basis
+        enriched["review_type"] = "bf_recalculation"
+        return enriched
 
     def _filter_tool_specs_for_turn(
         self,
@@ -960,10 +1615,96 @@ class AssistantService:
                 "tool_get_last_derived_drop_detail",
             }
 
-        definition = get_workflow_definition(AssistantService._select_playbook(prompt))
-        if definition is None:
+        definitions = select_workflow_definitions(prompt)
+        if not definitions:
             return set()
-        return set(definition.tool_whitelist)
+        allowed: set[str] = set()
+        for definition in definitions:
+            allowed.update(definition.tool_whitelist)
+        return allowed
+
+    @staticmethod
+    def _tool_names(tool_specs: list[dict[str, Any]]) -> set[str]:
+        names: set[str] = set()
+        for spec in tool_specs:
+            function = spec.get("function") if isinstance(spec, dict) else None
+            if not isinstance(function, dict):
+                continue
+            name = str(function.get("name") or "").strip()
+            if name:
+                names.add(name)
+        return names
+
+    def _narration_fallback_result(
+        self,
+        *,
+        memory_state: dict[str, Any],
+        workflow_state: dict[str, Any],
+        tool_events: list[dict[str, Any]],
+        event_callback: Any | None,
+        reason: str = "deterministic_narration_fallback",
+        detail: str | None = None,
+    ) -> dict[str, Any] | None:
+        narration_packet = memory_state.get("narration_packet")
+        if not isinstance(narration_packet, dict) or not narration_packet:
+            return None
+        fallback = render_narration_fallback(narration_packet)
+        self._emit_streamed_content(event_callback, fallback)
+        return {
+            "content": fallback,
+            "fallback_used": True,
+            "fallback_reason": reason,
+            "fallback_detail": detail or "",
+            "session_id": workflow_state.get("session_id"),
+            "tool_events": tool_events,
+            "memory_snapshot": memory_state,
+            "deterministic_packet": memory_state.get("deterministic_packet", {}),
+            "narration_packet": narration_packet,
+            "memory_update_proposals": memory_state.get("memory_update_proposals", []),
+        }
+
+    @staticmethod
+    def _pending_proposal_acceptance_response(
+        *,
+        user_prompt: str,
+        proposal_basis: dict[str, Any] | None,
+        accepted_analysis_basis: dict[str, Any] | None,
+    ) -> str:
+        proposal = normalize_proposal_basis(proposal_basis)
+        if not proposal or str(proposal.get("status") or "").strip() != "pending":
+            return ""
+        prompt = str(user_prompt or "").strip().lower()
+        action_terms = {
+            "accept",
+            "apply",
+            "use it",
+            "use the strongest",
+            "add it",
+            "add this",
+            "attach it",
+            "make it",
+            "set it",
+            "use this",
+            "baseline",
+            "analysis basis",
+        }
+        if not any(term in prompt for term in action_terms):
+            return ""
+        label = str(
+            proposal.get("scenario_label")
+            or proposal.get("candidate_id")
+            or proposal.get("scenario_id")
+            or "the pending proposal"
+        ).strip()
+        current_label = BasisManager.label(accepted_analysis_basis)
+        return (
+            f"{current_label}\n\n"
+            "### Pending Proposal\n"
+            f"`{label}` is ready to be added to the Analysis Basis, but I cannot accept proposals from a chat text reply. "
+            "Use the proposal card's accept button to update the Analysis Basis.\n\n"
+            "### Current Status\n"
+            "No new tool run was started and the Analysis Basis is unchanged until that explicit proposal acceptance happens."
+        )
 
     def _execute_tool_call(
         self,
@@ -1034,6 +1775,8 @@ class AssistantService:
         workflow_state: dict[str, Any],
     ) -> dict[str, Any]:
         supported = {
+            "tool_recalculate",
+            "tool_evaluate_tail_fit",
             "tool_run_diagnostics_summary",
             "tool_iterate_diagnostics_summary",
             "tool_run_drop_review",
@@ -1054,6 +1797,14 @@ class AssistantService:
         }
         if function_name not in supported:
             return args
+        if function_name in {"tool_recalculate", "tool_evaluate_tail_fit"}:
+            recalculate_args = AssistantService._compile_flat_recalculate_args(
+                args=args,
+                memory_state=memory_state,
+                workflow_state=workflow_state,
+            )
+            if recalculate_args:
+                return recalculate_args
         if function_name == "tool_explain_reserve_change":
             compare_args = AssistantService._compile_compare_current_basis_to_baseline_args(
                 args=args,
@@ -1062,6 +1813,13 @@ class AssistantService:
             )
             if compare_args:
                 return compare_args
+        baseline_args = AssistantService._compile_explicit_baseline_basis_args(
+            args=args,
+            memory_state=memory_state,
+            workflow_state=workflow_state,
+        )
+        if baseline_args:
+            return baseline_args
         parameter_field = (
             "basis_parameters"
             if function_name == "tool_explain_reserve_change"
@@ -1071,6 +1829,14 @@ class AssistantService:
         has_basis_key = args.get("basis_key") not in (None, "", {})
         has_scenario_id = args.get("scenario_id") not in (None, "", {})
         has_parameters = args.get(parameter_field) not in (None, "", {})
+        if has_parameters and isinstance(args.get(parameter_field), dict):
+            computed_basis_key = basis_key_from_parameters(args.get(parameter_field))
+            supplied_basis_key = str(args.get("basis_key") or "").strip()
+            if computed_basis_key and supplied_basis_key and supplied_basis_key != computed_basis_key:
+                corrected = dict(args)
+                corrected["basis_key"] = computed_basis_key
+                corrected.pop("scenario_id", None)
+                return corrected
         if has_basis_type and has_basis_key and has_parameters:
             return args
         has_any_basis_arg = has_basis_type or has_basis_key or has_scenario_id or has_parameters
@@ -1100,6 +1866,90 @@ class AssistantService:
         return enriched
 
     @staticmethod
+    def _compile_explicit_baseline_basis_args(
+        *,
+        args: dict[str, Any],
+        memory_state: dict[str, Any],
+        workflow_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        prompt = str(workflow_state.get("current_user_prompt") or "").strip().lower()
+        if not AssistantService._prompt_requests_baseline_basis(prompt):
+            return {}
+        basis_type = str(args.get("basis_type") or "").strip().lower()
+        scenario_id = str(args.get("scenario_id") or "").strip().lower()
+        if basis_type != "baseline" and scenario_id != "baseline":
+            return {}
+        baseline_basis = BasisManager.baseline_basis_from_memory(
+            memory_state=memory_state,
+            session_context=None,
+        )
+        baseline_parameters = (
+            dict(baseline_basis.get("parameters"))
+            if isinstance(baseline_basis.get("parameters"), dict)
+            else {}
+        )
+        compiled = dict(args)
+        compiled["basis_type"] = "baseline"
+        compiled.pop("scenario_id", None)
+        baseline_key = str(baseline_basis.get("basis_key") or "").strip()
+        if baseline_key:
+            compiled["basis_key"] = baseline_key
+        else:
+            compiled.pop("basis_key", None)
+        if baseline_parameters:
+            compiled["parameters"] = baseline_parameters
+        else:
+            compiled.pop("parameters", None)
+        return compiled
+
+    @staticmethod
+    def _compile_flat_recalculate_args(
+        *,
+        args: dict[str, Any],
+        memory_state: dict[str, Any],
+        workflow_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        explicit_fields = {
+            "average",
+            "drop",
+            "drop_valuation",
+            "tail",
+            "bf_apriori",
+            "final_ultimate",
+            "selected_ultimate_by_uwy",
+        }
+        has_explicit = any(field in args and args.get(field) is not None for field in explicit_fields)
+        has_selector = any(
+            args.get(field) not in (None, "", {})
+            for field in ("basis_type", "basis_key", "scenario_id")
+        )
+        if not has_explicit and not has_selector:
+            return {}
+
+        basis = AssistantService._resolve_tool_call_basis(
+            args=args,
+            memory_state=memory_state,
+            workflow_state=workflow_state,
+            has_any_basis_arg=has_selector,
+        )
+        basis_parameters = (
+            dict(basis.get("parameters"))
+            if isinstance(basis, dict) and isinstance(basis.get("parameters"), dict)
+            else {}
+        )
+        compiled = {
+            key: value
+            for key, value in args.items()
+            if key not in {"basis_type", "basis_key", "scenario_id", "parameters"}
+        }
+        if basis_parameters:
+            for field in explicit_fields:
+                if field not in compiled or compiled.get(field) is None:
+                    if field in basis_parameters:
+                        compiled[field] = basis_parameters[field]
+        return compiled
+
+    @staticmethod
     def _compile_compare_current_basis_to_baseline_args(
         *,
         args: dict[str, Any],
@@ -1107,13 +1957,17 @@ class AssistantService:
         workflow_state: dict[str, Any],
     ) -> dict[str, Any]:
         prompt = str(workflow_state.get("current_user_prompt") or "").strip().lower()
-        if "baseline" not in prompt:
+        if not AssistantService._prompt_requests_baseline_basis(prompt):
             return {}
         current_terms = (
             "this basis",
             "current basis",
             "accepted basis",
             "analysis basis",
+            "scenario before",
+            "before all the modifications",
+            "before the modifications",
+            "before modifications",
         )
         if not any(term in prompt for term in current_terms):
             return {}
@@ -1476,9 +2330,9 @@ class AssistantService:
 
         prompt = str(user_prompt or "").strip().lower()
         prompts = [COMPACT_CONTEXT_PROMPT, COMPACT_PLAYBOOKS_PROMPT]
-        definition = get_workflow_definition(self._select_playbook(prompt))
+        definitions = select_workflow_definitions(prompt)
         if self._is_recommendation_question(prompt) or (
-            definition is not None and bool(definition.policy_prompt_relevant)
+            definitions and any(definition.policy_prompt_relevant for definition in definitions)
         ):
             prompts.append(COMPACT_POLICY_PROMPT)
         return prompts
@@ -1676,8 +2530,15 @@ class AssistantService:
         prompt = str(user_prompt or "").strip().lower()
         if not prompt:
             return ""
-        definition = get_workflow_definition(AssistantService._select_playbook(prompt))
-        return definition.prompt_hint if definition is not None else ""
+        definitions = select_workflow_definitions(prompt)
+        if len(definitions) > 1:
+            return (
+                "Selected playbooks: "
+                + "; ".join(definition.workflow_name for definition in definitions)
+                + ". Run each matched deterministic workflow and summarize the separate evidence. "
+                "Do not collapse multiple proposal-capable workflows into one implicit accepted-basis change."
+            )
+        return definitions[0].prompt_hint if definitions else ""
 
     @staticmethod
     def _is_recommendation_question(prompt: str) -> bool:
@@ -1725,6 +2586,69 @@ class AssistantService:
 
     @staticmethod
     def _is_exact_numeric_question(prompt: str) -> bool:
+        if AssistantService._is_recommendation_question(prompt):
+            review_terms = {
+                "review",
+                "rank",
+                "recommend",
+                "selection-worthy",
+                "sensitivity",
+                "candidate",
+                "candidates",
+            }
+            exact_override_terms = {
+                "exact",
+                "show exact",
+                "list exact",
+                "exact values",
+                "exact settings",
+                "exact parameters",
+                "table of",
+                "vector",
+            }
+            exact_detail_request_terms = {
+                "what are",
+                "what is",
+                "show me",
+                "list",
+                "table",
+                "vector",
+            }
+            exact_detail_subject_terms = {
+                "ldf",
+                "ldfs",
+                "fitted tail",
+                "fitted ldf",
+                "values",
+                "factors",
+            }
+            has_explicit_exact_override = any(
+                term in prompt for term in exact_override_terms
+            ) or (
+                any(term in prompt for term in exact_detail_request_terms)
+                and any(term in prompt for term in exact_detail_subject_terms)
+            )
+            if any(term in prompt for term in review_terms) and not has_explicit_exact_override:
+                return False
+            exact_terms = {
+                "exact",
+                "which exact",
+                "which setting",
+                "which settings",
+                "what setting",
+                "what settings",
+                "configuration",
+                "parameters",
+                "vector",
+                "values",
+                "factors",
+                "ldf",
+                "ldfs",
+                "a2a",
+                "age-to-age",
+            }
+            if not any(term in prompt for term in exact_terms):
+                return False
         request_terms = {
             "show me",
             "compare",
@@ -1875,9 +2799,19 @@ class AssistantService:
             phrase in prompt
             for phrase in (
                 "baseline",
+                "base line",
                 "current session",
                 "current baseline",
                 "active session",
+                "beginning",
+                "start of chat",
+                "start of the chat",
+                "before all the modifications",
+                "before the modifications",
+                "before modifications",
+                "before we changed",
+                "original scenario",
+                "original basis",
             )
         )
 
@@ -2108,6 +3042,15 @@ class AssistantService:
                     current["preview_basis"] = {}
                 elif isinstance(basis, dict) and basis:
                     current["preview_basis"] = dict(basis)
+                    basis_key = str(basis.get("basis_key") or "").strip()
+                    if basis_key:
+                        cache = (
+                            dict(current.get("scenario_basis_cache"))
+                            if isinstance(current.get("scenario_basis_cache"), dict)
+                            else {}
+                        )
+                        cache[basis_key] = dict(basis)
+                        current["scenario_basis_cache"] = cache
         elif function_name == "tool_explain_reserve_change":
             current["reserve_change_summary"] = dict(tool_result)
         elif function_name in {
