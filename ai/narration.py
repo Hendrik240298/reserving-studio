@@ -143,6 +143,7 @@ class NarrationAssembler:
                 "label": proposal.get("scenario_label")
                 or proposal.get("candidate_id")
                 or proposal.get("scenario_id"),
+                "proposed_drops": _proposal_drops(proposal),
                 "instruction": _proposal_instruction(proposal_exists),
             },
             "guardrails": dict(guardrail_state or {}),
@@ -156,7 +157,9 @@ def build_narration_prompt(narration_packet: dict[str, Any]) -> str:
         "Use this deterministic narration packet as the answer scaffold. "
         "Include every required_answer_sections item. Do not make any blocked_claims. "
         "Do not say the Analysis Basis changed unless basis.basis_changed is true. "
+        "If supporting_evidence.assumption_detail is present, use it for selected LDF, fitted tail LDF, sub-1 factor, and attachment-factor claims; do not say those exact factors are missing. "
         "If proposal.exists is true, say the recommendation is pending explicit Yes/No acceptance. "
+        "If proposal.proposed_drops is non-empty, list every proposed drop in the proposal_status section; do not imply the proposal contains only the ranked candidates described elsewhere. "
         "If proposal.exists is false, do not mention a pending proposal and do not ask the user to accept anything. "
         "Acceptance and rejection happen only through the proposal card buttons, never through natural-language replies. "
         "Write concise user-facing prose grounded only in this packet.\n"
@@ -190,9 +193,14 @@ def render_narration_fallback(narration_packet: dict[str, Any]) -> str:
         sections.append("### Caveats\n- None material from the deterministic packet.")
     if proposal.get("exists"):
         label = str(proposal.get("label") or "proposed basis")
+        proposed_drops = _string_list(proposal.get("proposed_drops"))
+        drop_line = ""
+        if proposed_drops:
+            drop_line = "\nProposed drops: " + ", ".join(proposed_drops) + "."
         sections.append(
             "### Proposal Status\n"
             f"{label} is pending explicit Yes/No acceptance. The Analysis Basis is unchanged until accepted."
+            + drop_line
         )
     execution_status = str(execution.get("status") or "")
     if execution_status and execution_status not in {
@@ -357,6 +365,7 @@ def _supporting_evidence(packet: dict[str, Any]) -> dict[str, Any]:
         composite_reviews = [composite_review]
     return {
         "reviews": [_compact_supporting_review(item) for item in composite_reviews[:4]],
+        "assumption_detail": _compact_assumption_detail(packet),
         "top_candidates": _list_of_dicts(composite_summary.get("top_candidates"))[:3],
         "top_ranked": _list_of_dicts(composite_summary.get("top_ranked"))[:3],
         "recommended_changes": _list_of_dicts(packet.get("recommended_changes"))[:3],
@@ -364,6 +373,96 @@ def _supporting_evidence(packet: dict[str, Any]) -> dict[str, Any]:
         "policy_trace": _dict(packet.get("policy_trace")),
         "continuity_notes": _list_of_dicts(packet.get("continuity_notes"))[:3],
     }
+
+
+def _compact_assumption_detail(packet: dict[str, Any]) -> dict[str, Any]:
+    for evidence in _list_of_dicts(packet.get("evidence_packets")):
+        if str(evidence.get("evidence_key") or "").strip() != "assumption_detail":
+            continue
+        summary = _dict(evidence.get("summary"))
+        selected_ldf = _list_of_dicts(summary.get("selected_ldf"))
+        fitted_tail_ldf = _list_of_dicts(summary.get("fitted_tail_ldf"))
+        return {
+            "analysis_basis": _dict(summary.get("analysis_basis")),
+            "parameter_tail": _dict(_dict(summary.get("parameters")).get("tail")),
+            "tail_active": summary.get("tail_active"),
+            "tail_mode": summary.get("tail_mode"),
+            "tail_applies_from_age": summary.get("tail_applies_from_age"),
+            "selected_ldf_below_1": _ldf_rows_below_one(selected_ldf),
+            "fitted_tail_ldf_below_1": _ldf_rows_below_one(fitted_tail_ldf),
+            "min_selected_ldf": _min_ldf_value(selected_ldf),
+            "min_fitted_tail_ldf": _min_ldf_value(fitted_tail_ldf),
+            "attachment_selected_ldf": _ldf_row_at_or_before(
+                selected_ldf,
+                summary.get("tail_applies_from_age"),
+            ),
+            "attachment_fitted_tail_ldf": _ldf_row_at_or_after(
+                fitted_tail_ldf,
+                summary.get("tail_applies_from_age"),
+            ),
+        }
+    return {}
+
+
+def _ldf_rows_below_one(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        value = _optional_float(row.get("ldf"))
+        if value is not None and value < 1.0:
+            output.append(dict(row))
+    return output
+
+
+def _min_ldf_value(rows: list[dict[str, Any]]) -> float | None:
+    values = [
+        value
+        for row in rows
+        if (value := _optional_float(row.get("ldf"))) is not None
+    ]
+    return min(values) if values else None
+
+
+def _ldf_row_at_or_before(
+    rows: list[dict[str, Any]],
+    age: object,
+) -> dict[str, Any]:
+    target = _optional_float(age)
+    if target is None:
+        return {}
+    candidates = [
+        row
+        for row in rows
+        if (row_age := _optional_float(row.get("age"))) is not None and row_age <= target
+    ]
+    if not candidates:
+        return {}
+    return dict(max(candidates, key=lambda row: float(row.get("age") or 0.0)))
+
+
+def _ldf_row_at_or_after(
+    rows: list[dict[str, Any]],
+    age: object,
+) -> dict[str, Any]:
+    target = _optional_float(age)
+    if target is None:
+        return {}
+    candidates = [
+        row
+        for row in rows
+        if (row_age := _optional_float(row.get("age"))) is not None and row_age >= target
+    ]
+    if not candidates:
+        return {}
+    return dict(min(candidates, key=lambda row: float(row.get("age") or 0.0)))
+
+
+def _optional_float(value: object) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _compact_supporting_review(review: dict[str, Any]) -> dict[str, Any]:
@@ -387,6 +486,23 @@ def _proposal_instruction(proposal_exists: bool) -> str:
     if proposal_exists:
         return "This recommendation is pending acceptance through the proposal card buttons. Analysis Basis is unchanged."
     return "No pending basis proposal is attached to this answer."
+
+
+def _proposal_drops(proposal: dict[str, Any]) -> list[str]:
+    parameters = _dict(proposal.get("parameters"))
+    drops = parameters.get("drop")
+    if not isinstance(drops, list):
+        return []
+    labels: list[str] = []
+    for item in drops:
+        if not isinstance(item, list | tuple) or len(item) < 2:
+            continue
+        origin = str(item[0] or "").strip()
+        development = str(item[1] or "").strip()
+        if not origin or not development:
+            continue
+        labels.append(f"AY {origin} age {development}")
+    return labels
 
 
 def _dict(value: object) -> dict[str, Any]:

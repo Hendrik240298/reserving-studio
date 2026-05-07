@@ -1125,6 +1125,74 @@ def test_reserve_change_compare_uses_current_candidate_and_original_baseline() -
     assert compiled["basis_parameters"]["tail"]["attachment_age"] is None
 
 
+def test_current_setting_reserve_impact_compares_to_previous_accepted_basis() -> None:
+    previous_parameters = {
+        "average": "volume",
+        "drop": [["2002", 39]],
+        "drop_valuation": [],
+        "tail": {
+            "curve": "weibull",
+            "attachment_age": None,
+            "projection_period": 0,
+            "fit_period": [],
+        },
+        "bf_apriori": {},
+        "final_ultimate": "chainladder",
+        "selected_ultimate_by_uwy": {},
+    }
+    current_parameters = {
+        **previous_parameters,
+        "tail": {
+            "curve": "weibull",
+            "attachment_age": 27,
+            "projection_period": 0,
+            "fit_period": [12, 108],
+        },
+    }
+    previous_key = basis_key_from_parameters(previous_parameters)
+    current_key = basis_key_from_parameters(current_parameters)
+
+    compiled = AssistantService._apply_default_analysis_basis_args(
+        function_name="tool_explain_reserve_change",
+        args={"session_id": "s-1"},
+        memory_state={
+            "accepted_analysis_basis": {
+                "basis_type": "review_candidate",
+                "basis_key": current_key,
+                "parameters": current_parameters,
+            },
+            "scenario_basis_cache": {
+                previous_key: {
+                    "basis_type": "review_candidate",
+                    "basis_key": previous_key,
+                    "parameters": previous_parameters,
+                },
+                current_key: {
+                    "basis_type": "review_candidate",
+                    "basis_key": current_key,
+                    "parameters": current_parameters,
+                },
+            },
+            "basis_transition_history": [
+                {
+                    "from_basis_key": previous_key,
+                    "to_basis_key": current_key,
+                    "transition_type": "proposal_accepted",
+                }
+            ],
+        },
+        workflow_state={
+            "current_user_prompt": "give me the impact on reserve of the current setting"
+        },
+    )
+
+    assert compiled["drop"] == current_parameters["drop"]
+    assert compiled["tail"]["attachment_age"] == 27
+    assert compiled["basis_parameters"] == previous_parameters
+    assert compiled["basis_key"] == previous_key
+    assert "scenario_id" not in compiled
+
+
 def test_recalculate_updates_preview_basis_and_session_summary() -> None:
     service = AssistantService.__new__(AssistantService)
 

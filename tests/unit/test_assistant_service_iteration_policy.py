@@ -505,6 +505,62 @@ def test_exact_factor_question_does_not_create_deterministic_proposal() -> None:
     ]
 
 
+def test_subunit_ldf_followup_loads_exact_assumption_detail_on_accepted_basis() -> None:
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ok",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+    ]
+    accepted_parameters = {
+        "average": "volume",
+        "drop": [["2002", 39]],
+        "drop_valuation": [],
+        "tail": {
+            "curve": "weibull",
+            "attachment_age": 27,
+            "projection_period": 0,
+            "fit_period": [12, 108],
+        },
+        "bf_apriori": {},
+        "final_ultimate": "chainladder",
+        "selected_ultimate_by_uwy": {},
+    }
+    accepted_basis_key = basis_key_from_parameters(accepted_parameters)
+
+    service = AssistantService.__new__(AssistantService)
+    setattr(service, "_client", _FakeClient(responses))
+    fake_tools = _FakeTools()
+    setattr(service, "_tools", fake_tools)
+    service._observability_enabled = False
+    service._deterministic_orchestration_enabled = True
+
+    result = service.run_turn(
+        user_prompt="please check if with the new tail no ldf is below 1",
+        session_context={"segment": "seg", "session_id": "s-1"},
+        accepted_analysis_basis={
+            "basis_type": "review_candidate",
+            "basis_key": accepted_basis_key,
+            "parameters": accepted_parameters,
+        },
+    )
+
+    assert result["content"] == "ok"
+    assert result["memory_snapshot"].get("proposal_basis") == {}
+    assert result["memory_snapshot"].get("deterministic_packet", {}) == {}
+    tool_name, args = fake_tools.calls[0]
+    assert tool_name == "tool_get_assumption_context_detail"
+    assert args["basis_type"] == "review_candidate"
+    assert args["basis_key"] == accepted_basis_key
+    assert args["parameters"] == accepted_parameters
+
+
 def test_exact_tail_setting_question_does_not_create_tail_proposal() -> None:
     responses = [
         {

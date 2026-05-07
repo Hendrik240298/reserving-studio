@@ -947,13 +947,19 @@ def summarize_detailed_data_view_payload(payload: dict[str, Any]) -> dict[str, A
 
 
 def summarize_assumption_detail_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    selected_ldf = _dict_list(payload.get("selected_ldf"))
+    fitted_tail_ldf = _dict_list(payload.get("fitted_tail_ldf"))
     return {
         "session_id": payload.get("session_id"),
         "metric": payload.get("metric"),
         "analysis_basis": _compact_analysis_basis(payload.get("analysis_basis")),
         "parameter_summary": _compact_parameter_summary(payload.get("parameters")),
-        "selected_ldf": _dict_list(payload.get("selected_ldf")),
-        "fitted_tail_ldf": _dict_list(payload.get("fitted_tail_ldf")),
+        "selected_ldf": selected_ldf,
+        "fitted_tail_ldf": fitted_tail_ldf,
+        "selected_ldf_below_1": _ldf_rows_below_one(selected_ldf),
+        "fitted_tail_ldf_below_1": _ldf_rows_below_one(fitted_tail_ldf),
+        "min_selected_ldf": _min_ldf_value(selected_ldf),
+        "min_fitted_tail_ldf": _min_ldf_value(fitted_tail_ldf),
         "tail_active": payload.get("tail_active"),
         "tail_mode": payload.get("tail_mode"),
         "tail_applies_from_age": payload.get("tail_applies_from_age"),
@@ -963,6 +969,33 @@ def summarize_assumption_detail_payload(payload: dict[str, Any]) -> dict[str, An
             payload.get("selected_ultimate_by_uwy")
         ),
     }
+
+
+def _ldf_rows_below_one(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        value = _optional_float(row.get("ldf"))
+        if value is not None and value < 1.0:
+            output.append(dict(row))
+    return output
+
+
+def _min_ldf_value(rows: list[dict[str, Any]]) -> float | None:
+    values = [
+        value
+        for row in rows
+        if (value := _optional_float(row.get("ldf"))) is not None
+    ]
+    return min(values) if values else None
+
+
+def _optional_float(value: object) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def summarize_data_compare_payload(payload: dict[str, Any]) -> dict[str, Any]:

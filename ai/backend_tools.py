@@ -5,6 +5,7 @@ from typing import Any
 from ai.execution_records import attach_execution_metadata
 from ai.request_validation import (
     build_passthrough_request_validation,
+    build_rejected_request_validation,
     validate_recalculate_like_arguments,
 )
 from source.api.schemas import (
@@ -392,9 +393,22 @@ class BackendReservingTools:
                     validation=validation,
                 )
             sanitized_arguments = dict(validation.effective_inputs)
-            response = self._backend.explain_reserve_change(
-                ReserveChangeRequest(**sanitized_arguments)
-            )
+            try:
+                response = self._backend.explain_reserve_change(
+                    ReserveChangeRequest(**sanitized_arguments)
+                )
+            except ValueError as exc:
+                reason = str(exc).strip() or "Reserve-change request could not be executed."
+                rejected_validation = build_rejected_request_validation(
+                    arguments,
+                    reason=reason,
+                )
+                return self._finalize_summary(
+                    tool_name=name,
+                    args=arguments,
+                    summary=_rejected_tool_summary(arguments, reason),
+                    validation=rejected_validation,
+                )
             payload = response.model_dump(mode="json")
             if validation.input_adjustments:
                 payload["input_adjustments"] = validation.input_adjustments

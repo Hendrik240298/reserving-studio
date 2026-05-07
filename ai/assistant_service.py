@@ -876,6 +876,11 @@ class AssistantService:
             )
         if plan is None:
             return None
+        plan = self._with_tail_subunit_drilldown_step(
+            plan=plan,
+            prompt=prompt_text,
+            planning_basis=planning_basis,
+        )
         if self._observability_enabled:
             logger.info(
                 "[OBS] deterministic.playbook.selected playbook=%s session_id=%s segment=%s steps=%s min_evidence=%s",
@@ -894,6 +899,14 @@ class AssistantService:
         envelopes: list[dict[str, Any]] = []
         for step in plan.steps:
             step_args = step.args
+            if (
+                plan.playbook == "tail_selection"
+                and step.tool_name == "tool_get_assumption_context_detail"
+            ):
+                step_args = self._tail_candidate_assumption_detail_args(
+                    base_args=step_args,
+                    tail_review_result=tool_outputs.get("tool_run_tail_review"),
+                )
             if (
                 bf_recalculation_context
                 and step.evidence_key == "bf_recalculation"
@@ -1003,6 +1016,110 @@ class AssistantService:
             evidence_packets=envelopes,
             memory_update_proposals=memory_update_proposals,
         )
+
+    @staticmethod
+    def _with_tail_subunit_drilldown_step(
+        *,
+        plan: ExecutionPlan,
+        prompt: str,
+        planning_basis: dict[str, Any] | None,
+    ) -> ExecutionPlan:
+        if plan.playbook != "tail_selection":
+            return plan
+        if not AssistantService._prompt_mentions_subunit_factor_check(prompt):
+            return plan
+        if any(
+            step.tool_name == "tool_get_assumption_context_detail"
+            for step in plan.steps
+        ):
+            return plan
+        args: dict[str, Any] = {"session_id": plan.session_id}
+        if isinstance(planning_basis, dict) and planning_basis:
+            basis_type = planning_basis.get("basis_type")
+            basis_key = planning_basis.get("basis_key")
+            parameters = planning_basis.get("parameters")
+            if isinstance(basis_type, str) and basis_type.strip():
+                args["basis_type"] = basis_type.strip()
+            if isinstance(basis_key, str) and basis_key.strip():
+                args["basis_key"] = basis_key.strip()
+            if isinstance(parameters, dict) and parameters:
+                args["parameters"] = dict(parameters)
+        return ExecutionPlan(
+            playbook=plan.playbook,
+            workflow_name=plan.workflow_name,
+            goal=plan.goal,
+            segment=plan.segment,
+            session_id=plan.session_id,
+            intent_class=plan.intent_class,
+            required_capabilities=list(plan.required_capabilities),
+            steps=[
+                *list(plan.steps),
+                PlanStep(
+                    tool_name="tool_get_assumption_context_detail",
+                    args=args,
+                    evidence_key="assumption_detail",
+                    basis_aware=True,
+                ),
+            ],
+            required_evidence=list(plan.required_evidence),
+            minimum_evidence_count=plan.minimum_evidence_count,
+            stopping_rule=plan.stopping_rule,
+            basis_behavior=list(plan.basis_behavior),
+            answer_contract=plan.answer_contract,
+            requires_continuity=plan.requires_continuity,
+        )
+
+    @staticmethod
+    def _tail_candidate_assumption_detail_args(
+        *,
+        base_args: dict[str, Any],
+        tail_review_result: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if not isinstance(tail_review_result, dict) or not tail_review_result:
+            return base_args
+        candidates = (
+            tail_review_result.get("top_candidates")
+            if isinstance(tail_review_result.get("top_candidates"), list)
+            else []
+        )
+        if not candidates:
+            return base_args
+        recommendation = (
+            tail_review_result.get("recommendation")
+            if isinstance(tail_review_result.get("recommendation"), dict)
+            else {}
+        )
+        recommended_id = str(recommendation.get("candidate_id") or "").strip()
+        selected_candidate = None
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            if recommended_id and str(item.get("candidate_id") or "").strip() == recommended_id:
+                selected_candidate = item
+                break
+        if selected_candidate is None:
+            selected_candidate = next(
+                (item for item in candidates if isinstance(item, dict)),
+                None,
+            )
+        if not isinstance(selected_candidate, dict):
+            return base_args
+        parameters = (
+            selected_candidate.get("parameters")
+            if isinstance(selected_candidate.get("parameters"), dict)
+            else {}
+        )
+        if not parameters:
+            return base_args
+        args = {"session_id": base_args.get("session_id")}
+        args["basis_type"] = "review_candidate"
+        basis_key = str(selected_candidate.get("basis_key") or "").strip()
+        args["basis_key"] = basis_key or basis_key_from_parameters(parameters)
+        scenario_id = str(selected_candidate.get("scenario_id") or "").strip()
+        if scenario_id:
+            args["scenario_id"] = scenario_id
+        args["parameters"] = dict(parameters)
+        return args
 
     @staticmethod
     def _build_prior_drop_combination_context(
@@ -1806,6 +1923,13 @@ class AssistantService:
             if recalculate_args:
                 return recalculate_args
         if function_name == "tool_explain_reserve_change":
+            current_impact_args = AssistantService._compile_current_setting_reserve_impact_args(
+                args=args,
+                memory_state=memory_state,
+                workflow_state=workflow_state,
+            )
+            if current_impact_args:
+                return current_impact_args
             compare_args = AssistantService._compile_compare_current_basis_to_baseline_args(
                 args=args,
                 memory_state=memory_state,
@@ -1948,6 +2072,130 @@ class AssistantService:
                     if field in basis_parameters:
                         compiled[field] = basis_parameters[field]
         return compiled
+
+    @staticmethod
+    def _compile_current_setting_reserve_impact_args(
+        *,
+        args: dict[str, Any],
+        memory_state: dict[str, Any],
+        workflow_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        prompt = str(workflow_state.get("current_user_prompt") or "").strip().lower()
+        if not AssistantService._prompt_requests_current_setting_impact(prompt):
+            return {}
+        explicit_fields = {
+            "average",
+            "drop",
+            "drop_valuation",
+            "tail",
+            "bf_apriori",
+            "final_ultimate",
+            "selected_ultimate_by_uwy",
+        }
+        if any(
+            field in args and args.get(field) is not None
+            for field in explicit_fields
+        ):
+            return {}
+        accepted_basis = (
+            memory_state.get("accepted_analysis_basis")
+            if isinstance(memory_state.get("accepted_analysis_basis"), dict)
+            else {}
+        )
+        accepted_params = (
+            accepted_basis.get("parameters")
+            if isinstance(accepted_basis.get("parameters"), dict)
+            else {}
+        )
+        if not accepted_params:
+            return {}
+        comparison_basis = AssistantService._previous_accepted_basis_from_memory(
+            memory_state=memory_state,
+            current_basis=accepted_basis,
+        )
+        if not comparison_basis:
+            comparison_basis = BasisManager.baseline_basis_from_memory(
+                memory_state=memory_state,
+                session_context=None,
+            )
+        comparison_params = (
+            comparison_basis.get("parameters")
+            if isinstance(comparison_basis.get("parameters"), dict)
+            else {}
+        )
+        if not comparison_params:
+            return {}
+        compiled = dict(args)
+        compiled.update(dict(accepted_params))
+        compiled["basis_parameters"] = dict(comparison_params)
+        basis_type = comparison_basis.get("basis_type")
+        if isinstance(basis_type, str) and basis_type.strip():
+            compiled["basis_type"] = basis_type.strip()
+        comparison_key = basis_key_from_parameters(comparison_params)
+        if comparison_key:
+            compiled["basis_key"] = comparison_key
+        compiled.pop("scenario_id", None)
+        compiled.pop("parameters", None)
+        return compiled
+
+    @staticmethod
+    def _prompt_requests_current_setting_impact(prompt: str) -> bool:
+        impact_terms = (
+            "impact on reserve",
+            "reserve impact",
+            "impact on ibnr",
+            "ibnr impact",
+            "effect on reserve",
+            "effect on ibnr",
+        )
+        current_terms = (
+            "current setting",
+            "current settings",
+            "current basis",
+            "analysis basis",
+            "accepted basis",
+            "this setting",
+            "this basis",
+        )
+        return any(term in prompt for term in impact_terms) and any(
+            term in prompt for term in current_terms
+        )
+
+    @staticmethod
+    def _previous_accepted_basis_from_memory(
+        *,
+        memory_state: dict[str, Any],
+        current_basis: dict[str, Any],
+    ) -> dict[str, Any]:
+        transitions = (
+            memory_state.get("basis_transition_history")
+            if isinstance(memory_state.get("basis_transition_history"), list)
+            else []
+        )
+        current_key = str(current_basis.get("basis_key") or "").strip()
+        previous_key = ""
+        for item in reversed(transitions):
+            if not isinstance(item, dict):
+                continue
+            to_key = str(item.get("to_basis_key") or "").strip()
+            if current_key and to_key and to_key != current_key:
+                continue
+            previous_key = str(item.get("from_basis_key") or "").strip()
+            if previous_key:
+                break
+        if not previous_key:
+            return {}
+        basis_cache = (
+            memory_state.get("scenario_basis_cache")
+            if isinstance(memory_state.get("scenario_basis_cache"), dict)
+            else {}
+        )
+        resolved = BasisManager.lookup_basis_by_key(
+            basis_key=previous_key,
+            current_basis={},
+            basis_cache=basis_cache,
+        )
+        return dict(resolved) if resolved else {}
 
     @staticmethod
     def _compile_compare_current_basis_to_baseline_args(
@@ -2094,6 +2342,7 @@ class AssistantService:
             if isinstance(composite_review.get("summary"), dict)
             else {}
         )
+        assumption_detail = AssistantService._compact_assumption_detail_from_packet(packet)
         return {
             "plan": {
                 "playbook": plan.get("playbook"),
@@ -2145,9 +2394,85 @@ class AssistantService:
             "score_breakdown": packet.get("score_breakdown", {}),
             "policy_trace": packet.get("policy_trace", {}),
             "recommended_changes": packet.get("recommended_changes", [])[:3],
+            "assumption_detail": assumption_detail,
             "accepted_analysis_basis": packet.get("accepted_analysis_basis", {}),
             "proposal_basis": packet.get("proposal_basis", {}),
         }
+
+    @staticmethod
+    def _compact_assumption_detail_from_packet(packet: dict[str, Any]) -> dict[str, Any]:
+        evidence_packets = (
+            packet.get("evidence_packets")
+            if isinstance(packet.get("evidence_packets"), list)
+            else []
+        )
+        for item in evidence_packets:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("evidence_key") or "").strip() != "assumption_detail":
+                continue
+            summary = item.get("summary") if isinstance(item.get("summary"), dict) else {}
+            selected_ldf = (
+                summary.get("selected_ldf")
+                if isinstance(summary.get("selected_ldf"), list)
+                else []
+            )
+            fitted_tail_ldf = (
+                summary.get("fitted_tail_ldf")
+                if isinstance(summary.get("fitted_tail_ldf"), list)
+                else []
+            )
+            return {
+                "analysis_basis": summary.get("analysis_basis", {}),
+                "parameter_tail": (
+                    summary.get("parameters", {}).get("tail", {})
+                    if isinstance(summary.get("parameters"), dict)
+                    else {}
+                ),
+                "tail_active": summary.get("tail_active"),
+                "tail_mode": summary.get("tail_mode"),
+                "tail_applies_from_age": summary.get("tail_applies_from_age"),
+                "selected_ldf_below_1": AssistantService._ldf_rows_below_one(
+                    selected_ldf
+                ),
+                "fitted_tail_ldf_below_1": AssistantService._ldf_rows_below_one(
+                    fitted_tail_ldf
+                ),
+                "min_selected_ldf": AssistantService._min_ldf_value(selected_ldf),
+                "min_fitted_tail_ldf": AssistantService._min_ldf_value(fitted_tail_ldf),
+            }
+        return {}
+
+    @staticmethod
+    def _ldf_rows_below_one(rows: list[Any]) -> list[dict[str, Any]]:
+        output: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            value = AssistantService._optional_float(row.get("ldf"))
+            if value is not None and value < 1.0:
+                output.append(dict(row))
+        return output
+
+    @staticmethod
+    def _min_ldf_value(rows: list[Any]) -> float | None:
+        values: list[float] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            value = AssistantService._optional_float(row.get("ldf"))
+            if value is not None:
+                values.append(value)
+        return min(values) if values else None
+
+    @staticmethod
+    def _optional_float(value: object) -> float | None:
+        try:
+            if value is None:
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _build_segment_memory_hint(segment_memory: dict[str, Any]) -> str:
@@ -2586,15 +2911,22 @@ class AssistantService:
 
     @staticmethod
     def _is_exact_numeric_question(prompt: str) -> bool:
+        broad_review_terms = {
+            "review",
+            "rank",
+            "recommend",
+            "selection-worthy",
+            "sensitivity",
+            "candidate",
+            "candidates",
+        }
+        if AssistantService._prompt_mentions_subunit_factor_check(prompt) and not any(
+            term in prompt for term in broad_review_terms
+        ):
+            return True
         if AssistantService._is_recommendation_question(prompt):
             review_terms = {
-                "review",
-                "rank",
-                "recommend",
-                "selection-worthy",
-                "sensitivity",
-                "candidate",
-                "candidates",
+                *broad_review_terms,
             }
             exact_override_terms = {
                 "exact",
@@ -2607,6 +2939,12 @@ class AssistantService:
                 "vector",
             }
             exact_detail_request_terms = {
+                "check",
+                "confirm",
+                "verify",
+                "validate",
+                "tell me if",
+                "whether",
                 "what are",
                 "what is",
                 "show me",
@@ -2651,6 +2989,12 @@ class AssistantService:
                 return False
         request_terms = {
             "show me",
+            "check",
+            "confirm",
+            "verify",
+            "validate",
+            "tell me if",
+            "whether",
             "compare",
             "comparison",
             "side by side",
@@ -2698,9 +3042,61 @@ class AssistantService:
             "fitted tail",
             "fitted ldf",
             "uwy",
+            "sub-1",
+            "sub 1",
+            "subunit",
+            "below 1",
+            "below 1.0",
+            "under 1",
+            "under 1.0",
         }
         return any(term in prompt for term in request_terms) and any(
             term in prompt for term in subject_terms
+        )
+
+    @staticmethod
+    def _prompt_mentions_subunit_factor_check(prompt: str) -> bool:
+        text = str(prompt or "").strip().lower()
+        if not text:
+            return False
+        condition_terms = (
+            "below 1",
+            "below 1.0",
+            "under 1",
+            "under 1.0",
+            "sub-1",
+            "sub 1",
+            "subunit",
+            "not below 1",
+            "not below 1.0",
+        )
+        if not any(term in text for term in condition_terms):
+            return False
+        request_terms = (
+            "check",
+            "confirm",
+            "verify",
+            "validate",
+            "tell me if",
+            "whether",
+            "are any",
+            "any",
+            "status",
+            "explain",
+            "review",
+        )
+        subject_terms = (
+            "ldf",
+            "ldfs",
+            "factor",
+            "factors",
+            "tail",
+            "selected",
+            "fitted",
+            "status",
+        )
+        return any(term in text for term in request_terms) and any(
+            term in text for term in subject_terms
         )
 
     @staticmethod

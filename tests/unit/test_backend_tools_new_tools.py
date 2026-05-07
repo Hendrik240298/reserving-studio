@@ -368,6 +368,12 @@ class _BackendStub:
         )
 
 
+class _ReserveChangeFailingBackend(_BackendStub):
+    def explain_reserve_change(self, payload):
+        self.last_reserve_change_payload = payload
+        raise ValueError("basis_key must match the explicit parameters for this request")
+
+
 def test_backend_tools_support_new_ai_tools() -> None:
     backend = _BackendStub()
     tools = BackendReservingTools(backend=backend)
@@ -700,3 +706,48 @@ def test_explain_reserve_change_drops_invalid_drop_entries() -> None:
     assert backend.last_reserve_change_payload is not None
     assert backend.last_reserve_change_payload.drop == [["2002", 12]]
     assert backend.last_reserve_change_payload.drop_valuation == [["2000", 12]]
+
+
+def test_explain_reserve_change_basis_mismatch_returns_structured_rejection() -> None:
+    tools = BackendReservingTools(backend=_ReserveChangeFailingBackend())
+
+    reserve_change = tools.call_tool(
+        "tool_explain_reserve_change",
+        {
+            "session_id": "s-1",
+            "basis_key": "stale-basis-key",
+            "basis_parameters": {
+                "average": "volume",
+                "drop": [],
+                "drop_valuation": [],
+                "tail": {
+                    "curve": "weibull",
+                    "attachment_age": None,
+                    "projection_period": 0,
+                    "fit_period": [],
+                },
+                "bf_apriori": {},
+                "final_ultimate": "chainladder",
+                "selected_ultimate_by_uwy": {},
+            },
+            "average": "volume",
+            "drop": [],
+            "drop_valuation": [],
+            "tail": {
+                "curve": "weibull",
+                "attachment_age": 27,
+                "projection_period": 0,
+                "fit_period": [12, 108],
+            },
+            "bf_apriori": {},
+            "final_ultimate": "chainladder",
+            "selected_ultimate_by_uwy": {},
+        },
+    )
+
+    assert reserve_change["rejected"] is True
+    assert (
+        reserve_change["rejection_reason"]
+        == "basis_key must match the explicit parameters for this request"
+    )
+    assert reserve_change["execution_status"] == "rejected"

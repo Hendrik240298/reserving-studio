@@ -32,6 +32,7 @@ class _CompositeTools:
         {"type": "function", "function": {"name": "tool_run_quarter_close_review"}},
         {"type": "function", "function": {"name": "tool_run_drop_review"}},
         {"type": "function", "function": {"name": "tool_run_tail_review"}},
+        {"type": "function", "function": {"name": "tool_get_assumption_context_detail"}},
     ]
 
     def __init__(self) -> None:
@@ -156,6 +157,22 @@ class _CompositeTools:
                 "continuity_notes": [],
                 "policy_trace": {},
                 "run_metadata": {"run_id": "tail-run"},
+            }
+        if function_name == "tool_get_assumption_context_detail":
+            return {
+                "session_id": "s-1",
+                "parameters": args.get("parameters", {}),
+                "selected_ldf": [
+                    {"age": 42, "development_label": "42-45", "ldf": 1.01}
+                ],
+                "fitted_tail_ldf": [
+                    {"age": 45, "development_label": "45-48", "ldf": 1.005},
+                    {"age": 48, "development_label": "48-51", "ldf": 0.999},
+                ],
+                "tail_active": True,
+                "observed_a2a": [],
+                "bf_apriori_by_uwy": {},
+                "selected_ultimate_by_uwy": {},
             }
         raise AssertionError(f"Unexpected tool: {function_name}")
 
@@ -416,7 +433,26 @@ def test_broad_tail_review_prompt_uses_composite_review_and_creates_proposal() -
         },
     )
 
-    assert [name for name, _args in tools.calls] == ["tool_run_tail_review"]
+    assert [name for name, _args in tools.calls] == [
+        "tool_run_tail_review",
+        "tool_get_assumption_context_detail",
+    ]
+    assumption_args = tools.calls[1][1]
+    assert assumption_args["basis_key"] == result["memory_snapshot"]["proposal_basis"]["basis_key"]
+    assert assumption_args["parameters"]["tail"]["attachment_age"] == 45
+    compact_packet = AssistantService._compact_deterministic_packet(
+        result["deterministic_packet"]
+    )
+    assert compact_packet["assumption_detail"]["fitted_tail_ldf_below_1"] == [
+        {"age": 48, "development_label": "48-51", "ldf": 0.999}
+    ]
+    narration_assumption = result["narration_packet"]["supporting_evidence"][
+        "assumption_detail"
+    ]
+    assert narration_assumption["parameter_tail"]["attachment_age"] == 45
+    assert narration_assumption["fitted_tail_ldf_below_1"] == [
+        {"age": 48, "development_label": "48-51", "ldf": 0.999}
+    ]
     proposal = result["memory_snapshot"]["proposal_basis"]
     assert proposal["status"] == "pending"
     assert proposal["source_review_type"] == "tail_review"

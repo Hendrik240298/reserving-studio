@@ -69,6 +69,7 @@ def test_recommendation_with_pending_proposal_scaffold_preserves_basis() -> None
     assert packet["basis"]["basis_changed"] is False
     assert packet["proposal"]["exists"] is True
     assert packet["proposal"]["label"] == "drop_1"
+    assert packet["proposal"]["proposed_drops"] == ["AY 2022 age 24"]
     assert "proposal_changed_basis" in packet["blocked_claims"]
     assert packet["reviewed"]["evidence_ids"] == ["ev-1"]
     assert "Peer review required" in packet["caveats"]
@@ -166,3 +167,36 @@ def test_narration_prompt_blocks_pending_status_when_no_proposal_exists() -> Non
 
     assert "If proposal.exists is false, do not mention a pending proposal" in prompt
     assert "never through natural-language replies" in prompt
+
+
+def test_proposal_status_lists_every_proposed_drop() -> None:
+    packet = {
+        "basis": {"current_basis_label": "Basis used: current baseline session."},
+        "reviewed": {"scope": "Drop review"},
+        "recommendation": {
+            "status": "reasonable_alternative",
+            "summary": "Top ranked drops improve diagnostics.",
+        },
+        "proposal": {
+            "exists": True,
+            "label": "combined_drop_review_top_5",
+            "proposed_drops": [
+                "AY 2002 age 39",
+                "AY 2001 age 60",
+                "AY 2001 age 12",
+                "AY 2002 age 21",
+                "AY 2003 age 9",
+            ],
+        },
+        "execution": {"status": "executed_exactly"},
+        "caveats": [],
+        "required_answer_sections": ["basis_used", "proposal_status"],
+        "blocked_claims": ["proposal_changed_basis"],
+    }
+
+    prompt = build_narration_prompt(packet)
+    fallback = render_narration_fallback(packet)
+
+    assert "list every proposed drop" in prompt
+    assert "AY 2002 age 39" in fallback
+    assert "AY 2003 age 9" in fallback
