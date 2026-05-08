@@ -10,6 +10,7 @@ PyYAML
 pyodbc
 dash
 plotly
+streamlit
 seaborn
 openpyxl
 chainladder

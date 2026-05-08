@@ -6,3 +6,6 @@ __pycache__/
 Plan.md
 sessions/
 tests/artifacts/e2e/
+notes/**
+chats/**
+notes
