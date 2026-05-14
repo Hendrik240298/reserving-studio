@@ -1,9 +1,7 @@
-# pyright: reportGeneralTypeIssues=false
 from __future__ import annotations
 
 import logging
 import os
-import threading
 from pathlib import Path
 
 import chainladder as cl
@@ -11,11 +9,6 @@ import pandas as pd
 
 from source.claims_collection import ClaimsCollection
 from source.config_manager import ConfigManager
-from source.dashboard import Dashboard
-from source.interactive_session import (
-    FinalizePayload,
-    InteractiveSessionController,
-)
 from source.premium_repository import PremiumRepository
 from source.reserving import Reserving
 from source.triangle import Triangle
@@ -195,9 +188,7 @@ def _load_quarterly_csv() -> pd.DataFrame:
 
 
 def _load_sample_premium_csv() -> pd.DataFrame:
-    premium_path = (
-        Path(__file__).resolve().parent.parent / "data" / "quarterly_premium.csv"
-    )
+    premium_path = Path(__file__).resolve().parent.parent / "data" / "quarterly_premium.csv"
     if not premium_path.exists():
         raise FileNotFoundError(f"Sample premium CSV not found at {premium_path}")
     return pd.read_csv(premium_path)
@@ -418,10 +409,6 @@ def _normalize_selected_ultimate_by_uwy(raw: object) -> dict[str, str] | None:
     return normalized or None
 
 
-def create_interactive_session_controller() -> InteractiveSessionController:
-    return InteractiveSessionController()
-
-
 def build_workflow_from_collections(
     claims: ClaimsCollection,
     premium: PremiumRepository,
@@ -475,58 +462,6 @@ def _claims_values_are_cumulative(
     raise ValueError("workflow.input.claims.values_are_cumulative must be boolean")
 
 
-def launch_dashboard(
-    reserving: Reserving,
-    *,
-    config: ConfigManager | None = None,
-    controller: InteractiveSessionController | None = None,
-    debug: bool = False,
-    port: int = 8050,
-) -> Dashboard:
-    dashboard = Dashboard(reserving, config=config, controller=controller)
-    dashboard.show(debug=debug, port=port)
-    return dashboard
-
-
-def wait_for_finalize(
-    controller: InteractiveSessionController,
-    *,
-    timeout_seconds: float | None = None,
-) -> FinalizePayload:
-    finished = controller.done_event.wait(timeout=timeout_seconds)
-    if not finished:
-        raise TimeoutError("Interactive session did not finalize before timeout.")
-    if controller.error:
-        raise RuntimeError(f"Interactive session failed: {controller.error}")
-    if controller.canceled:
-        raise RuntimeError("Interactive session was canceled.")
-    if controller.finalized_payload is None:
-        raise RuntimeError("Interactive session completed without finalized payload.")
-    return controller.finalized_payload
-
-
-def run_interactive_session(
-    reserving: Reserving,
-    *,
-    config: ConfigManager | None = None,
-    controller: InteractiveSessionController | None = None,
-    port: int = 8050,
-    timeout_seconds: float | None = None,
-    debug: bool = False,
-) -> FinalizePayload:
-    active_controller = controller or create_interactive_session_controller()
-    dashboard = Dashboard(reserving, config=config, controller=active_controller)
-
-    thread = threading.Thread(
-        target=dashboard.show,
-        kwargs={"debug": debug, "port": port},
-        daemon=True,
-    )
-    thread.start()
-
-    return wait_for_finalize(active_controller, timeout_seconds=timeout_seconds)
-
-
 def load_config() -> ConfigManager | None:
     config_path = os.environ.get("RESERVING_CONFIG", "config.yml")
     path = Path(config_path)
@@ -536,10 +471,9 @@ def load_config() -> ConfigManager | None:
 
 
 def main() -> None:
-    config = load_config()
-    triangle = build_sample_triangle()
-    reserving = build_reserving(triangle, config=config)
-    launch_dashboard(reserving, config=config)
+    raise SystemExit(
+        "The legacy dashboard app has been archived. Use `uv run python -m harness.cli --help` for harness tools or import `source.app` deterministic builders."
+    )
 
 
 if __name__ == "__main__":

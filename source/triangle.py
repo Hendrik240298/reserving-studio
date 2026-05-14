@@ -302,4 +302,6 @@ class Triangle:
     def get_triangle(self, type="incurred"):
         if not self._triangle.is_cumulative:
             self._triangle = self._triangle.incr_to_cum()
+        if type == "Premium_selected":
+            return self._triangle[[type]].copy()
         return self._triangle[[type, "Premium_selected"]].copy()

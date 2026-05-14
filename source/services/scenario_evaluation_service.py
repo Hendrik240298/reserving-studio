@@ -9,7 +9,7 @@ import uuid
 
 import pandas as pd
 
-from source.api.schemas import (
+from source.services.review_models import (
     DiagnosticEvidence,
     DiagnosticFinding,
     DiagnosticRecommendation,

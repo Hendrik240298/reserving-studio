@@ -10,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from source.api.schemas import RunMetadata
+from source.services.review_models import RunMetadata
 from source.services.diagnostics_service import DiagnosticFinding
 from source.services.scenario_evaluation_service import ScenarioEvaluationService
 

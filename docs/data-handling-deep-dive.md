@@ -122,22 +122,12 @@ The triangle is stored as cumulative internally.
 - selected `ultimate` based on final/mapped method
 - `selected_method`
 
-This table is the primary numeric output consumed by UI tables and script finalization.
+This table is the primary numeric output consumed by harness tools and deterministic downstream processing.
 
-## 7) UI payload data structures
-
-`source/interactive_session.py` defines typed snapshots:
-
-- `ParamsStoreSnapshot`
-- `ResultsStoreSnapshot`
-- `FinalizePayload`
-
-`FinalizePayload.results_df` is the machine-readable numeric output for downstream ETL/reporting.
-
-## 8) Data handling pitfalls to watch during extension
+## 7) Data handling pitfalls to watch during extension
 
 - introducing new input schema without adding canonical mapping
 - relying on ambiguous period strings
 - silently allowing duplicated premium keys
 - forgetting to update cache-key construction when adding new model parameters
-- bypassing `ConfigManager` and causing session drift across tabs/processes
+- bypassing `ConfigManager` and breaking reproducible config-driven runs

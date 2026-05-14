@@ -1,48 +1,29 @@
 # reserving-studio
 
-## Preview
+## Harness Native Reserving Studio
 
-### AI Chat Interface 
+This branch is now centered on a harness-native actuarial workbench.
 
-<img src=".github/images/ai-interface.png" alt="AI interface" width="100%" />
+- `source/` contains the active deterministic reserving core and domain services.
+- `harness/` contains the active harness interface: executable tools, tool inventory, skills, templates, and generated artifacts.
+- `_archive/legacy_gui_api_chat/` contains the archived dashboard, REST API, AI chat loop, and related tests/docs.
+- `_salvage/legacy_useful_parts/` contains useful old pieces that are not active architecture.
 
-### reserving-studio
-The Data tab shows claims and premium triangles. You can toggle between incremental and cumulative triangles. Each triangle can also be viewed in relation to another one, for example incurred in relation to premium.
+## Start Here
 
-<img src=".github/images/data-tab.png" alt="Data tab preview" width="100%" />
+Read `AGENTS.md` first.
 
-The Chainladder tab displays link ratios, loss development factors, and fitted projections. Different weighting schemes can be applied, and selected link ratios can be dropped. For tail estimation, you can choose different methods, set the fitting interval, and define the starting point.
+For active non-archived docs, start with `docs/README.md`.
 
-<img src=".github/images/chainladder-tab.png" alt="Chainladder tab preview" width="100%" />
+Then for active harness work read:
 
-<img src=".github/images/bornhuetter-tab.png" alt="Bornhuetter tab preview" width="100%" />
+- `harness/README.md`
+- `harness/tools/README.md`
+- `harness/tools/drop_review.md`
+- `harness/skills/drop-review/SKILL.md`
+- `harness/templates/drop_review_packet.md`
 
-<img src=".github/images/results-tab.png" alt="Results tab preview" width="100%" />
-
-# Get started
-
-## Documentation (actuary-first)
-
-- Complete own-data onboarding: `docs/start-with-your-data.md`
-- Quickstart: `docs/actuary-quickstart.md`
-- Workflow guide: `docs/actuary-workflow.md`
-- Config reference: `docs/config-practical-reference.md`
-- Practical notes: `docs/practical-notes.md`
-- Sync details: `docs/cross-tab-sync.md`
-- Documentation plan: `docs/documentation-plan.md`
-
-## Documentation (technical)
-
-- Workflow map: `docs/workflow-technical-map.md`
-- Results-tab impact map: `docs/results-tab-change-impact-map.md`
-- Architecture guide: `docs/technical-architecture.md`
-- Data handling deep dive: `docs/data-handling-deep-dive.md`
-- API reference: `docs/api-reference.md`
-- Troubleshooting index: `docs/troubleshooting-index.md`
-- Architecture diagrams: `docs/architecture-diagram.md`
-- Docs changelog: `docs/docs-changelog.md`
-
-## Install (uv)
+## Install
 
 ```bash
 uv venv
@@ -50,67 +31,31 @@ source .venv/bin/activate
 uv pip install -r requirements.txt
 ```
 
-## Activate environment
+## Active Command
 
 ```bash
-source .venv/bin/activate
+uv run python -m harness.cli drop-review --config examples/config_quarterly.yml --candidate-limit 5
 ```
 
-## Run server (Dash)
+The command writes a markdown review packet to `harness/artifacts/` unless `--output` is provided.
+
+## Active Deterministic Core
+
+- `source/claims_collection.py`
+- `source/premium_repository.py`
+- `source/triangle.py`
+- `source/reserving.py`
+- `source/services/`
+
+## Validation
 
 ```bash
-uv run python -m source.app
+uv run pytest tests/unit/test_harness_markdown.py -q
+uv run pytest tests/unit/test_drop_review_service.py -q
+uv run pytest tests/unit/test_scenario_evaluation_service.py -q
 ```
 
-Open http://127.0.0.1:8050
+## Notes
 
-## Default input workflow
-
-- The app startup uses the chainladder quarterly sample claims data and the local premium file at `data/quarterly_premium.csv`.
-- Inputs are normalized through `source/claims_collection.py` and `source/premium_repository.py` before building the reserving triangle.
-- This keeps one consistent ingestion path for sample data now, and allows later extension to CSV/SQL adapters.
-
-## Scripted custom input workflow
-
-- For custom SQL/CSV reads, use your own Python script to prepare claims and premium dataframes, then pass them into `source.app.build_workflow_from_dataframes(...)`.
-- Start the GUI from script with `source.app.run_interactive_session(...)`.
-- In the Results tab, click **Finalize & Continue** to hand control back to your script with finalized parameters and results payload.
-- A ready-to-run quarterly example is available at `examples/run_quarterly_interactive.py`.
-- A CLRD portfolio-level example is available at `examples/run_clrd_interactive.py`.
-- A SQL-template example runner is available at `examples/run_sql_interactive.py`.
-- Both examples now load their own YAML config (`examples/config_quarterly.yml` and `examples/config_clrd.yml`).
-- Use `granularity: quarterly|yearly` in the example config to control how claims and premium data are aggregated.
-- The CLRD example still filters to `LOB = comauto` by default (`workflow.clrd_lob` in config).
-- SQL templates live in `examples/sql/` and are referenced from `examples/config_sql_template.yml`.
-- SQL connection settings are defined in YAML (`driver`, `server`, `database`, `trusted_connection`).
-- You can configure source-to-canonical column mapping in YAML via `workflow.input.claims.column_map` and `workflow.input.premium.column_map`.
-
-```bash
-uv run python examples/run_quarterly_interactive.py
-uv run python examples/run_quarterly_ai_assistant.py
-uv run python examples/run_clrd_interactive.py
-uv run python examples/run_sql_interactive.py
-```
-
-To start the quarterly AI assistant example:
-
-1. Set `OPENROUTER_API_KEY` in `.env` or `.env.local`.
-2. Run `uv run python examples/run_quarterly_ai_assistant.py` from the repo root.
-3. Open `http://127.0.0.1:8052` in your browser.
-
-The AI assistant example loads `examples/config_quarterly.yml`, creates a quarterly workflow, and launches the standalone AI Dash workspace.
-
-## Run dashboard E2E tests
-
-The E2E suite uses Playwright to open the Dash app in a real Chromium browser and verify key user flows deterministically (drop selection recalculation and BF apriori-driven results updates).
-
-```bash
-uv run python -m playwright install chromium
-uv run python -m pytest tests/e2e -m e2e -q
-```
-
-## Optional: custom config path
-
-```bash
-RESERVING_CONFIG=config.yml uv run python -m source.app
-```
+- The old dashboard/API/chat shell is archived and should not receive new active dependencies.
+- New harness tools should call deterministic `source/` builders and services directly.

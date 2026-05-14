@@ -191,29 +191,13 @@ def test_drop_review_ranks_candidates_and_applies_house_preferences(
         candidate_limit=3,
     )
 
-    first_candidate_signature = SegmentMemoryService.scenario_signature(
-        result["candidates"][0]["parameters"]
-    )
-    assert (
-        result["recommendation"]["candidate_id"]
-        == f"drop_ay2022_age24_{first_candidate_signature[:8]}"
-    )
-    assert (
-        result["recommendation"]["scenario_id"]
-        == f"review_drop_{first_candidate_signature}"
-    )
-    assert result["candidates"][0]["candidate_id"] == (
-        f"drop_ay2022_age24_{first_candidate_signature[:8]}"
-    )
-    assert (
-        result["candidates"][0]["scenario_id"]
-        == f"review_drop_{first_candidate_signature}"
-    )
+    assert result["recommendation"]["candidate_id"] == "drop_ay2022_age24"
+    assert result["candidates"][0]["candidate_id"] == "drop_ay2022_age24"
     assert result["candidates"][0]["recommendation_class"] == "recommend"
     combo = next(
         item
         for item in result["candidates"]
-        if item["candidate_id"].startswith("drop_ay2021_age36__ay2022_age24_")
+        if item["candidate_id"] == "drop_ay2021_age36__ay2022_age24"
     )
     assert combo["policy_trace"]["house_preference_conflicts"]
 
@@ -243,7 +227,7 @@ def test_drop_review_marks_rejected_before_candidate_as_avoid(monkeypatch) -> No
         "drop": [["2022", 24]],
     }
     signature = SegmentMemoryService.scenario_signature(candidate_params)
-    candidate_id = f"drop_ay2022_age24_{signature[:8]}"
+    candidate_id = "drop_ay2022_age24"
     evaluations = {
         "baseline": _evaluation_payload(
             scenario_id="baseline",
@@ -297,4 +281,3 @@ def test_drop_review_marks_rejected_before_candidate_as_avoid(monkeypatch) -> No
 
     assert result["candidates"][0]["policy_trace"]["rejected_before"] is True
     assert result["candidates"][0]["recommendation_class"] == "avoid"
-    assert result["candidates"][0]["scenario_id"] == f"review_drop_{signature}"

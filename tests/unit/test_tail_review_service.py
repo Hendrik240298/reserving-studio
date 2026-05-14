@@ -189,7 +189,6 @@ def test_tail_review_ranks_stable_candidate_above_unstable_one(monkeypatch) -> N
         result["recommendation"]["candidate_id"]
         == result["candidates"][0]["candidate_id"]
     )
-    assert result["recommendation"]["scenario_id"] == f"review_tail_{top_signature}"
     assert result["candidates"][0]["recommendation_class"] == "recommend"
     unstable = next(
         item

@@ -83,7 +83,6 @@ class AssumptionReviewService:
         return {
             "review_type": "drop_review",
             "baseline": {
-                "scenario_id": baseline.evaluation.scenario_id,
                 "score": baseline.evaluation.score,
                 "governance": baseline.evaluation.governance,
                 "parameters": dict(baseline_params),
@@ -410,14 +409,12 @@ class AssumptionReviewService:
             drops = {item for item in baseline_drop_pairs if item is not None}
             drops.add(pair)
             params["drop"] = [list(item) for item in sorted(drops)]
-            scenario_id = self._review_scenario_id(params=params, review_type="drop")
             candidates.append(
                 {
                     "candidate_id": self._drop_candidate_id(
                         params=params,
                         drop_pairs=[pair],
                     ),
-                    "scenario_id": scenario_id,
                     "summary": f"Add drop for AY {pair[0]} age {pair[1]}",
                     "parameters": params,
                     "drop_pairs": [pair],
@@ -430,14 +427,12 @@ class AssumptionReviewService:
             for pair in combo_pairs:
                 drops.add(pair)
             params["drop"] = [list(item) for item in sorted(drops)]
-            scenario_id = self._review_scenario_id(params=params, review_type="drop")
             candidates.append(
                 {
                     "candidate_id": self._drop_candidate_id(
                         params=params,
                         drop_pairs=combo_pairs,
                     ),
-                    "scenario_id": scenario_id,
                     "summary": "Combine the top two supported drop candidates",
                     "parameters": params,
                     "drop_pairs": combo_pairs,
@@ -537,7 +532,6 @@ class AssumptionReviewService:
         )
         return {
             "candidate_id": str(candidate.get("candidate_id")),
-            "scenario_id": str(candidate.get("scenario_id") or "").strip() or None,
             "summary": str(candidate.get("summary", "")),
             "parameters": params,
             "score": score_breakdown["score"],
@@ -1326,22 +1320,15 @@ class AssumptionReviewService:
             return {
                 "recommendation_class": "avoid",
                 "candidate_id": None,
-                "scenario_id": None,
                 "summary": "No tested candidates were available.",
                 "caveats": ["missing_candidates"],
                 "alternatives": [],
-                "alternative_scenario_ids": [],
             }
         recommendation_class = str(best.get("recommendation_class", "watch"))
         alternatives = [
             str(item.get("candidate_id"))
             for item in ordered[1:3]
             if isinstance(item, dict) and str(item.get("candidate_id", "")).strip()
-        ]
-        alternative_scenario_ids = [
-            str(item.get("scenario_id"))
-            for item in ordered[1:3]
-            if isinstance(item, dict) and str(item.get("scenario_id", "")).strip()
         ]
         summary_by_class = {
             "recommend": "Tested evidence supports adopting the top-ranked candidate.",
@@ -1357,13 +1344,11 @@ class AssumptionReviewService:
         return {
             "recommendation_class": recommendation_class,
             "candidate_id": best.get("candidate_id"),
-            "scenario_id": best.get("scenario_id"),
             "summary": summary_by_class.get(
                 recommendation_class, summary_by_class["watch"]
             ),
             "caveats": caveats,
             "alternatives": alternatives,
-            "alternative_scenario_ids": alternative_scenario_ids,
         }
 
     @staticmethod
@@ -1392,10 +1377,9 @@ class AssumptionReviewService:
                 normalized_pairs.append((year, age))
         normalized_pairs.sort()
         pair_label = "__".join(f"ay{year}_age{age}" for year, age in normalized_pairs)
-        signature = SegmentMemoryService.scenario_signature(params)[:8]
         if pair_label:
-            return f"drop_{pair_label}_{signature}"
-        return f"drop_{signature}"
+            return f"drop_{pair_label}"
+        return "drop_candidate"
 
     @staticmethod
     def _diagnostic_classification(code: str) -> dict[str, Any] | None:
