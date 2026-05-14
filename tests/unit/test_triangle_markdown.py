@@ -23,8 +23,8 @@ def test_render_triangle_markdown_marks_bolted_a2a_cells() -> None:
     assert result.triangle_type == "a2a"
     assert result.triangle_view == "cumulative"
     assert "| Origin | 3 | 6 | 9 | 12 |" in result.markdown
-    assert "~~1.464~~" in result.markdown
-    assert "~~7.689~~" in result.markdown
+    assert "~~**1.464**~~" in result.markdown
+    assert "~~**7.689**~~" in result.markdown
 
 
 def test_render_triangle_markdown_supports_premium_alias() -> None:
@@ -47,6 +47,7 @@ def test_render_triangle_markdown_supports_yearly_headers() -> None:
 
     assert result.triangle_view == "cumulative"
     assert "| Origin | 12 | 24 | 36 | 48 |" in result.markdown
+    assert "154,058.00" in result.markdown
 
 
 def test_render_triangle_markdown_supports_incremental_view() -> None:

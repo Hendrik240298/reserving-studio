@@ -122,6 +122,7 @@ def _render_value_triangle(
         development_values,
         values,
         bolted_drop_set,
+        value_kind="value",
     )
 
 
@@ -154,6 +155,7 @@ def _render_a2a_triangle(
         development_values,
         link_ratios,
         bolted_drop_set,
+        value_kind="ratio",
     )
 
 
@@ -163,6 +165,7 @@ def _render_table(
     development_values: list[int],
     values: np.ndarray,
     bolted_drop_set: set[tuple[str, int]],
+    value_kind: str,
 ) -> str:
     n_origins, n_devs = values.shape
     origins = origins[:n_origins]
@@ -180,12 +183,19 @@ def _render_table(
             if pd.isna(value):
                 row.append("")
                 continue
-            cell = f"{value:.3f}"
+            cell = _format_numeric_cell(value, value_kind=value_kind)
             if (origin, development_value) in bolted_drop_set:
-                cell = f"~~{cell}~~"
+                cell = f"~~**{cell}**~~"
             row.append(cell)
         lines.append("| " + " | ".join(row) + " |")
     return "\n".join(lines)
+
+
+def _format_numeric_cell(value: Any, *, value_kind: str) -> str:
+    numeric_value = float(value)
+    if value_kind == "ratio":
+        return f"{numeric_value:.3f}"
+    return f"{numeric_value:,.2f}"
 
 
 def _format_origin_label(origin: Any) -> str:

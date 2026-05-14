@@ -9,3 +9,5 @@ sessions/
 .env.local
 chats/**
 whitepaper/
+harness/artifacts/*
+!harness/artifacts/.gitkeep
