@@ -180,6 +180,26 @@ def test_movement_diagnostics_detects_large_loss_proxy_and_ldf_gap() -> None:
     assert any(item["origin"] == "2022" for item in ldf["findings"])
 
 
+def test_movement_diagnostics_prefers_effective_tail_row_over_raw_ldf() -> None:
+    reserving = _FakeReserving()
+    aligned_link_ratios = pd.DataFrame(
+        {
+            12: [1.60, 1.60, 1.60, 1.60],
+            24: [1.28, 1.28, 1.28, None],
+            36: [1.00, 1.00, 1.00, None],
+        },
+        index=pd.Index(["2019", "2020", "2021", "2022"]),
+    )
+    aligned_link_ratios.loc["LDF"] = [1.80, 1.50, 1.0]
+    aligned_link_ratios.loc["Tail"] = [1.60, 1.28, 1.0]
+    reserving._heatmap["link_ratios"] = aligned_link_ratios
+
+    service = MovementDiagnosticsService(reserving)
+    ldf = service.run_ldf_consistency()
+
+    assert ldf["summary"]["finding_count"] == 0
+
+
 def test_late_emergence_benchmark_returns_rows() -> None:
     reserving = _FakeReserving()
     service = MovementDiagnosticsService(reserving)

@@ -6,7 +6,7 @@ The harness is only an orchestration shell. Deterministic `reserving-studio` cod
 
 ## Supported V1 Workflow
 
-- Drop review on the quarterly example config.
+- Native drop analysis on the quarterly example config using the deterministic `Triangle` / `Reserving` backbone.
 - Triangle to markdown for cumulative or incremental value triangles, plus cumulative A2A rendering.
 
 Run:

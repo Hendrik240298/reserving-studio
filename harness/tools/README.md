@@ -8,7 +8,7 @@ When a user asks for reserving work, first check this inventory, then use the ma
 
 | Tool | Status | Use When | Command / Doc |
 | --- | --- | --- | --- |
-| Drop review | Implemented v1 | The user asks to review/test development drops or asks for a drop review on the quarterly example data. | `harness/tools/drop_review.md` |
+| Drop review | Implemented v2 | The user asks to review/test development drops or asks for a native drop analysis on reserving data. | `harness/tools/drop_review.md` |
 | Triangle to Markdown | Implemented v1 | The user asks to render a reserving triangle as a markdown table and optionally strike out bolted cells. | `harness/tools/triangle_to_markdown.md` |
 
 ## Planned Tools
@@ -21,7 +21,7 @@ When a user asks for reserving work, first check this inventory, then use the ma
 
 ## Selection Rules
 
-- Use **Drop review** for requests like "run a drop review", "test development drops", or "review drop candidates".
+- Use **Drop review** for requests like "run a drop review", "test development drops", "review drop candidates", or "show the direct reserve impact of dropping this factor".
 - Use **Triangle to Markdown** for requests like "show the triangle as markdown", "render incurred/premium/a2a as a table", or "strike out bolted cells in a triangle".
 - Use the quarterly config by default when the user says "quarterly data" or does not provide another config: `examples/config_quarterly.yml`.
 - If the user provides another config path, use that config with the same capability command if it follows `reserving-studio` input conventions.

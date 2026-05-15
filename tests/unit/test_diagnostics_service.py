@@ -320,3 +320,30 @@ def test_data_quality_gate_triggers_for_internal_missing_and_no_premium() -> Non
     )
     codes = {item.code for item in run_result.findings}
     assert "DATA_QUALITY_GATE" in codes
+
+
+def test_latest_diagonal_checks_prefer_effective_tail_row_over_raw_ldf() -> None:
+    incurred = pd.DataFrame(
+        {
+            12: [100.0, 110.0, 120.0],
+            24: [160.0, 176.0, 192.0],
+        },
+        index=pd.Index(["2020", "2021", "2022"]),
+    )
+    link_ratios = pd.DataFrame(
+        {
+            12: [1.60, 1.60, 1.60],
+            24: [1.0, 1.0, 1.0],
+        },
+        index=pd.Index(["2020", "2021", "2022"]),
+    )
+    link_ratios.loc["LDF"] = [1.90, 1.0]
+    link_ratios.loc["Tail"] = [1.60, 1.0]
+
+    findings = DiagnosticsService(
+        latest_diagonal_deviation_threshold=0.05
+    )._latest_diagonal_actual_vs_expected(
+        {"incurred": incurred, "link_ratios": link_ratios}
+    )
+
+    assert findings == []

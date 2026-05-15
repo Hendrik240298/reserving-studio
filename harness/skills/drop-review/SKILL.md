@@ -1,12 +1,12 @@
 ---
 name: drop-review
-description: Run the deterministic drop-review tool for reserving data, then read and summarize the generated markdown packet. Use when the user asks for a drop review, development drop review, or to test development drop candidates.
+description: Run the native deterministic drop-review tool for reserving data, then read and summarize the generated markdown packet. Use when the user asks for a drop review, development drop review, or to test development drop candidates directly on the triangle and reserving backbone.
 compatibility: Harness Native Reserving Studio; portable Agent Skills format.
 ---
 
 # Drop Review Skill
 
-Use this skill when the user asks for a drop review or asks to test development drop candidates.
+Use this skill when the user asks for a drop review or asks to test development drop candidates directly on the deterministic triangle and reserving backbone.
 
 ## Steps
 
@@ -23,6 +23,12 @@ uv run python -m harness.cli drop-review --config examples/config_quarterly.yml 
 ```
 
 Use `--candidate-limit` from the user request when provided.
+
+Default analysis mode:
+
+- `--method chainladder`
+- no tail effect
+- no monotone tail correction
 
 ## Boundaries
 

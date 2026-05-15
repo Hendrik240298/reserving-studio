@@ -2,11 +2,11 @@
 
 ## When To Use
 
-Use this workflow when reviewing whether development/drop assumptions should be challenged or tested for the quarterly example workflow.
+Use this workflow when reviewing whether development/drop assumptions should be challenged or tested directly on the deterministic triangle and reserving backbone.
 
 ## Steps
 
-- Run the deterministic drop-review CLI command.
+- Run the deterministic native drop-review CLI command.
 - Open or read the generated markdown packet.
 - Summarize the recommendation, key evidence, candidate ranking, caveats, and next human decision.
 - Keep the answer grounded in the markdown packet and deterministic outputs.

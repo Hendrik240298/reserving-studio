@@ -65,7 +65,8 @@ def test_render_drop_review_packet_includes_result_and_execution_details() -> No
     assert "Drop review returned 2 candidates" in packet
     assert "`drop_2`" in packet
     assert "## Execution Details" in packet
-    assert "build_workflow_from_dataframes" in packet
-    assert "AssumptionReviewService.review_drops" in packet
+    assert "Triangle.from_claims" in packet
+    assert "Reserving.reserve" in packet
+    assert "DiagnosticsService.run" in packet
     assert "Config path: examples/config_quarterly.yml" in packet
     assert "Code version: abc123" in packet

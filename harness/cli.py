@@ -41,6 +41,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Maximum drop candidates to evaluate/display. Defaults to 5.",
     )
     drop_review.add_argument(
+        "--method",
+        choices=["chainladder", "bornhuetter_ferguson"],
+        default="chainladder",
+        help="Ultimate method for native drop analysis. Defaults to chainladder.",
+    )
+    drop_review.add_argument(
+        "--use-tail",
+        action="store_true",
+        help="Apply the session tail settings in native drop analysis. Default is no tail effect.",
+    )
+    drop_review.add_argument(
+        "--enforce-monotone-tail",
+        action="store_true",
+        help="Enable the legacy monotone tail correction. Default is off for native analysis.",
+    )
+    drop_review.add_argument(
         "--output",
         type=Path,
         default=None,
@@ -89,6 +105,9 @@ def _run_drop_review(args: argparse.Namespace) -> int:
             config_path=args.config,
             output_path=args.output,
             candidate_limit=args.candidate_limit,
+            method=args.method,
+            use_tail=args.use_tail,
+            enforce_monotone_tail=args.enforce_monotone_tail,
         )
     except Exception as exc:  # CLI boundary: keep failures concise for harnesses.
         print(f"drop-review failed: {exc}", file=sys.stderr)

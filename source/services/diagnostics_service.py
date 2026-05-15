@@ -417,10 +417,9 @@ class DiagnosticsService:
         if incurred.empty or link_ratios.empty:
             return []
 
-        ldf_row = link_ratios.loc[link_ratios.index.astype(str).isin(["LDF"])]
-        if ldf_row.empty:
+        ldf = self._effective_ldf_series(link_ratios)
+        if ldf is None:
             return []
-        ldf = ldf_row.iloc[0].apply(pd.to_numeric, errors="coerce")
         ldf_by_age = self._ldf_factor_by_age(ldf)
         numeric_incurred = incurred.apply(pd.to_numeric, errors="coerce")
         age_map: dict[int, object] = {}
@@ -1454,10 +1453,10 @@ class DiagnosticsService:
         if link_ratios is None or link_ratios.empty:
             return None
 
-        selected_ldf_row = link_ratios.loc[link_ratios.index.astype(str).isin(["LDF"])]
         selected_ldf_map: dict[int, float] = {}
-        if not selected_ldf_row.empty:
-            for col, raw_value in selected_ldf_row.iloc[0].items():
+        selected_ldf_series = self._effective_ldf_series(link_ratios)
+        if selected_ldf_series is not None:
+            for col, raw_value in selected_ldf_series.items():
                 age = self._parse_int(col)
                 value = self._scalar_or_none(raw_value)
                 if age is None or value is None or value <= 0:
@@ -1837,10 +1836,9 @@ class DiagnosticsService:
         ):
             return []
 
-        ldf_row = link_ratios.loc[link_ratios.index.astype(str).isin(["LDF"])]
-        if ldf_row.empty:
+        ldf = self._effective_ldf_series(link_ratios)
+        if ldf is None:
             return []
-        ldf = ldf_row.iloc[0].apply(pd.to_numeric, errors="coerce")
         ldf_by_age = self._ldf_factor_by_age(ldf)
         numeric_incurred = incurred.apply(pd.to_numeric, errors="coerce")
         ordered_cols = sorted(
@@ -1901,6 +1899,16 @@ class DiagnosticsService:
                 continue
             mapping[age] = float(value)
         return mapping
+
+    @staticmethod
+    def _effective_ldf_series(link_ratios: pd.DataFrame) -> pd.Series | None:
+        tail_row = link_ratios.loc[link_ratios.index.astype(str).isin(["Tail"])]
+        if not tail_row.empty:
+            return tail_row.iloc[0].apply(pd.to_numeric, errors="coerce")
+        ldf_row = link_ratios.loc[link_ratios.index.astype(str).isin(["LDF"])]
+        if ldf_row.empty:
+            return None
+        return ldf_row.iloc[0].apply(pd.to_numeric, errors="coerce")
 
     @staticmethod
     def _origin_sort_key(origin: object) -> tuple[int, str]:

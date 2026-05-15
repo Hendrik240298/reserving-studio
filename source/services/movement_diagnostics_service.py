@@ -57,9 +57,9 @@ class MovementDiagnosticsService:
             return {"findings": [], "summary": {"finding_count": 0}}
         link_ratios = link_ratios_raw.apply(pd.to_numeric, errors="coerce")
         incurred = incurred_raw.apply(pd.to_numeric, errors="coerce")
-        if "LDF" not in link_ratios.index:
+        ldf_row = self._effective_ldf_series(link_ratios)
+        if ldf_row is None:
             return {"findings": [], "summary": {"finding_count": 0}}
-        ldf_row = link_ratios.loc["LDF"]
         triangle_only = link_ratios.loc[
             ~link_ratios.index.astype(str).isin(["LDF", "Tail"])
         ]
@@ -351,6 +351,16 @@ class MovementDiagnosticsService:
             return str(origin.year)
         text = str(origin)
         return text[:4] if len(text) >= 4 and text[:4].isdigit() else text
+
+    @staticmethod
+    def _effective_ldf_series(link_ratios: pd.DataFrame) -> pd.Series | None:
+        tail_row = link_ratios.loc[link_ratios.index.astype(str).isin(["Tail"])]
+        if not tail_row.empty:
+            return tail_row.iloc[0].apply(pd.to_numeric, errors="coerce")
+        ldf_row = link_ratios.loc[link_ratios.index.astype(str).isin(["LDF"])]
+        if ldf_row.empty:
+            return None
+        return ldf_row.iloc[0].apply(pd.to_numeric, errors="coerce")
 
     @staticmethod
     def _preceding_cumulative(

@@ -279,6 +279,7 @@ class Reserving:
         self,
         final_ultimate: Literal["chainladder", "bornhuetter_ferguson"] = "chainladder",
         selected_ultimate_by_uwy: Optional[dict[str, str]] = None,
+        enforce_monotone_tail: bool = True,
     ):
         if self.development is None:
             raise ValueError(
@@ -296,8 +297,10 @@ class Reserving:
             self._triangle.get_triangle().latest_diagonal["Premium_selected"].to_frame()
         )
 
-        chainladder = self.chainladder()
-        bornhuetter = self.bornhuetter_ferguson()
+        chainladder = self.chainladder(enforce_monotone_tail=enforce_monotone_tail)
+        bornhuetter = self.bornhuetter_ferguson(
+            enforce_monotone_tail=enforce_monotone_tail
+        )
         self._chainladder_result = chainladder
         self._bornhuetter_result = bornhuetter
 
@@ -366,7 +369,8 @@ class Reserving:
         else:
             self.result = chainladder
 
-        self.correct_tail()
+        if enforce_monotone_tail:
+            self.correct_tail()
 
         self.df_results = cl_ultimate.copy().merge(
             cl_loss_ratio, right_index=True, left_index=True
@@ -449,34 +453,36 @@ class Reserving:
                 corrected_cdf
             )
 
-    def chainladder(self):
-        pipe = cl.Pipeline(
-            steps=[
-                ("dev", self.development),
-                ("tail", self.tail),
-                ("correct_tail", self.CorrectTail()),
-                ("model", cl.Chainladder()),
-            ]
-        )
+    def chainladder(self, *, enforce_monotone_tail: bool = True):
+        steps: list[tuple[str, Any]] = [("dev", self.development)]
+        if self.tail is not None:
+            steps.append(("tail", self.tail))
+            if enforce_monotone_tail:
+                steps.append(("correct_tail", self.CorrectTail()))
+        steps.append(("model", cl.Chainladder()))
+
+        pipe = cl.Pipeline(steps=steps)
 
         return pipe.fit(self._triangle.get_triangle())
 
-    def bornhuetter_ferguson(self):
+    def bornhuetter_ferguson(self, *, enforce_monotone_tail: bool = True):
         exposure = self._triangle.get_triangle()["Premium_selected"].latest_diagonal
         exposure = self._apply_bf_apriori_to_exposure(exposure)
         incurred = self._triangle.get_triangle()["incurred"]
 
-        pipe = cl.Pipeline(
-            steps=[
-                ("dev", self.development),
+        steps: list[tuple[str, Any]] = [("dev", self.development)]
+        if self.tail is not None:
+            steps.append(
                 (
                     "tail",
                     self.tail,
-                ),  # optional, include if you need a tail to reach ultimate
-                ("correct_tail", self.CorrectTail()),
-                ("model", self.bf),
-            ]
-        )
+                )
+            )
+            if enforce_monotone_tail:
+                steps.append(("correct_tail", self.CorrectTail()))
+        steps.append(("model", self.bf))
+
+        pipe = cl.Pipeline(steps=steps)
 
         # incurred: cumulative Triangle
         # exposure: Triangle or vector aligned to origins (e.g., Earned Premium)

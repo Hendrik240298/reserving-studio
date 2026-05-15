@@ -244,7 +244,8 @@ class UncertaintyService:
             link_ratios, pd.DataFrame
         ):
             return []
-        if "LDF" not in link_ratios.index:
+        ldf_row = UncertaintyService._effective_ldf_series(link_ratios)
+        if ldf_row is None:
             return []
 
         age_steps = [
@@ -257,7 +258,6 @@ class UncertaintyService:
             return []
         age_pairs = list(zip(age_steps[:-1], age_steps[1:]))
 
-        ldf_row = link_ratios.loc["LDF"]
         ldf_map: dict[int, object] = {}
         for key, value in ldf_row.items():
             try:
@@ -295,3 +295,13 @@ class UncertaintyService:
         if pd.isna(parsed):
             return None
         return float(parsed)
+
+    @staticmethod
+    def _effective_ldf_series(link_ratios: pd.DataFrame) -> pd.Series | None:
+        tail_row = link_ratios.loc[link_ratios.index.astype(str).isin(["Tail"])]
+        if not tail_row.empty:
+            return tail_row.iloc[0].apply(pd.to_numeric, errors="coerce")
+        ldf_row = link_ratios.loc[link_ratios.index.astype(str).isin(["LDF"])]
+        if ldf_row.empty:
+            return None
+        return ldf_row.iloc[0].apply(pd.to_numeric, errors="coerce")

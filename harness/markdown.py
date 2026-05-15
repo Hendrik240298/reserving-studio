@@ -48,8 +48,9 @@ def render_drop_review_packet(
             [
                 "- `ConfigManager.from_yaml`: loaded reserving config.",
                 "- `load_inputs_from_config`: loaded configured claims and premium data.",
-                "- `build_workflow_from_dataframes`: built deterministic `Reserving` workflow.",
-                "- `AssumptionReviewService.review_drops`: ran deterministic drop review.",
+                "- `ClaimsCollection`, `PremiumRepository`, and `Triangle.from_claims(...)`: built the deterministic triangle backbone.",
+                "- `Reserving.set_development`, `Reserving.set_tail`, `Reserving.set_bornhuetter_ferguson`, and `Reserving.reserve`: ran native drop analysis directly on the deterministic backbone.",
+                "- `DiagnosticsService.run` and `MovementDiagnosticsService.run_ldf_consistency`: generated deterministic drop candidates and evidence.",
             ]
         ),
         "data_lineage": _join_lines(
