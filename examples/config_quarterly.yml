@@ -13,6 +13,8 @@ workflow:
 session:
   path: sessions/quarterly.yml
 ai:
+  final_reports:
+    path: chats
   chat_logging:
     enabled: true
     path: chats

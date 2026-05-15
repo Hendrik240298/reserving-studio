@@ -16,11 +16,15 @@ segment: quarterly
 granularity: quarterly
 session:
   path: sessions/quarterly.yml
+ai:
+  final_reports:
+    path: chats
 ```
 
 - `segment`: run identifier used for session scoping.
 - `granularity`: `quarterly` or `yearly` aggregation of inputs.
 - `session.path`: where current parameter state is persisted.
+- `ai.final_reports.path`: default directory for one-markdown-per-conversation final report packets.
 - `first date` / `last date`: bounds used by claim-side validation logic.
 
 ## Workflow dataset presets

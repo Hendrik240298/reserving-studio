@@ -30,6 +30,8 @@ Default analysis mode:
 - no tail effect
 - no monotone tail correction
 
+The active implementation generates candidate drops directly from observed link-ratio outliers in the real triangle, then reruns `Reserving` candidate by candidate to compare reserve impact.
+
 ## Boundaries
 
 - Do not calculate reserves manually.

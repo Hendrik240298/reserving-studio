@@ -2,7 +2,7 @@
 
 ## Purpose
 - This repository is now centered on **Harness Native Reserving Studio**.
-- `source/` holds the active deterministic reserving core and domain services.
+- `source/` holds the active deterministic reserving core.
 - `harness/` holds the active harness interface: executable tools, tool inventory, skills, templates, and generated artifacts.
 - `_archive/legacy_gui_api_chat/` holds the old dashboard/API/chat/session shell.
 - `_salvage/legacy_useful_parts/` holds useful old pieces that are not active architecture.
@@ -22,7 +22,6 @@
 - `source/premium_repository.py`
 - `source/triangle.py`
 - `source/reserving.py`
-- `source/services/`
 - The active drop-review tool flow is:
 - user request
 - harness instructions
@@ -35,6 +34,12 @@
 - markdown template
 - generated packet
 - harness summary
+- The active final-report flow is:
+- user request for one stored deliverable
+- existing deterministic tool runs
+- AI review of tool result files
+- `python -m harness.cli final-report`
+- final markdown report
 
 ## Boundaries
 - Do not add new dependencies from active code into `_archive/` or `_salvage/`.
@@ -48,7 +53,7 @@
 - Only create or update a skill when the user explicitly asks.
 - If the user asks to turn something into a skill, prefer guided promotion over guessing: use the request details the user gave, then ask only for the missing high-impact fields.
 - High-impact missing fields are: skill name, when to use it, which existing tool(s) it should use, stop rules, and what it must not do.
-- A new skill must use active deterministic tools or active `source/` services. Do not build a skill on archived code.
+- A new skill must use active deterministic tools or active `source/` core modules. Do not build a skill on archived or salvaged code.
 
 ## Tool Versus Skill Versus Note
 - A `tool` is a deterministic executable capability.
@@ -72,10 +77,12 @@
 ## Commands
 - Drop review:
 - `uv run python -m harness.cli drop-review --config examples/config_quarterly.yml --candidate-limit 5`
+- Final report:
+- `uv run python -m harness.cli final-report --config examples/config_quarterly.yml --conversation-id quarterly-drop-review --title "Quarterly Drop Review" --input-file "drop-review:harness/artifacts/drop_review_quarterly.md"`
 - Local fast tests:
 - `uv run pytest tests/unit/test_harness_markdown.py -q`
-- `uv run pytest tests/unit/test_drop_review_service.py -q`
-- `uv run pytest tests/unit/test_scenario_evaluation_service.py -q`
+- `uv run pytest tests/unit/test_triangle_markdown.py -q`
+- `uv run pytest tests/unit/test_native_drop_analysis.py -q`
 
 ## Code Rules
 - Keep changes minimal and deterministic.

@@ -65,6 +65,7 @@ The native analysis path should:
 
 - use `ClaimsCollection`, `PremiumRepository`, and `Triangle.from_claims(...)`
 - use `Reserving.set_development`, `Reserving.set_tail`, and `Reserving.reserve`
+- generate candidate drops directly from observed link-ratio outliers in the real triangle
 - default to `chainladder`
 - default to no tail effect
 - default to no monotone tail correction
@@ -75,3 +76,7 @@ The native analysis path should:
 - Do not use this command to create a new reserving method.
 - Do not use this command when the user asks for an unsupported review workflow.
 - Do not manually calculate reserves if this command fails.
+
+## Final Report Use
+
+When the user wants one stored deliverable that combines this packet with other tool outputs, pass the generated markdown file into `harness/tools/final_report.md` rather than changing the drop-review output contract.

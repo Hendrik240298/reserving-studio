@@ -161,6 +161,20 @@ class ConfigManager:
         raw_path = str(chat_logging.get("path", "chats")).strip() or "chats"
         return Path(raw_path)
 
+    def get_ai_final_report_path(self) -> Path:
+        ai_config = self._config.get("ai", {})
+        if not isinstance(ai_config, dict):
+            return Path("harness/artifacts/final_reports")
+        final_reports = ai_config.get("final_reports")
+        if not isinstance(final_reports, dict):
+            final_reports = ai_config.get("conversation_packets", {})
+        if not isinstance(final_reports, dict):
+            return Path("harness/artifacts/final_reports")
+        raw_path = str(
+            final_reports.get("path", "harness/artifacts/final_reports")
+        ).strip() or "harness/artifacts/final_reports"
+        return Path(raw_path)
+
     def _ai_segment_memory_path(self, segment: str | None = None) -> Path:
         target_segment = str(segment or self._segment).strip() or self._segment
         safe_segment = re.sub(r"[^A-Za-z0-9_\-]", "_", target_segment)

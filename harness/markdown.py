@@ -7,6 +7,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).parents[1]
 DEFAULT_DROP_REVIEW_TEMPLATE = REPO_ROOT / "harness" / "templates" / "drop_review_packet.md"
+DEFAULT_FINAL_REPORT_TEMPLATE = REPO_ROOT / "harness" / "templates" / "final_report.md"
 
 
 def render_drop_review_packet(
@@ -50,7 +51,7 @@ def render_drop_review_packet(
                 "- `load_inputs_from_config`: loaded configured claims and premium data.",
                 "- `ClaimsCollection`, `PremiumRepository`, and `Triangle.from_claims(...)`: built the deterministic triangle backbone.",
                 "- `Reserving.set_development`, `Reserving.set_tail`, `Reserving.set_bornhuetter_ferguson`, and `Reserving.reserve`: ran native drop analysis directly on the deterministic backbone.",
-                "- `DiagnosticsService.run` and `MovementDiagnosticsService.run_ldf_consistency`: generated deterministic drop candidates and evidence.",
+                "- Native candidate selection scanned observed link ratios directly and reran reserving candidate by candidate.",
             ]
         ),
         "data_lineage": _join_lines(
@@ -74,6 +75,48 @@ def render_drop_review_packet(
                 f"- Candidate count: {_value(summary_payload.get('candidate_count'))}",
             ]
         ),
+    }
+    return _fill_template(template_path.read_text(encoding="utf-8"), values)
+
+
+def render_final_report(
+    *,
+    title: str,
+    conversation_id: str,
+    body_markdown: str,
+    artifact_references: list[dict[str, str]],
+    requested_inputs: dict[str, Any],
+    effective_inputs: dict[str, Any],
+    included_inputs: list[str],
+    command: str,
+    warnings: list[str],
+    timestamp: str,
+    code_version: str,
+    template_path: Path = DEFAULT_FINAL_REPORT_TEMPLATE,
+) -> str:
+    """Render a final composed markdown report for a conversation."""
+
+    values = {
+        "title": title,
+        "conversation_id": conversation_id,
+        "segment": _value(effective_inputs.get("segment")),
+        "artifacts": _join_lines(_artifact_lines(artifact_references)),
+        "command": command,
+        "requested_inputs": _join_lines(_dict_bullets(requested_inputs)),
+        "effective_inputs": _join_lines(_dict_bullets(effective_inputs)),
+        "inputs": _join_lines(included_inputs),
+        "warnings": _join_lines(
+            [f"- {warning}" for warning in warnings] or ["- No warnings captured."]
+        ),
+        "reproducibility": _join_lines(
+            [
+                f"- Timestamp: {timestamp}",
+                f"- Code version: {code_version}",
+                f"- Artifact count: {len(artifact_references)}",
+                f"- Included inputs: {len(included_inputs) if included_inputs and included_inputs != ['- No explicit input files recorded.'] else 0}",
+            ]
+        ),
+        "body_markdown": body_markdown,
     }
     return _fill_template(template_path.read_text(encoding="utf-8"), values)
 
@@ -181,6 +224,23 @@ def _evidence_summary_lines(evidence_summary: dict[str, Any]) -> list[str]:
                 f"; first items: {', '.join(labels) if labels else 'none'}."
             )
             continue
+        if key == "baseline_candidate_signals" and isinstance(value, list):
+            first_items = []
+            for item in value[:5]:
+                signal = _as_dict(item)
+                origin = signal.get("origin")
+                age = signal.get("age")
+                score = signal.get("signal_score")
+                if origin is None or age is None:
+                    continue
+                label = f"AY {origin} age {age}"
+                if score not in (None, ""):
+                    label += f" (score {_value(score)})"
+                first_items.append(label)
+            lines.append(
+                f"- Baseline candidate signals: {len(value)} found; first items: {', '.join(first_items) if first_items else 'none'}."
+            )
+            continue
         if key == "baseline_movement_summary" and isinstance(value, dict):
             findings = _as_list(value.get("top_findings"))
             lines.append(
@@ -210,6 +270,17 @@ def _evidence_summary_lines(evidence_summary: dict[str, Any]) -> list[str]:
 def _join_codes(items: list[Any]) -> str:
     codes = [str(_as_dict(item).get("code")) for item in items[:5]]
     return ", ".join(code for code in codes if code) or "none"
+
+
+def _artifact_lines(artifact_references: list[dict[str, str]]) -> list[str]:
+    if not artifact_references:
+        return ["- No explicit artifacts recorded."]
+    lines: list[str] = []
+    for item in artifact_references:
+        label = str(item.get("label") or "artifact")
+        path = str(item.get("path") or "not specified")
+        lines.append(f"- {label}: `{path}`")
+    return lines
 
 
 def _dict_bullets(values: dict[str, Any]) -> list[str]:

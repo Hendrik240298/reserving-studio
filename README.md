@@ -4,7 +4,7 @@
 
 This branch is now centered on a harness-native actuarial workbench.
 
-- `source/` contains the active deterministic reserving core and domain services.
+- `source/` contains the active deterministic reserving core.
 - `harness/` contains the active harness interface: executable tools, tool inventory, skills, templates, and generated artifacts.
 - `_archive/legacy_gui_api_chat/` contains the archived dashboard, REST API, AI chat loop, and related tests/docs.
 - `_salvage/legacy_useful_parts/` contains useful old pieces that are not active architecture.
@@ -20,6 +20,7 @@ Then for active harness work read:
 - `harness/README.md`
 - `harness/tools/README.md`
 - `harness/tools/drop_review.md`
+- `harness/tools/final_report.md`
 - `harness/skills/drop-review/SKILL.md`
 - `harness/templates/drop_review_packet.md`
 
@@ -45,17 +46,16 @@ The command writes a markdown review packet to `harness/artifacts/` unless `--ou
 - `source/premium_repository.py`
 - `source/triangle.py`
 - `source/reserving.py`
-- `source/services/`
 
 ## Validation
 
 ```bash
 uv run pytest tests/unit/test_harness_markdown.py -q
-uv run pytest tests/unit/test_drop_review_service.py -q
-uv run pytest tests/unit/test_scenario_evaluation_service.py -q
+uv run pytest tests/unit/test_triangle_markdown.py -q
+uv run pytest tests/unit/test_native_drop_analysis.py -q
 ```
 
 ## Notes
 
 - The old dashboard/API/chat shell is archived and should not receive new active dependencies.
-- New harness tools should call deterministic `source/` builders and services directly.
+- New harness tools should call deterministic `source/` builders and core reserving classes directly.

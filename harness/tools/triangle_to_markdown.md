@@ -76,3 +76,7 @@ It must not modify session state, invent labels, or calculate new actuarial sele
 - Do not use this command for drop review or candidate ranking.
 - Do not use this command when there is no config path or triangle type.
 - Do not use this command to persist bolted drops.
+
+## Final Report Use
+
+When the user wants one stored deliverable that combines triangle output with other tool results, write the triangle markdown to a file and pass that file into `harness/tools/final_report.md`.
