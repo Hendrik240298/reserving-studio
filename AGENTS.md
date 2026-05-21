@@ -2,6 +2,7 @@
 
 ## Purpose
 - This repository is now centered on **Harness Native Reserving Studio**.
+- `TELOS.md` defines your telos: identity, purpose, working philosophy, target, and safe self-improvement boundary.
 - `source/` holds the active deterministic reserving core.
 - `harness/` holds the active harness interface: executable tools, tool inventory, skills, templates, and generated artifacts.
 - `_archive/legacy_gui_api_chat/` holds the old dashboard/API/chat/session shell.
@@ -9,6 +10,7 @@
 
 ## Start Here
 - Read this file first.
+- Read `TELOS.md` every time you enter this repository or start a new harness task.
 - For harness work, then read:
 - `harness/README.md`
 - `harness/tools/README.md`
