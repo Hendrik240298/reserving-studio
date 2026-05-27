@@ -10,6 +10,14 @@ granularity: quarterly
 workflow:
   dataset: quarterly
   quarterly_premium_csv: data/quarterly_premium.csv
+  input:
+    claims:
+      source: csv
+      path: data/quarterly_granular_claims.csv
+      values_are_cumulative: true
+    premium:
+      source: csv
+      path: data/quarterly_premium.csv
 session:
   path: sessions/quarterly.yml
 ai:
