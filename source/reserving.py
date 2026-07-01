@@ -529,6 +529,17 @@ class Reserving:
     def get_results(self):
         return self.df_results.copy()
 
+    def get_ldf(self):
+        ldf_values = (
+            self._chainladder_result.named_steps.tail.ldf_["incurred"]
+            .to_frame()
+            .iloc[0]
+        )
+        return ldf_values
+
+    def get_link_ratios(self):
+        return self._triangle_transformed.link_ratio["incurred"].to_frame()
+
     def get_emergence_pattern(self):
         # Calculate emergence triangle: for each UWY, show incurred as % of ultimate over development
         triangle_df = self._triangle.get_triangle()["incurred"].to_frame()

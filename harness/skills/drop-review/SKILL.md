@@ -14,7 +14,13 @@ Use this skill when the user asks for a drop review or asks to test development 
 2. Read the drop-review tool doc at `harness/tools/drop_review.md`.
 3. Run the deterministic CLI command for the requested config/data.
 4. Read the generated markdown packet before answering.
-5. Summarize the recommendation, candidate ranking, key evidence, caveats, and remaining human actuarial judgment.
+5. Summarize the candidate signals, applied drops, ultimates impact by origin, warnings, and remaining human actuarial judgment.
+6. In the chat answer, include two markdown tables copied from the packet:
+   - the full applied drops / candidate signals table: origin year, period, link ratio, selected LDF, signal score, priority
+   - the full ultimates impact by origin/UWY year table: baseline ultimate, drop-scenario ultimate, ultimate delta
+7. Do not truncate the drops table to only the first few rows. If the packet contains 27 candidate signals, include all 27 candidate-signal rows in the chat answer.
+
+If chainladder/numpy runtime warnings appear but the command writes the markdown packet, ignore those runtime warnings for the answer and rely on the generated packet. If the command fails without writing a packet, report the failure and stop.
 
 ## Default Command
 
@@ -26,11 +32,11 @@ Use `--candidate-limit` from the user request when provided.
 
 Default analysis mode:
 
-- `--method chainladder`
-- no tail effect
-- no monotone tail correction
+- config-driven input loading
+- diagnostic scan over observed link ratios without pre-applied drops
+- combined drop scenario applying all returned candidate signals
 
-The active implementation generates candidate drops directly from observed link-ratio outliers in the real triangle, then reruns `Reserving` candidate by candidate to compare reserve impact.
+The active implementation generates candidate drops directly from observed link-ratio outliers in the real triangle, applies the returned candidates together, and reports ultimate impact by origin.
 
 ## Boundaries
 

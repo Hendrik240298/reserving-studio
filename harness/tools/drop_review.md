@@ -14,9 +14,9 @@ uv run python -m harness.cli drop-review \
 
 Defaults:
 
-- method: `chainladder`
-- tail effect: off
-- monotone tail correction: off
+- config-driven quarterly example when no config is provided
+- diagnostic scan uses observed link ratios with no pre-applied drops
+- all returned candidate signals are applied together in one combined drop scenario
 
 Optional output path:
 
@@ -28,47 +28,45 @@ uv run python -m harness.cli drop-review \
 ## Inputs
 
 - `--config`: reserving config path. Default: `examples/config_quarterly.yml`.
-- `--candidate-limit`: number of candidates to consider/display. Default: `5`.
-- `--method`: `chainladder` or `bornhuetter_ferguson`. Default: `chainladder`.
-- `--use-tail`: apply the session tail settings. Default: off.
-- `--enforce-monotone-tail`: enable the legacy monotone tail correction. Default: off.
+- `--candidate-limit`: minimum number of candidate signals to include. If more high-priority signals are found, all high-priority signals are included.
 - `--output`: markdown packet path. Default: timestamped file in `harness/artifacts/`.
 
 ## Output
 
 The command writes a markdown drop-review packet with:
 
-- executive summary
-- recommendation/result
-- key evidence
-- candidate ranking
-- actuarial interpretation
-- caveats
-- execution details
-- requested and effective inputs
-- tool calls
-- data lineage
+- summary
+- run status
+- candidate signal count and applied drop count
+- ultimates impact by origin for the combined drop scenario
+- candidate signals table
 - warnings
-- reproducibility fields
 
-The candidate ranking should show every candidate returned by the deterministic native drop analysis for the requested `--candidate-limit`. The packet renderer should not silently cap the ranking at a smaller display limit.
+The packet is the durable artifact for AI and human review. The CLI only prints the output path.
 
-The document structure is defined in `harness/templates/drop_review_packet.md`. Python should only fill deterministic values into that template, not make hidden product decisions about what the packet should contain.
+When summarizing this tool in chat, include two markdown tables:
+
+- the full applied drops / candidate signals table returned in the packet, including origin year, period, link ratio, selected LDF, signal score, and priority
+- the full ultimates impact by origin/UWY year table returned in the packet, including baseline ultimate, drop-scenario ultimate, and ultimate delta
+
+Do not summarize the drops table by showing only the first few rows. If the packet contains 27 candidate signals, the chat answer should include all 27 candidate-signal rows.
+
+## Runtime Warnings
+
+Chainladder/numpy runtime warnings about overflow, accumulation, or invalid intermediate values may appear during the run. If the command still writes the markdown packet successfully, treat those warnings as non-blocking implementation noise for this prototype and summarize the generated packet. If the command fails without writing a packet, report the failure and stop.
 
 ## Implementation Boundary
 
-The active tool loads config/data, builds the deterministic triangle backbone, creates `Reserving` runs directly, and compares reserve impact candidate by candidate.
+The active tool loads config/data, builds the deterministic triangle backbone, creates `Reserving` runs directly, detects link-ratio outlier signals, applies all returned signals as drops in one combined scenario, and reports ultimate impact by origin.
 
 It should not route through `InMemoryReservingBackend`, old REST schemas, GUI session state, chat control-plane state, or basis/scenario identifiers.
 
 The native analysis path should:
 
 - use `ClaimsCollection`, `PremiumRepository`, and `Triangle.from_claims(...)`
-- use `Reserving.set_development`, `Reserving.set_tail`, and `Reserving.reserve`
+- use `Reserving.set_development`, `Reserving.set_tail`, `Reserving.set_bornhuetter_ferguson`, and `Reserving.reserve`
 - generate candidate drops directly from observed link-ratio outliers in the real triangle
-- default to `chainladder`
-- default to no tail effect
-- default to no monotone tail correction
+- apply all selected candidate signals together for the combined scenario
 
 ## Non-Use Cases
 
