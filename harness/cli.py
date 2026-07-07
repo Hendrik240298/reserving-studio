@@ -9,6 +9,7 @@ from harness.final_report import (
     DEFAULT_CONFIG_PATH as DEFAULT_FINAL_REPORT_CONFIG_PATH,
     write_final_report,
 )
+from harness.ldf_compare import run_ldf_compare
 from harness.triangle_markdown import render_triangle_markdown
 
 
@@ -17,6 +18,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "drop-review":
         return _run_drop_review(args)
+    if args.command == "ldf-compare":
+        return _run_ldf_compare(args)
     if args.command == "triangle-to-markdown":
         return _run_triangle_to_markdown(args)
     if args.command == "final-report":
@@ -51,6 +54,41 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Markdown output path. Defaults to harness/artifacts with timestamp.",
+    )
+    ldf_compare = subparsers.add_parser(
+        "ldf-compare",
+        help="Compare LDF vectors for explicit reserving scenario settings.",
+    )
+    ldf_compare.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help="Config path. Defaults to examples/config_quarterly.yml.",
+    )
+    ldf_compare.add_argument(
+        "--scenarios-file",
+        type=Path,
+        default=None,
+        help="YAML file containing a scenarios mapping.",
+    )
+    ldf_compare.add_argument(
+        "--scenario-json",
+        action="append",
+        default=[],
+        metavar="NAME:JSON",
+        help="Scenario settings as NAME:JSON. Repeat as needed.",
+    )
+    ldf_compare.add_argument(
+        "--delta-threshold",
+        type=float,
+        default=0.01,
+        help="Absolute LDF delta threshold for red plot markers. Defaults to 0.01.",
+    )
+    ldf_compare.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Markdown output path. Defaults to harness/artifacts with timestamp. PNG is written beside it.",
     )
     triangle_markdown = subparsers.add_parser(
         "triangle-to-markdown",
@@ -166,6 +204,30 @@ def _run_drop_review(args: argparse.Namespace) -> int:
         return 1
 
     print(f"Wrote drop review packet: {output_path}")
+    return 0
+
+
+def _run_ldf_compare(args: argparse.Namespace) -> int:
+    try:
+        output_path = run_ldf_compare(
+            config_path=args.config,
+            scenarios_file=args.scenarios_file,
+            scenario_json=args.scenario_json,
+            delta_threshold=args.delta_threshold,
+            output_path=args.output,
+            command=_command_for_ldf_compare(
+                config_path=args.config,
+                scenarios_file=args.scenarios_file,
+                scenario_json=args.scenario_json,
+                delta_threshold=args.delta_threshold,
+                output_path=args.output,
+            ),
+        )
+    except Exception as exc:  # CLI boundary: keep failures concise for harnesses.
+        print(f"ldf-compare failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Wrote ldf compare packet: {output_path}")
     return 0
 
 
@@ -311,6 +373,32 @@ def _command_for_final_report(
         parts.append(f"--output {_shell_quote(str(output_path))}")
     if output_dir is not None:
         parts.append(f"--output-dir {_shell_quote(str(output_dir))}")
+    return " ".join(parts)
+
+
+def _command_for_ldf_compare(
+    *,
+    config_path: Path,
+    scenarios_file: Path | None,
+    scenario_json: list[str],
+    delta_threshold: float,
+    output_path: Path | None,
+) -> str:
+    parts = [
+        "uv run python -m harness.cli ldf-compare",
+        f"--config {_shell_quote(str(config_path))}",
+    ]
+    if scenarios_file is not None:
+        parts.append(f"--scenarios-file {_shell_quote(str(scenarios_file))}")
+    for value in scenario_json:
+        parts.append(f"--scenario-json {_shell_quote(value)}")
+    parts.extend(
+        [
+            f"--delta-threshold {delta_threshold}",
+        ]
+    )
+    if output_path is not None:
+        parts.append(f"--output {_shell_quote(str(output_path))}")
     return " ".join(parts)
 
 

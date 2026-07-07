@@ -1,0 +1,15 @@
+scenarios:
+  drop_2002_6:
+    development:
+      drop:
+        - ["2002", 6]
+
+  drop_2000_2002_6:
+    development:
+      drop:
+        - ["2000", 6]
+        - ["2002", 6]
+
+  simple_average:
+    development:
+      average: simple

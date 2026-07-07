@@ -7,6 +7,7 @@ The harness is only an orchestration shell. Deterministic `reserving-studio` cod
 ## Supported V1 Workflow
 
 - Native drop analysis on the quarterly example config using the deterministic `Triangle` / `Reserving` backbone.
+- LDF comparison across explicit reserving scenario settings against the implicit default baseline.
 - Triangle to markdown for cumulative or incremental value triangles, plus cumulative A2A rendering.
 - Final report composition for storing one final markdown per conversation from existing tool result files plus optional AI-authored scaffolding.
 
@@ -24,6 +25,7 @@ The command writes a markdown review packet under `harness/artifacts/` unless `-
 
 - `harness/tools/README.md`
 - `harness/tools/drop_review.md`
+- `harness/tools/ldf_compare.md`
 - `harness/tools/triangle_to_markdown.md`
 - `harness/tools/final_report.md`
 - `harness/skills/README.md`
